@@ -4,28 +4,37 @@ app_publisher = "GoStack"
 app_description = "Repairs & Services"
 app_email = "contact@gostack.in"
 app_license = "custom"
+required_apps = ["frappe/erpnext"]
+
+# Fixtures
+fixtures = [
+    {
+        "dt": "Role",
+        "filters": [
+            ["name", "in", ["Service Manager", "Service Engineer", "Service Viewer"]]
+        ]
+    }
+]
 
 # Apps
 # ------------------
 
-# required_apps = []
-
 # Each item in the list will be shown as an app in the apps page
-# add_to_apps_screen = [
-# 	{
-# 		"name": "gofix",
-# 		"logo": "/assets/gofix/logo.png",
-# 		"title": "GoFix",
-# 		"route": "/gofix",
-# 		"has_permission": "gofix.api.permission.has_app_permission"
-# 	}
-# ]
+add_to_apps_screen = [
+	{
+		"name": "gofix",
+		"logo": "/assets/gofix/icon.svg",
+		"title": "GoFix",
+		"route": "/app/gofix-services",
+		"has_permission": "gofix.gofix.utils.has_app_permission"
+	}
+]
 
 # Includes in <head>
 # ------------------
 
 # include js, css files in header of desk.html
-# app_include_css = "/assets/gofix/css/gofix.css"
+app_include_css = "/assets/gofix/css/gofix.css"
 # app_include_js = "/assets/gofix/js/gofix.js"
 
 # include js, css files in header of web template
@@ -43,8 +52,14 @@ app_license = "custom"
 # page_js = {"page" : "public/js/file.js"}
 
 # include js in doctype views
-# doctype_js = {"doctype" : "public/js/doctype.js"}
-# doctype_list_js = {"doctype" : "public/js/doctype_list.js"}
+# doctype_js = {
+#     "Company": "public/js/warehouse_quick_setup.js",
+#     "Warehouse": "public/js/warehouse_quick_setup.js",
+#     "User": "public/js/warehouse_quick_setup.js"
+# }
+doctype_list_js = {
+    "Sales Order": "public/js/sales_order_list.js"
+}
 # doctype_tree_js = {"doctype" : "public/js/doctype_tree.js"}
 # doctype_calendar_js = {"doctype" : "public/js/doctype_calendar.js"}
 
@@ -83,7 +98,8 @@ app_license = "custom"
 # ------------
 
 # before_install = "gofix.install.before_install"
-# after_install = "gofix.install.after_install"
+after_install = "gofix.setup.install.after_install"
+after_migrate = ["gofix.setup.sales_order_custom_fields.create_sales_order_custom_fields"]
 
 # Uninstallation
 # ------------
@@ -129,21 +145,30 @@ app_license = "custom"
 # ---------------
 # Override standard doctype classes
 
-# override_doctype_class = {
-# 	"ToDo": "custom_app.overrides.CustomToDo"
-# }
+override_doctype_class = {
+	"Sales Order": "gofix.overrides.sales_order.CustomSalesOrder"
+}
 
 # Document Events
 # ---------------
 # Hook on document methods and events
 
-# doc_events = {
-# 	"*": {
-# 		"on_update": "method",
-# 		"on_cancel": "method",
-# 		"on_trash": "method"
-# 	}
-# }
+doc_events = {
+	"Sales Order": {
+		"validate": "gofix.overrides.sales_order.validate_service_order_before_submit",
+		"on_update": "gofix.overrides.sales_order.update_service_request_on_qc",
+		"on_submit": "gofix.overrides.sales_order.update_service_request_on_qc",
+		"on_cancel": "gofix.overrides.sales_order.update_service_request_on_qc"
+	},
+	"Sales Invoice": {
+		"on_submit": "gofix.overrides.sales_invoice.update_service_request_on_invoice",
+		"on_cancel": "gofix.overrides.sales_invoice.update_service_request_on_invoice"
+	},
+	"Delivery Note": {
+		"on_submit": "gofix.overrides.delivery_note.update_service_request_on_delivery",
+		"on_cancel": "gofix.overrides.delivery_note.update_service_request_on_delivery"
+	}
+}
 
 # Scheduled Tasks
 # ---------------

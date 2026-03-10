@@ -1,0 +1,201 @@
+{
+ "charts": [],
+ "content": "[{\"type\":\"header\",\"data\":{\"text\":\"Job Tracker\",\"col\":12}},{\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Job Tracker\",\"col\":3}},{\"type\":\"spacer\",\"data\":{\"col\":12}},{\"type\":\"header\",\"data\":{\"text\":\"Services\",\"col\":12}},{\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Service Request\",\"col\":3}},{\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Job Assignment\",\"col\":3}},{\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Spare Parts\",\"col\":3}},{\"type\":\"spacer\",\"data\":{\"col\":12}},{\"type\":\"header\",\"data\":{\"text\":\"Masters\",\"col\":12}},{\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Walkin Source\",\"col\":3}},{\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Issue Category\",\"col\":3}},{\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Withdrawal Reason\",\"col\":3}},{\"type\":\"spacer\",\"data\":{\"col\":12}},{\"type\":\"header\",\"data\":{\"text\":\"Quick Access\",\"col\":12}},{\"type\":\"card\",\"data\":{\"card_name\":\"Service Requests\",\"col\":4}},{\"type\":\"card\",\"data\":{\"card_name\":\"Job Management\",\"col\":4}},{\"type\":\"card\",\"data\":{\"card_name\":\"Items\",\"col\":4}}]",
+ "creation": "2025-12-05 07:30:00.000000",
+ "custom_blocks": [],
+ "docstatus": 0,
+ "doctype": "Workspace",
+ "for_user": "",
+ "hide_custom": 0,
+ "icon": "tool",
+ "idx": 0,
+ "is_hidden": 0,
+ "label": "GoFix",
+ "links": [
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Job Tracker",
+   "link_count": 0,
+   "link_to": "job-tracker",
+   "link_type": "Page",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Card Break",
+   "link_count": 0,
+   "onboard": 0,
+   "type": "Card Break"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Service Request",
+   "link_count": 0,
+   "link_to": "Service Request",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Masters",
+   "link_count": 0,
+   "onboard": 0,
+   "type": "Card Break"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Walkin Source",
+   "link_count": 0,
+   "link_to": "Walkin Source",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Issue Category",
+   "link_count": 0,
+   "link_to": "Issue Category",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Withdrawal Reason",
+   "link_count": 0,
+   "link_to": "Withdrawal Reason",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Job Assignment",
+   "link_count": 0,
+   "link_to": "Job Assignment",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Spare Parts Usage",
+   "link_count": 0,
+   "link_to": "Spare Parts Usage",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  }
+ ],
+ "modified": "2025-12-05 10:50:00.000000",
+ "modified_by": "Administrator",
+ "module": "GoFix Services",
+ "name": "GoFix",
+ "owner": "Administrator",
+ "parent_page": "",
+ "public": 1,
+ "quick_lists": [
+  {
+   "document_type": "Service Request",
+   "label": "Open Service Requests",
+   "quick_list_filter": "{\"status\": \"Open\"}"
+  },
+  {
+   "document_type": "Service Request",
+   "label": "In Progress",
+   "quick_list_filter": "{\"status\": \"In Progress\"}"
+  }
+ ],
+ "roles": [],
+ "sequence_id": 15.0,
+ "shortcuts": [
+  {
+   "color": "Purple",
+   "label": "Job Tracker",
+   "link_to": "job-tracker",
+   "type": "Page"
+  },
+  {
+   "color": "Blue",
+   "doc_view": "List",
+   "format": "{} Open",
+   "label": "Service Request",
+   "link_to": "Service Request",
+   "stats_filter": "{\"status\": [\"=\", \"Open\"]}",
+   "type": "DocType"
+  },
+  {
+   "color": "Green",
+   "doc_view": "New",
+   "label": "New Service Request",
+   "link_to": "Service Request",
+   "type": "DocType"
+  },
+  {
+   "color": "Grey",
+   "doc_view": "List",
+   "label": "Walkin Source",
+   "link_to": "Walkin Source",
+   "type": "DocType"
+  },
+  {
+   "color": "Grey",
+   "doc_view": "List",
+   "label": "Issue Category",
+   "link_to": "Issue Category",
+   "type": "DocType"
+  },
+  {
+   "color": "Grey",
+   "doc_view": "List",
+   "label": "Withdrawal Reason",
+   "link_to": "Withdrawal Reason",
+   "type": "DocType"
+  },
+  {
+   "color": "Orange",
+   "doc_view": "List",
+   "label": "Customers",
+   "link_to": "Customer",
+   "type": "DocType"
+  },
+  {
+   "color": "Purple",
+   "doc_view": "List",
+   "format": "{} Active",
+   "label": "Job Assignment",
+   "link_to": "Job Assignment",
+   "stats_filter": "{\"assignment_status\": [\"=\", \"Assigned\"]}",
+   "type": "DocType"
+  },
+  {
+   "color": "Yellow",
+   "doc_view": "New",
+   "label": "Assign Job",
+   "link_to": "Job Assignment",
+   "type": "DocType"
+  },
+  {
+   "color": "Red",
+   "doc_view": "List",
+   "format": "{} Used",
+   "label": "Spare Parts",
+   "link_to": "Spare Parts Usage",
+   "stats_filter": "{\"status\": [\"=\", \"Active\"]}",
+   "type": "DocType"
+  }
+ ],
+ "title": "GoFix"
+}

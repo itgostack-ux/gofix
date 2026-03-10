@@ -1,0 +1,366 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "autoname": "format:JA-{service_request}-{###}",
+ "creation": "2024-12-05 10:30:00",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "service_order",
+  "service_request",
+  "service_request_name",
+  "imei_serial",
+  "column_break_3",
+  "assignment_date",
+  "assignment_datetime",
+  "assigned_by",
+  "section_break_7",
+  "team",
+  "user",
+  "service_engineer",
+  "section_break_11",
+  "assignment_type",
+  "job_type",
+  "assignment_status",
+  "repair_outcome",
+  "priority",
+  "column_break_15",
+  "received_from_technician",
+  "received_date",
+  "received_datetime",
+  "section_break_job_details",
+  "estimated_hours",
+  "actual_hours",
+  "column_break_hours",
+  "start_datetime",
+  "end_datetime",
+  "section_break_work",
+  "work_performed",
+  "column_break_work",
+  "technician_remarks",
+  "section_break_18",
+  "comments",
+  "section_break_20",
+  "technician_audit"
+ ],
+ "fields": [
+  {
+   "fieldname": "service_order",
+   "fieldtype": "Link",
+   "in_standard_filter": 1,
+   "label": "Service Order",
+   "options": "Sales Order",
+   "description": "Link to Service Order (Sales Order)"
+  },
+  {
+   "fieldname": "service_request",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Service Request",
+   "options": "Service Request",
+   "fetch_from": "service_order.service_request"
+  },
+  {
+   "fetch_from": "service_request.customer_name",
+   "fieldname": "service_request_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Customer Name",
+   "read_only": 1
+  },
+  {
+   "fetch_from": "service_request.serial_no",
+   "fieldname": "imei_serial",
+   "fieldtype": "Data",
+   "label": "IMEI/Serial No",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_3",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "Today",
+   "fieldname": "assignment_date",
+   "fieldtype": "Date",
+   "in_list_view": 1,
+   "label": "Assignment Date",
+   "reqd": 1
+  },
+  {
+   "default": "Now",
+   "fieldname": "assignment_datetime",
+   "fieldtype": "Datetime",
+   "label": "Assignment DateTime",
+   "read_only": 1
+  },
+  {
+   "default": "user",
+   "fieldname": "assigned_by",
+   "fieldtype": "Link",
+   "label": "Assigned By",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_7",
+   "fieldtype": "Section Break",
+   "label": "Assignment Details"
+  },
+  {
+   "fieldname": "team",
+   "fieldtype": "Link",
+   "in_standard_filter": 1,
+   "label": "Team",
+   "options": "Employee Group"
+  },
+  {
+   "depends_on": "eval:doc.team",
+   "fieldname": "user",
+   "fieldtype": "Link",
+   "label": "User",
+   "options": "User"
+  },
+  {
+   "fieldname": "service_engineer",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Service Engineer",
+   "options": "Employee"
+  },
+  {
+   "fieldname": "section_break_11",
+   "fieldtype": "Section Break",
+   "label": "Status"
+  },
+  {
+   "default": "Team Assignment",
+   "fieldname": "assignment_type",
+   "fieldtype": "Select",
+   "label": "Assignment Type",
+   "options": "Team Assignment\nUser Assignment\nTechnician Assignment\nTechnician Changed"
+  },
+  {
+   "fieldname": "job_type",
+   "fieldtype": "Select",
+   "label": "Job Type",
+   "options": "Repair\nDiagnosis\nQC\nSpare Parts Replacement\nSoftware Update\nTesting",
+   "default": "Repair"
+  },
+  {
+   "default": "Open",
+   "fieldname": "assignment_status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Job Status",
+   "options": "Open\nIn Progress\nOn Hold\nCompleted\nCancelled"
+  },
+  {
+   "fieldname": "repair_outcome",
+   "fieldtype": "Select",
+   "label": "Repair Outcome",
+   "options": "\nRepaired\nNot Repairable\nCustomer Cancelled",
+   "depends_on": "eval:doc.assignment_status=='Completed'",
+   "description": "Mark outcome when completing job"
+  },
+  {
+   "default": "Medium",
+   "fieldname": "priority",
+   "fieldtype": "Select",
+   "label": "Priority",
+   "options": "Low\nMedium\nHigh\nUrgent"
+  },
+  {
+   "fieldname": "column_break_15",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "0",
+   "fieldname": "received_from_technician",
+   "fieldtype": "Check",
+   "label": "Received from Technician"
+  },
+  {
+   "depends_on": "eval:doc.received_from_technician",
+   "fieldname": "received_date",
+   "fieldtype": "Date",
+   "label": "Received Date"
+  },
+  {
+   "depends_on": "eval:doc.received_from_technician",
+   "fieldname": "received_datetime",
+   "fieldtype": "Datetime",
+   "label": "Received DateTime"
+  },
+  {
+   "fieldname": "section_break_job_details",
+   "fieldtype": "Section Break",
+   "label": "Job Details & Time Tracking"
+  },
+  {
+   "fieldname": "estimated_hours",
+   "fieldtype": "Float",
+   "label": "Estimated Hours",
+   "precision": "2"
+  },
+  {
+   "fieldname": "actual_hours",
+   "fieldtype": "Float",
+   "label": "Actual Hours",
+   "precision": "2",
+   "read_only": 1,
+   "description": "Auto-calculated from start and end time"
+  },
+  {
+   "fieldname": "column_break_hours",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "start_datetime",
+   "fieldtype": "Datetime",
+   "label": "Start Date & Time"
+  },
+  {
+   "fieldname": "end_datetime",
+   "fieldtype": "Datetime",
+   "label": "End Date & Time"
+  },
+  {
+   "fieldname": "section_break_work",
+   "fieldtype": "Section Break",
+   "label": "Work Details"
+  },
+  {
+   "fieldname": "work_performed",
+   "fieldtype": "Long Text",
+   "label": "Work Performed",
+   "description": "Detailed description of work completed"
+  },
+  {
+   "fieldname": "column_break_work",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "technician_remarks",
+   "fieldtype": "Long Text",
+   "label": "Technician Remarks"
+  },
+  {
+   "fieldname": "section_break_18",
+   "fieldtype": "Section Break",
+   "label": "Comments"
+  },
+  {
+   "fieldname": "comments",
+   "fieldtype": "Text Editor",
+   "label": "Assignment Comments"
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "section_break_20",
+   "fieldtype": "Section Break",
+   "label": "Technician Audit Trail"
+  },
+  {
+   "fieldname": "technician_audit",
+   "fieldtype": "Table",
+   "label": "Technician Audit",
+   "options": "Technician Audit"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2024-12-05 10:30:00",
+ "modified_by": "Administrator",
+ "module": "GoFix Services",
+ "name": "Job Assignment",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Service Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Service User",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Sales Manager",
+   "share": 1,
+   "submit": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Sales User",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Service Engineer",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Service Viewer",
+   "share": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

@@ -1,0 +1,68 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2024-05-21 11:45:13.871833",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "from_state",
+  "to_state",
+  "action",
+  "allowed_role"
+ ],
+ "fields": [
+  {
+   "fieldname": "from_state",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "From State",
+   "options": "Service Order State",
+   "reqd": 1
+  },
+  {
+   "fieldname": "to_state",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "To State",
+   "options": "Service Order State",
+   "reqd": 1
+  },
+  {
+   "fieldname": "action",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Action",
+   "reqd": 1
+  },
+  {
+   "fieldname": "allowed_role",
+   "fieldtype": "Link",
+   "label": "Allowed Role",
+   "options": "Role"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2024-05-21 11:45:13.871833",
+ "modified_by": "Administrator",
+ "module": "GoFix Services",
+ "name": "Service Order Transition",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

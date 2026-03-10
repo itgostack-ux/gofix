@@ -1,0 +1,324 @@
+{
+ "actions": [],
+ "autoname": "format:SPU-{service_request}-{####}",
+ "creation": "2024-12-05 10:40:00",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "service_request",
+  "service_request_name",
+  "imei_serial",
+  "column_break_3",
+  "transaction_date",
+  "added_by_user",
+  "line_seq_no",
+  "section_break_7",
+  "spare_part_item",
+  "barcode_value",
+  "item_name",
+  "column_break_11",
+  "qty_used",
+  "uom",
+  "section_break_14",
+  "purchase_cost",
+  "sales_price",
+  "pur_exempted_value",
+  "pur_taxable_value",
+  "column_break_19",
+  "rog_id",
+  "pur_id",
+  "pur_line_seq_no",
+  "section_break_23",
+  "status",
+  "deleted",
+  "narration",
+  "column_break_27",
+  "reason_desc",
+  "moved_to_stock_type"
+ ],
+ "fields": [
+  {
+   "fieldname": "service_request",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Service Request",
+   "options": "Service Request",
+   "reqd": 1
+  },
+  {
+   "fetch_from": "service_request.customer_name",
+   "fieldname": "service_request_name",
+   "fieldtype": "Data",
+   "label": "Customer Name",
+   "read_only": 1
+  },
+  {
+   "fetch_from": "service_request.serial_no",
+   "fieldname": "imei_serial",
+   "fieldtype": "Data",
+   "label": "IMEI/Serial No",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_3",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "Today",
+   "fieldname": "transaction_date",
+   "fieldtype": "Date",
+   "label": "Transaction Date",
+   "reqd": 1
+  },
+  {
+   "default": "user",
+   "fieldname": "added_by_user",
+   "fieldtype": "Link",
+   "label": "Added By",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "line_seq_no",
+   "fieldtype": "Int",
+   "label": "Line Seq No",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_7",
+   "fieldtype": "Section Break",
+   "label": "Spare Part Details"
+  },
+  {
+   "fieldname": "spare_part_item",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Spare Part Item",
+   "options": "Item",
+   "reqd": 1
+  },
+  {
+   "fieldname": "barcode_value",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Barcode",
+   "unique": 0
+  },
+  {
+   "fetch_from": "spare_part_item.item_name",
+   "fieldname": "item_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Item Name",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_11",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "1",
+   "fieldname": "qty_used",
+   "fieldtype": "Float",
+   "in_list_view": 1,
+   "label": "Qty Used",
+   "precision": "2",
+   "reqd": 1
+  },
+  {
+   "fetch_from": "spare_part_item.stock_uom",
+   "fieldname": "uom",
+   "fieldtype": "Link",
+   "label": "UOM",
+   "options": "UOM",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_14",
+   "fieldtype": "Section Break",
+   "label": "Costing"
+  },
+  {
+   "fieldname": "purchase_cost",
+   "fieldtype": "Currency",
+   "label": "Purchase Cost"
+  },
+  {
+   "fieldname": "sales_price",
+   "fieldtype": "Currency",
+   "label": "Sales Price"
+  },
+  {
+   "fieldname": "pur_exempted_value",
+   "fieldtype": "Currency",
+   "label": "Purchase Exempted Value"
+  },
+  {
+   "fieldname": "pur_taxable_value",
+   "fieldtype": "Currency",
+   "label": "Purchase Taxable Value"
+  },
+  {
+   "fieldname": "column_break_19",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "rog_id",
+   "fieldtype": "Int",
+   "label": "ROG ID"
+  },
+  {
+   "fieldname": "pur_id",
+   "fieldtype": "Int",
+   "label": "Purchase ID"
+  },
+  {
+   "fieldname": "pur_line_seq_no",
+   "fieldtype": "Int",
+   "label": "Purchase Line Seq No"
+  },
+  {
+   "fieldname": "section_break_23",
+   "fieldtype": "Section Break",
+   "label": "Status"
+  },
+  {
+   "default": "Active",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Status",
+   "options": "Active\nMoved to Main Stock\nMoved to Dispose Stock\nDeleted"
+  },
+  {
+   "default": "0",
+   "fieldname": "deleted",
+   "fieldtype": "Check",
+   "label": "Deleted"
+  },
+  {
+   "fieldname": "narration",
+   "fieldtype": "Small Text",
+   "label": "Narration"
+  },
+  {
+   "fieldname": "column_break_27",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "reason_desc",
+   "fieldtype": "Select",
+   "label": "Reason",
+   "options": "\nWrong Spare\nManufacture Defect\nDamage\nNot Suitable\nLost\nOrder Cancel\nReplace"
+  },
+  {
+   "depends_on": "eval:doc.status in ['Moved to Main Stock', 'Moved to Dispose Stock']",
+   "fieldname": "moved_to_stock_type",
+   "fieldtype": "Select",
+   "label": "Moved To",
+   "options": "\nMain Stock\nDispose Stock"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2024-12-05 10:40:00",
+ "modified_by": "Administrator",
+ "module": "GoFix Services",
+ "name": "Spare Parts Usage",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Service Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Service User",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Sales Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Sales User",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Service Engineer",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Service Viewer",
+   "share": 1
+  },
+  {
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Stock User",
+   "share": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

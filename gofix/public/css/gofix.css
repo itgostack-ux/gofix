@@ -1,0 +1,226 @@
+/* GoFix Custom Theme - Modern UI Enhancements */
+
+/* Service Request Form Styling */
+[data-doctype="Service Request"] .form-layout,
+[data-doctype="Job Assignment"] .form-layout,
+[data-doctype="Spare Parts Usage"] .form-layout {
+    background: #f8f9fa;
+}
+
+/* Section Headers - Modern Look */
+[data-doctype="Service Request"] .section-head,
+[data-doctype="Job Assignment"] .section-head,
+[data-doctype="Spare Parts Usage"] .section-head {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    padding: 12px 15px;
+    border-radius: 8px;
+    font-weight: 600;
+    margin-bottom: 15px;
+    box-shadow: 0 2px 8px rgba(102, 126, 234, 0.2);
+}
+
+/* Form Controls - Enhanced */
+[data-doctype="Service Request"] .frappe-control input,
+[data-doctype="Service Request"] .frappe-control select,
+[data-doctype="Service Request"] .frappe-control textarea,
+[data-doctype="Job Assignment"] .frappe-control input,
+[data-doctype="Job Assignment"] .frappe-control select,
+[data-doctype="Spare Parts Usage"] .frappe-control input {
+    border: 1.5px solid #e2e8f0;
+    border-radius: 6px;
+    padding: 8px 12px;
+    transition: all 0.3s ease;
+}
+
+[data-doctype="Service Request"] .frappe-control input:focus,
+[data-doctype="Job Assignment"] .frappe-control input:focus,
+[data-doctype="Spare Parts Usage"] .frappe-control input:focus {
+    border-color: #667eea;
+    box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+}
+
+/* Status Badges */
+.indicator-pill {
+    padding: 4px 12px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.indicator-pill.blue {
+    background: #e0e7ff;
+    color: #4c51bf;
+}
+
+.indicator-pill.green {
+    background: #d1fae5;
+    color: #065f46;
+}
+
+.indicator-pill.orange {
+    background: #fed7aa;
+    color: #92400e;
+}
+
+.indicator-pill.red {
+    background: #fee2e2;
+    color: #991b1b;
+}
+
+/* Card Style for Sections */
+[data-doctype="Service Request"] .form-section,
+[data-doctype="Job Assignment"] .form-section,
+[data-doctype="Spare Parts Usage"] .form-section {
+    background: white;
+    border-radius: 10px;
+    padding: 20px;
+    margin-bottom: 20px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+    border: 1px solid #e5e7eb;
+}
+
+/* Primary Button Styling */
+.btn-primary {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    border: none;
+    border-radius: 6px;
+    padding: 8px 20px;
+    font-weight: 600;
+    transition: all 0.3s ease;
+}
+
+.btn-primary:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+}
+
+/* Table Styling */
+.grid-body .grid-row {
+    border-bottom: 1px solid #e5e7eb;
+    transition: background 0.2s ease;
+}
+
+.grid-body .grid-row:hover {
+    background: #f9fafb;
+}
+
+/* Collapsible Section Enhancement */
+.form-section.collapsible .section-head {
+    cursor: pointer;
+    position: relative;
+}
+
+.form-section.collapsible .section-head:after {
+    content: "▼";
+    position: absolute;
+    right: 15px;
+    transition: transform 0.3s ease;
+}
+
+.form-section.collapsible.collapsed .section-head:after {
+    transform: rotate(-90deg);
+}
+
+/* Field Labels */
+.frappe-control label {
+    font-weight: 600;
+    color: #374151;
+    font-size: 13px;
+    margin-bottom: 6px;
+}
+
+/* Required Field Indicator */
+.frappe-control.has-error input,
+.frappe-control.has-error select {
+    border-color: #ef4444;
+}
+
+/* Success Messages */
+.msgprint {
+    border-radius: 8px;
+    padding: 15px;
+}
+
+.msgprint.success {
+    background: #d1fae5;
+    border-left: 4px solid #10b981;
+}
+
+.msgprint.error {
+    background: #fee2e2;
+    border-left: 4px solid #ef4444;
+}
+
+/* Modern Tab Design */
+.form-tabs .nav-tabs {
+    border-bottom: 2px solid #e5e7eb;
+}
+
+.form-tabs .nav-tabs .nav-link {
+    border: none;
+    border-bottom: 3px solid transparent;
+    color: #6b7280;
+    font-weight: 500;
+    padding: 12px 20px;
+    transition: all 0.3s ease;
+}
+
+.form-tabs .nav-tabs .nav-link.active {
+    color: #667eea;
+    border-bottom-color: #667eea;
+    background: transparent;
+}
+
+.form-tabs .nav-tabs .nav-link:hover {
+    color: #667eea;
+    background: #f3f4f6;
+}
+
+/* Icon Enhancements */
+.btn-group .btn svg,
+.btn svg {
+    vertical-align: middle;
+}
+
+/* Loading Spinner */
+.page-loading-indicator {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+}
+
+/* Sidebar Enhancement */
+.form-sidebar {
+    background: white;
+    border-radius: 10px;
+    padding: 15px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+/* Mobile Responsive */
+@media (max-width: 768px) {
+    [data-doctype="Service Request"] .form-section,
+    [data-doctype="Job Assignment"] .form-section {
+        padding: 15px;
+    }
+    
+    .section-head {
+        padding: 10px 12px;
+        font-size: 14px;
+    }
+}
+
+/* Animation for form load */
+@keyframes fadeInUp {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.form-section {
+    animation: fadeInUp 0.4s ease-out;
+}

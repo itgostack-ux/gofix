@@ -1,0 +1,83 @@
+{
+ "actions": [],
+ "creation": "2024-12-05 07:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "service_item",
+  "item_name",
+  "description",
+  "col_break_1",
+  "estimated_hours",
+  "estimated_cost",
+  "actual_hours",
+  "actual_cost"
+ ],
+ "fields": [
+  {
+   "fieldname": "service_item",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Service Item",
+   "options": "Item",
+   "reqd": 1
+  },
+  {
+   "fetch_from": "service_item.item_name",
+   "fieldname": "item_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Item Name",
+   "read_only": 1
+  },
+  {
+   "fetch_from": "service_item.description",
+   "fieldname": "description",
+   "fieldtype": "Text Editor",
+   "label": "Description"
+  },
+  {
+   "fieldname": "col_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "estimated_hours",
+   "fieldtype": "Float",
+   "in_list_view": 1,
+   "label": "Estimated Hours",
+   "precision": "2"
+  },
+  {
+   "fieldname": "estimated_cost",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "label": "Estimated Cost",
+   "options": "Company:company:default_currency"
+  },
+  {
+   "fieldname": "actual_hours",
+   "fieldtype": "Float",
+   "label": "Actual Hours",
+   "precision": "2"
+  },
+  {
+   "fieldname": "actual_cost",
+   "fieldtype": "Currency",
+   "label": "Actual Cost",
+   "options": "Company:company:default_currency"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "istable": 1,
+ "links": [],
+ "modified": "2024-12-05 07:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "GoFix Services",
+ "name": "Service Request Service Item",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

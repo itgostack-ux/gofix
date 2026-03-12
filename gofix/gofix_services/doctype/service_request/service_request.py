@@ -164,6 +164,9 @@ class ServiceRequest(Document):
 	def fetch_warranty_from_serial(self):
 		"""Fetch warranty status from CH Sold Plan via ch_item_master warranty API.
 		Falls back to Serial No warranty_expiry_date if no sold plans exist."""
+		# Skip if warranty was already set by a warranty claim
+		if self.flags.get("skip_warranty_fetch"):
+			return
 		if not self.serial_no:
 			if not self.warranty_status:
 				self.warranty_status = "No Warranty"

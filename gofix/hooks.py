@@ -99,7 +99,10 @@ doctype_list_js = {
 
 # before_install = "gofix.install.before_install"
 after_install = "gofix.setup.install.after_install"
-after_migrate = ["gofix.setup.sales_order_custom_fields.create_sales_order_custom_fields"]
+after_migrate = [
+	"gofix.setup.sales_order_custom_fields.create_sales_order_custom_fields",
+	"gofix.setup.notifications.create_notifications"
+]
 
 # Uninstallation
 # ------------
@@ -173,23 +176,11 @@ doc_events = {
 # Scheduled Tasks
 # ---------------
 
-# scheduler_events = {
-# 	"all": [
-# 		"gofix.tasks.all"
-# 	],
-# 	"daily": [
-# 		"gofix.tasks.daily"
-# 	],
-# 	"hourly": [
-# 		"gofix.tasks.hourly"
-# 	],
-# 	"weekly": [
-# 		"gofix.tasks.weekly"
-# 	],
-# 	"monthly": [
-# 		"gofix.tasks.monthly"
-# 	],
-# }
+scheduler_events = {
+	"daily": [
+		"gofix.gofix_services.doctype.service_request.service_request.flag_unclaimed_devices"
+	],
+}
 
 # Testing
 # -------

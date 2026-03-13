@@ -83,6 +83,31 @@
   "column_break_referral",
   "request_number",
   "is_barcode_generated",
+  "section_service_items",
+  "service_items",
+  "section_spare_parts",
+  "spare_parts",
+  "section_service_discount",
+  "service_discount_percent",
+  "service_discount_amount",
+  "column_break_svc_disc",
+  "discount_approved_by",
+  "discount_approval_reason",
+  "discount_exception_request",
+  "section_serial_substitution",
+  "original_serial_no",
+  "replacement_serial_no",
+  "column_break_serial_sub",
+  "substitution_reason",
+  "substitution_approved_by",
+  "substitution_exception_request",
+  "section_repair_tracking",
+  "data_backup_disclaimer",
+  "unclaimed_flag",
+  "column_break_repair_track",
+  "unclaimed_date",
+  "repair_warranty_days",
+  "repair_warranty_expiry",
   "section_remarks",
   "remarks",
   "amended_from"
@@ -570,6 +595,52 @@
    "read_only": 1
   },
   {
+   "fieldname": "section_repair_tracking",
+   "fieldtype": "Section Break",
+   "label": "Repair Tracking",
+   "collapsible": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "data_backup_disclaimer",
+   "fieldtype": "Check",
+   "label": "Customer Acknowledges Data May Be Lost",
+   "allow_on_submit": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "unclaimed_flag",
+   "fieldtype": "Check",
+   "label": "Unclaimed Device",
+   "read_only": 1,
+   "allow_on_submit": 1
+  },
+  {
+   "fieldname": "column_break_repair_track",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "unclaimed_date",
+   "fieldtype": "Date",
+   "label": "Unclaimed Since",
+   "read_only": 1,
+   "allow_on_submit": 1
+  },
+  {
+   "default": "30",
+   "fieldname": "repair_warranty_days",
+   "fieldtype": "Int",
+   "label": "Repair Warranty (Days)",
+   "allow_on_submit": 1
+  },
+  {
+   "fieldname": "repair_warranty_expiry",
+   "fieldtype": "Date",
+   "label": "Repair Warranty Expiry",
+   "read_only": 1,
+   "allow_on_submit": 1
+  },
+  {
    "fieldname": "section_remarks",
    "fieldtype": "Section Break",
    "label": "Additional Notes"
@@ -587,12 +658,110 @@
    "options": "Service Request",
    "print_hide": 1,
    "read_only": 1
+  },
+  {
+   "fieldname": "section_service_items",
+   "fieldtype": "Section Break",
+   "label": "Service Items"
+  },
+  {
+   "fieldname": "service_items",
+   "fieldtype": "Table",
+   "label": "Service Items",
+   "options": "Service Request Service Item"
+  },
+  {
+   "fieldname": "section_spare_parts",
+   "fieldtype": "Section Break",
+   "label": "Spare Parts Required"
+  },
+  {
+   "fieldname": "spare_parts",
+   "fieldtype": "Table",
+   "label": "Spare Parts",
+   "options": "Service Request Spare Part"
+  },
+  {
+   "fieldname": "section_service_discount",
+   "fieldtype": "Section Break",
+   "label": "Service Discount"
+  },
+  {
+   "fieldname": "service_discount_percent",
+   "fieldtype": "Percent",
+   "label": "Service Discount %"
+  },
+  {
+   "fieldname": "service_discount_amount",
+   "fieldtype": "Currency",
+   "label": "Service Discount Amount",
+   "options": "Company:company:default_currency"
+  },
+  {
+   "fieldname": "column_break_svc_disc",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "discount_approved_by",
+   "fieldtype": "Link",
+   "label": "Discount Approved By",
+   "options": "User"
+  },
+  {
+   "fieldname": "discount_approval_reason",
+   "fieldtype": "Small Text",
+   "label": "Discount Approval Reason"
+  },
+  {
+   "fieldname": "discount_exception_request",
+   "fieldtype": "Link",
+   "label": "Exception Request",
+   "options": "CH Exception Request",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_serial_substitution",
+   "fieldtype": "Section Break",
+   "label": "Serial Substitution",
+   "collapsible": 1
+  },
+  {
+   "fieldname": "original_serial_no",
+   "fieldtype": "Data",
+   "label": "Original Serial No"
+  },
+  {
+   "fieldname": "replacement_serial_no",
+   "fieldtype": "Data",
+   "label": "Replacement Serial No"
+  },
+  {
+   "fieldname": "column_break_serial_sub",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "substitution_reason",
+   "fieldtype": "Small Text",
+   "label": "Substitution Reason"
+  },
+  {
+   "fieldname": "substitution_approved_by",
+   "fieldtype": "Link",
+   "label": "Substitution Approved By",
+   "options": "User"
+  },
+  {
+   "fieldname": "substitution_exception_request",
+   "fieldtype": "Link",
+   "label": "Substitution Exception",
+   "options": "CH Exception Request",
+   "read_only": 1
   }
  ],
  "index_web_pages_for_search": 1,
  "is_submittable": 1,
  "links": [],
- "modified": "2025-12-04 14:35:00.000000",
+ "modified": "2026-03-13 10:00:00.000000",
  "modified_by": "Administrator",
  "module": "GoFix Services",
  "name": "Service Request",

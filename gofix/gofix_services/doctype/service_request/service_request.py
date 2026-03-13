@@ -27,6 +27,8 @@ class ServiceRequest(Document):
 		self.validate_dates()
 		self.validate_mandatory_fields()
 		self.sync_decision_to_status()
+		self._validate_serial_substitution()
+		self._validate_service_discount()
 
 	def before_save(self):
 		"""Generate barcode if not exists and fetch warehouse details"""
@@ -269,6 +271,12 @@ class ServiceRequest(Document):
 		# If decision changed to Accepted and no service order exists
 		if self.decision == "Accepted" and not self.service_order:
 			self.create_service_order()
+
+		# Set repair warranty expiry when completed
+		if self.decision == "Completed" and not self.repair_warranty_expiry:
+			warranty_days = self.repair_warranty_days or 30
+			self.db_set("repair_warranty_expiry",
+				add_days(today(), warranty_days), update_modified=False)
 	
 	def create_service_order(self):
 		"""Create Service Order (Sales Order) from accepted Service Request"""
@@ -766,6 +774,103 @@ class ServiceRequest(Document):
 				alert=True
 			)
 
+	# ── Exception Framework: Serial Substitution (#8) ────────────────
+
+	def _validate_serial_substitution(self):
+		"""If replacement_serial_no is set, require approval."""
+		if not self.replacement_serial_no or not self.original_serial_no:
+			return
+		if self.replacement_serial_no == self.original_serial_no:
+			return
+
+		if not self.substitution_approved_by:
+			frappe.throw(
+				_("Serial substitution from {0} to {1} requires manager approval.").format(
+					frappe.bold(self.original_serial_no),
+					frappe.bold(self.replacement_serial_no),
+				),
+				title=_("Serial Substitution — Approval Required"),
+			)
+
+		# Log exception request
+		if not self.substitution_exception_request:
+			self._create_serial_sub_exception()
+
+	def _create_serial_sub_exception(self):
+		"""Create a CH Exception Request for serial substitution."""
+		if not frappe.db.exists("CH Exception Type", "Serial Substitution"):
+			return
+		try:
+			from ch_item_master.ch_item_master.exception_api import raise_exception, approve_exception
+			result = raise_exception(
+				exception_type="Serial Substitution",
+				company=self.company,
+				reason=self.substitution_reason or "Serial substitution",
+				serial_no=self.original_serial_no,
+				reference_doctype="Service Request",
+				reference_name=self.name,
+				store_warehouse=self.source_warehouse,
+				customer=self.customer,
+			)
+			if result and result.get("name"):
+				self.substitution_exception_request = result["name"]
+				if self.substitution_approved_by and result.get("status") == "Pending":
+					approve_exception(
+						exception_name=result["name"],
+						approver_user=self.substitution_approved_by,
+						channel="Manager PIN",
+						remarks=f"Old: {self.original_serial_no} → New: {self.replacement_serial_no}",
+					)
+		except Exception:
+			frappe.log_error("Serial substitution exception creation failed")
+
+	# ── Exception Framework: Service Discount (#10) ──────────────────
+
+	def _validate_service_discount(self):
+		"""If service discount is applied, require approval."""
+		if not flt(self.service_discount_percent) and not flt(self.service_discount_amount):
+			return
+
+		if not self.discount_approved_by:
+			frappe.throw(
+				_("Service discount of {0}% / ₹{1} requires manager approval.").format(
+					self.service_discount_percent or 0,
+					self.service_discount_amount or 0,
+				),
+				title=_("Service Discount — Approval Required"),
+			)
+
+		if not self.discount_exception_request:
+			self._create_service_discount_exception()
+
+	def _create_service_discount_exception(self):
+		"""Create a CH Exception Request for service discount."""
+		if not frappe.db.exists("CH Exception Type", "Service Discount"):
+			return
+		try:
+			from ch_item_master.ch_item_master.exception_api import raise_exception, approve_exception
+			result = raise_exception(
+				exception_type="Service Discount",
+				company=self.company,
+				reason=self.discount_approval_reason or "Service discount",
+				requested_value=flt(self.service_discount_amount) or flt(self.estimated_cost) * flt(self.service_discount_percent) / 100,
+				original_value=flt(self.estimated_cost),
+				reference_doctype="Service Request",
+				reference_name=self.name,
+				store_warehouse=self.source_warehouse,
+				customer=self.customer,
+			)
+			if result and result.get("name"):
+				self.discount_exception_request = result["name"]
+				if self.discount_approved_by and result.get("status") == "Pending":
+					approve_exception(
+						exception_name=result["name"],
+						approver_user=self.discount_approved_by,
+						channel="Manager PIN",
+					)
+		except Exception:
+			frappe.log_error("Service discount exception creation failed")
+
 
 # API Methods
 @frappe.whitelist()
@@ -923,3 +1028,35 @@ def get_warehouse_state(warehouse):
 		frappe.log_error(f"Error fetching warehouse state: {str(e)}")
 	
 	return {}
+
+
+def flag_unclaimed_devices(days_threshold=15):
+	"""Daily scheduler: Flag devices not picked up after completion.
+
+	Service Requests with decision in (Completed, Invoiced) and no delivery
+	date for more than *days_threshold* days are marked unclaimed.
+	"""
+	from frappe.utils import add_days, today
+
+	cutoff = add_days(today(), -days_threshold)
+
+	unclaimed = frappe.db.get_all(
+		"Service Request",
+		filters={
+			"decision": ["in", ["Completed", "Invoiced"]],
+			"unclaimed_flag": 0,
+			"docstatus": 1,
+			"modified": ["<=", cutoff],
+		},
+		pluck="name",
+	)
+
+	for name in unclaimed:
+		frappe.db.set_value("Service Request", name, {
+			"unclaimed_flag": 1,
+			"unclaimed_date": today(),
+		}, update_modified=False)
+
+	if unclaimed:
+		frappe.db.commit()
+		frappe.logger("gofix").info(f"Flagged {len(unclaimed)} unclaimed devices")

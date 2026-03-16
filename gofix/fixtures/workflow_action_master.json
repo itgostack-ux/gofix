@@ -1,0 +1,65 @@
+[
+ {
+  "docstatus": 0,
+  "doctype": "Workflow Action Master",
+  "modified": "2026-03-16 00:28:08",
+  "name": "Complete Job",
+  "workflow_action_name": "Complete Job"
+ },
+ {
+  "docstatus": 0,
+  "doctype": "Workflow Action Master",
+  "modified": "2026-03-16 00:28:08",
+  "name": "Customer Cancelled",
+  "workflow_action_name": "Customer Cancelled"
+ },
+ {
+  "docstatus": 0,
+  "doctype": "Workflow Action Master",
+  "modified": "2026-03-16 00:28:08",
+  "name": "Mark Not Repairable",
+  "workflow_action_name": "Mark Not Repairable"
+ },
+ {
+  "docstatus": 0,
+  "doctype": "Workflow Action Master",
+  "modified": "2026-03-16 00:28:08",
+  "name": "QC Fail",
+  "workflow_action_name": "QC Fail"
+ },
+ {
+  "docstatus": 0,
+  "doctype": "Workflow Action Master",
+  "modified": "2026-03-16 00:28:08",
+  "name": "QC Pass",
+  "workflow_action_name": "QC Pass"
+ },
+ {
+  "docstatus": 0,
+  "doctype": "Workflow Action Master",
+  "modified": "2026-03-16 00:28:08",
+  "name": "Rework",
+  "workflow_action_name": "Rework"
+ },
+ {
+  "docstatus": 0,
+  "doctype": "Workflow Action Master",
+  "modified": "2026-03-16 00:28:08",
+  "name": "Start Work",
+  "workflow_action_name": "Start Work"
+ },
+ {
+  "docstatus": 0,
+  "doctype": "Workflow Action Master",
+  "modified": "2026-03-16 05:45:41.878975",
+  "name": "Close",
+  "workflow_action_name": "Close"
+ },
+ {
+  "docstatus": 0,
+  "doctype": "Workflow Action Master",
+  "modified": "2026-03-16 05:45:41.897139",
+  "name": "Submit",
+  "workflow_action_name": "Submit"
+ }
+]

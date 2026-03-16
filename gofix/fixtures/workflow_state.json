@@ -1,0 +1,83 @@
+[
+ {
+  "docstatus": 0,
+  "doctype": "Workflow State",
+  "icon": "remove-sign",
+  "modified": "2026-03-16 00:27:45",
+  "name": "QC Fail",
+  "style": "Danger",
+  "workflow_state_name": "QC Fail"
+ },
+ {
+  "docstatus": 0,
+  "doctype": "Workflow State",
+  "icon": "ok-sign",
+  "modified": "2026-03-16 00:27:45",
+  "name": "QC Pass",
+  "style": "Success",
+  "workflow_state_name": "QC Pass"
+ },
+ {
+  "docstatus": 0,
+  "doctype": "Workflow State",
+  "icon": "wrench",
+  "modified": "2026-03-16 00:27:45",
+  "name": "Work in Progress",
+  "style": "Warning",
+  "workflow_state_name": "Work in Progress"
+ },
+ {
+  "docstatus": 0,
+  "doctype": "Workflow State",
+  "icon": "time",
+  "modified": "2026-03-16 00:27:45",
+  "name": "QC Awaiting",
+  "style": "Warning",
+  "workflow_state_name": "QC Awaiting"
+ },
+ {
+  "docstatus": 0,
+  "doctype": "Workflow State",
+  "icon": "remove-circle",
+  "modified": "2026-03-16 00:27:45",
+  "name": "Customer Cancelled",
+  "style": "Danger",
+  "workflow_state_name": "Customer Cancelled"
+ },
+ {
+  "docstatus": 0,
+  "doctype": "Workflow State",
+  "icon": "ban-circle",
+  "modified": "2026-03-16 00:27:45",
+  "name": "Not Repairable",
+  "style": "Danger",
+  "workflow_state_name": "Not Repairable"
+ },
+ {
+  "docstatus": 0,
+  "doctype": "Workflow State",
+  "icon": "fa fa-file-text",
+  "modified": "2026-03-16 05:45:42.019738",
+  "name": "Draft",
+  "style": "",
+  "workflow_state_name": "Draft"
+ },
+ {
+  "docstatus": 0,
+  "doctype": "Workflow State",
+  "icon": "fa fa-lock",
+  "modified": "2026-03-16 05:45:42.097126",
+  "name": "Closed",
+  "style": "Success",
+  "workflow_state_name": "Closed"
+ },
+ {
+  "docstatus": 0,
+  "doctype": "Workflow State",
+  "icon": "fa fa-paper-plane",
+  "modified": "2026-03-16 05:45:42.282966",
+  "name": "Submitted",
+  "style": "Info",
+  "workflow_state_name": "Submitted"
+ }
+]

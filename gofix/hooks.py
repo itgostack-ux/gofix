@@ -13,7 +13,33 @@ fixtures = [
         "filters": [
             ["name", "in", ["Service Manager", "Service Engineer", "Service Viewer"]]
         ]
-    }
+    },
+    {
+        "dt": "Workflow State",
+        "filters": [
+            ["name", "in", [
+                "Draft", "Submitted", "Work in Progress",
+                "QC Awaiting", "QC Pass", "QC Fail",
+                "Not Repairable", "Customer Cancelled", "Closed"
+            ]]
+        ]
+    },
+    {
+        "dt": "Workflow Action Master",
+        "filters": [
+            ["name", "in", [
+                "Submit", "Start Work", "Complete Job",
+                "Mark Not Repairable", "Customer Cancelled",
+                "QC Pass", "QC Fail", "Rework", "Close"
+            ]]
+        ]
+    },
+    {
+        "dt": "Workflow",
+        "filters": [
+            ["name", "in", ["Service Order Workflow"]]
+        ]
+    },
 ]
 
 # Apps

@@ -99,7 +99,9 @@ class JobAssignment(Document):
 					pass
 
 				frappe.msgprint(
-					f"Service Order {self.service_order} marked as {self.repair_outcome}. Can be closed without QC.",
+					_("Service Order {0} marked as {1}. Can be closed without QC.").format(
+						self.service_order, self.repair_outcome
+					),
 					indicator="orange",
 					alert=True,
 				)
@@ -109,7 +111,7 @@ class JobAssignment(Document):
 				# so.db_set("workflow_state", "QC Awaiting", update_modified=False)
 
 				frappe.msgprint(
-					f"Service Order {self.service_order} is now awaiting QC",
+					_("Service Order {0} is now awaiting QC").format(self.service_order),
 					indicator="green",
 					alert=True,
 				)

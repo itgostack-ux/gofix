@@ -2,6 +2,7 @@
 # Sales Order overrides for Service Order functionality
 
 import frappe
+from frappe import _
 from erpnext.selling.doctype.sales_order.sales_order import SalesOrder
 
 
@@ -40,7 +41,9 @@ class CustomSalesOrder(SalesOrder):
 			fields=["*"])
 		
 		if not transitions:
-			frappe.throw(f"Invalid transition: {from_state} → {to_state}. No transition configured for this state change.")
+			frappe.throw(_(
+				"Invalid transition: {0} → {1}. No transition configured for this state change."
+			).format(from_state, to_state))
 		
 		# Check each transition (there may be multiple paths to same state)
 		transition_valid = False
@@ -71,16 +74,22 @@ class CustomSalesOrder(SalesOrder):
 						fields=["name", "assignment_status"])
 					
 					if not job_sheets:
-						frappe.throw("Cannot change status. Please create and complete Job Sheet first.")
+						frappe.throw(_(
+						"Cannot change status. Please create and complete Job Sheet first."
+					))
 					
 					incomplete = [js for js in job_sheets if js.assignment_status not in ["Completed", "Closed"]]
 					if incomplete:
-						frappe.throw(f"Cannot change status. Job Sheet(s) {', '.join([js.name for js in incomplete])} must be completed first.")
+						frappe.throw(_(
+						"Cannot change status. Job Sheet(s) {0} must be completed first."
+					).format(', '.join([js.name for js in incomplete])))
 				
 				# Check QC pass requirement
 				if transition.require_qc_pass:
 					if not hasattr(self, 'qc_status') or self.qc_status != "Pass":
-						frappe.throw("QC must be completed and passed before proceeding. Current QC Status: " + (getattr(self, 'qc_status', None) or "Pending"))
+						frappe.throw(_(
+						"QC must be completed and passed before proceeding. Current QC Status: {0}"
+					).format(getattr(self, 'qc_status', None) or "Pending"))
 				
 				# Check repair outcome allowance
 				if transition.allow_if_repair_outcome:
@@ -100,7 +109,9 @@ class CustomSalesOrder(SalesOrder):
 				continue
 		
 		if not transition_valid:
-			frappe.throw(f"Transition {from_state} → {to_state} is not allowed. Check your permissions and required conditions.")
+			frappe.throw(_(
+			"Transition {0} → {1} is not allowed. Check your permissions and required conditions."
+		).format(from_state, to_state))
 	
 	def on_update(self):
 		"""Sync status to Service Request"""
@@ -151,7 +162,7 @@ class CustomSalesOrder(SalesOrder):
 				sr.db_set("decision", new_status, update_modified=False)
 				
 				frappe.msgprint(
-					f"Service Request {self.service_request} updated to {new_status}",
+					_("Service Request {0} updated to {1}").format(self.service_request, new_status),
 					indicator="green",
 					alert=True
 				)
@@ -186,11 +197,12 @@ def validate_service_order_before_submit(doc, method=None):
 		fields=["name", "assignment_status"])
 
 	if not job_sheets:
-		frappe.throw("Cannot submit Service Order. Please create and complete Job Sheet first.")
+		frappe.throw(_("Cannot submit Service Order. Please create and complete Job Sheet first."))
 
 	incomplete = [js for js in job_sheets if js.assignment_status not in ["Completed", "Closed"]]
 	if incomplete:
-		frappe.throw(f"Cannot submit. Job Sheet(s) {', '.join([js.name for js in incomplete])} must be completed first.")
+		names = ", ".join([js.name for js in incomplete])
+		frappe.throw(_("Cannot submit. Job Sheet(s) {0} must be completed first.").format(names))
 
 def update_service_request_on_qc(doc, method=None):
 	"""Hook: Update SR when QC status changes"""

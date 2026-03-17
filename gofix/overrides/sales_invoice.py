@@ -2,6 +2,7 @@
 # Sales Invoice hooks for Service Order functionality
 
 import frappe
+from frappe import _
 
 
 def update_service_request_on_invoice(doc, method=None):
@@ -39,7 +40,7 @@ def update_service_request_on_invoice(doc, method=None):
 			sr.db_set("decision", "Invoiced", update_modified=False)
 			
 			frappe.msgprint(
-				f"Service Request {so.service_request} marked as Invoiced",
+				_("Service Request {0} marked as Invoiced").format(so.service_request),
 				indicator="green",
 				alert=True
 			)

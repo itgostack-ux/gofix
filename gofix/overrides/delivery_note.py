@@ -2,6 +2,7 @@
 # Delivery Note hooks for Service Order functionality
 
 import frappe
+from frappe import _
 
 
 def update_service_request_on_delivery(doc, method=None):
@@ -40,7 +41,7 @@ def update_service_request_on_delivery(doc, method=None):
 			sr.db_set("walkin_status", None, update_modified=False)  # Device no longer with you
 			
 			frappe.msgprint(
-				f"Service Request {so.service_request} marked as Delivered",
+				_("Service Request {0} marked as Delivered").format(so.service_request),
 				indicator="green",
 				alert=True
 			)

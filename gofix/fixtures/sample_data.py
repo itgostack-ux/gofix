@@ -122,6 +122,7 @@ def create_walkin_sources():
 		{"source_name": "Social Media", "description": "Found us on social media (Facebook, Instagram, etc.)"},
 		{"source_name": "Google Search", "description": "Found us through Google search"},
 		{"source_name": "Advertisement", "description": "Saw our advertisement"},
+		{"source_name": "POS Counter", "description": "Walk-in logged from POS counter"},
 	]
 	
 	for source in sources:

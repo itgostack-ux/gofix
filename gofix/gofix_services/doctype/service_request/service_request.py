@@ -580,15 +580,15 @@ class ServiceRequest(Document):
 
 	def validate_contact_details(self):
 		"""Validate mobile number and email format using Frappe built-ins"""
+		from buyback.utils import validate_indian_phone
 		from frappe.utils import validate_email_address
-		
-		# Validate mobile number (10 digits)
+
 		if self.contact_number:
-			import re
-			mobile = re.sub(r'\D', '', self.contact_number)
-			if len(mobile) != 10:
-				frappe.throw(_("Mobile Number must be exactly 10 digits"))
-		
+			self.contact_number = validate_indian_phone(self.contact_number, "Mobile Number")
+
+		if self.alternate_contact:
+			self.alternate_contact = validate_indian_phone(self.alternate_contact, "Alternate Contact")
+
 		# Use Frappe's built-in email validator
 		if self.email:
 			validate_email_address(self.email, throw=True)

@@ -222,10 +222,14 @@ class JobTracker {
 
 	render_service_details(doc) {
 		const status_colors = {
-			'Open': 'primary',
-			'In Progress': 'info',
-			'On Hold': 'warning',
+			'Draft': 'secondary',
+			'Accepted': 'primary',
+			'In Service': 'info',
 			'Completed': 'success',
+			'Invoiced': 'success',
+			'Delivered': 'success',
+			'Withdrawn': 'warning',
+			'Rejected': 'danger',
 			'Cancelled': 'danger'
 		};
 		const esc = frappe.utils.escape_html;
@@ -377,17 +381,33 @@ class JobTracker {
 	}
 
 	load_audit_trails() {
-		// Load technician audit
+		// Load technician audit — child table in Job Assignment, must query Technician Audit doctype directly
 		frappe.call({
 			method: 'frappe.client.get_list',
 			args: {
 				doctype: 'Job Assignment',
 				filters: {service_request: this.service_request},
-				fields: ['name', 'technician_audit']
+				fields: ['name'],
+				order_by: 'assignment_date asc'
 			},
 			callback: (r) => {
-				if (r.message && r.message.length) {
-					this.render_technician_audit(r.message[0].technician_audit || []);
+				const ja_names = (r.message || []).map(j => j.name);
+				if (ja_names.length) {
+					frappe.call({
+						method: 'frappe.client.get_list',
+						args: {
+							doctype: 'Technician Audit',
+							filters: [['parent', 'in', ja_names]],
+							fields: ['service_engineer', 'assignment_from_time', 'assignment_to_time', 'time_duration', 'operation', 'is_active_record'],
+							order_by: 'assignment_from_time asc',
+							limit: 50
+						},
+						callback: (res) => {
+							this.render_technician_audit(res.message || []);
+						}
+					});
+				} else {
+					this.render_technician_audit([]);
 				}
 			}
 		});
@@ -395,7 +415,7 @@ class JobTracker {
 		// Load spare parts audit
 		this.load_spare_parts_audit();
 
-		// Load support logs (version history)
+		// Load support logs (comments)
 		this.load_support_logs();
 	}
 
@@ -421,11 +441,72 @@ class JobTracker {
 	}
 
 	load_spare_parts_audit() {
-		$('#spare-audit').html('<p class="text-muted small">Loading spare parts history...</p>');
+		frappe.call({
+			method: 'frappe.client.get_list',
+			args: {
+				doctype: 'Spare Parts Usage',
+				filters: {service_request: this.service_request},
+				fields: ['spare_part_item', 'item_name', 'qty_used', 'sales_price', 'status', 'reason_desc', 'transaction_date'],
+				order_by: 'transaction_date asc',
+				limit: 50
+			},
+			callback: (r) => {
+				const parts = r.message || [];
+				if (!parts.length) {
+					$('#spare-audit').html('<p class="text-muted small">No spare parts history</p>');
+					return;
+				}
+				const status_badge = {Active: 'success', 'Moved to Main Stock': 'info', 'Moved to Dispose Stock': 'warning', 'Deleted': 'danger'};
+				let html = '<ul class="list-unstyled">';
+				parts.forEach(p => {
+					const esc = frappe.utils.escape_html;
+					const badge = status_badge[p.status] || 'secondary';
+					html += `<li class="mb-2 small">
+						<strong>${esc(p.item_name || p.spare_part_item)}</strong> x${p.qty_used}<br>
+						<span class="badge badge-sm badge-${badge}">${esc(p.status)}</span>
+						${p.reason_desc ? ' <span class="text-muted">— ' + esc(p.reason_desc) + '</span>' : ''}<br>
+						<span class="text-muted">${frappe.datetime.str_to_user(p.transaction_date)}</span>
+					</li>`;
+				});
+				html += '</ul>';
+				$('#spare-audit').html(html);
+			}
+		});
 	}
 
 	load_support_logs() {
-		$('#support-logs').html('<p class="text-muted small">Loading activity logs...</p>');
+		frappe.call({
+			method: 'frappe.client.get_list',
+			args: {
+				doctype: 'Comment',
+				filters: {
+					reference_doctype: 'Service Request',
+					reference_name: this.service_request
+				},
+				fields: ['content', 'comment_type', 'creation', 'owner'],
+				order_by: 'creation desc',
+				limit: 20
+			},
+			callback: (r) => {
+				const logs = r.message || [];
+				if (!logs.length) {
+					$('#support-logs').html('<p class="text-muted small">No activity logs</p>');
+					return;
+				}
+				let html = '<ul class="list-unstyled">';
+				logs.forEach(log => {
+					const esc = frappe.utils.escape_html;
+					html += `<li class="mb-2 small">
+						<span class="badge badge-sm badge-secondary">${esc(log.comment_type)}</span>
+						<span class="text-muted ml-1">${frappe.datetime.str_to_user(log.creation)}</span>
+						<span class="text-muted"> by ${esc(log.owner)}</span><br>
+						<span>${esc(log.content || '')}</span>
+					</li>`;
+				});
+				html += '</ul>';
+				$('#support-logs').html(html);
+			}
+		});
 	}
 
 	show_assignment_dialog(type) {
@@ -472,6 +553,7 @@ class JobTracker {
 						doc: {
 							doctype: 'Job Assignment',
 							service_request: this.service_request,
+							assignment_date: frappe.datetime.nowdate(),
 							team: values.team,
 							user: values.user,
 							service_engineer: values.service_engineer,
@@ -537,6 +619,7 @@ class JobTracker {
 						doc: {
 							doctype: 'Spare Parts Usage',
 							service_request: this.service_request,
+							transaction_date: frappe.datetime.nowdate(),
 							spare_part_item: values.spare_part_item,
 							barcode_value: values.barcode_value,
 							qty_used: values.qty_used,
@@ -619,8 +702,7 @@ class JobTracker {
 					doctype: 'Service Request',
 					name: this.service_request,
 					fieldname: {
-						status: 'Completed',
-						actual_completion_date: frappe.datetime.nowdate(),
+						decision: status === 'Repaired' ? 'Completed' : 'In Service',
 						remarks: values.comments + `\n\nService Status: ${status}`
 					}
 				},

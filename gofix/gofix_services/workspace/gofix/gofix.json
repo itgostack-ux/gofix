@@ -120,13 +120,13 @@
  "quick_lists": [
   {
    "document_type": "Service Request",
-   "label": "Open Service Requests",
-   "quick_list_filter": "{\"status\": \"Open\"}"
+   "label": "Accepted Requests",
+   "quick_list_filter": "{\"decision\": \"Accepted\"}"
   },
   {
    "document_type": "Service Request",
-   "label": "In Progress",
-   "quick_list_filter": "{\"status\": \"In Progress\"}"
+   "label": "In Service",
+   "quick_list_filter": "{\"decision\": \"In Service\"}"
   }
  ],
  "roles": [],
@@ -135,10 +135,10 @@
   {
    "color": "Blue",
    "doc_view": "List",
-   "format": "{} Open",
+   "format": "{} Accepted",
    "label": "Service Request",
    "link_to": "Service Request",
-   "stats_filter": "{\"status\": [\"=\", \"Open\"]}",
+   "stats_filter": "{\"decision\": [\"=\", \"Accepted\"]}",
    "type": "DocType"
   },
   {
@@ -190,7 +190,7 @@
    "format": "{} Active",
    "label": "Job Assignment",
    "link_to": "Job Assignment",
-   "stats_filter": "{\"assignment_status\": [\"=\", \"Assigned\"]}",
+   "stats_filter": "{\"assignment_status\": [\"=\", \"Open\"]}",
    "type": "DocType"
   },
   {

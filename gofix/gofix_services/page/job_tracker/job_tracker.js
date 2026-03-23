@@ -1,740 +1,365 @@
 frappe.pages['job-tracker'].on_page_load = function(wrapper) {
-	var page = frappe.ui.make_app_page({
-		parent: wrapper,
-		title: 'Job Tracker',
-		single_column: true
-	});
+const page = frappe.ui.make_app_page({
+parent: wrapper,
+title: 'Job Tracker',
+single_column: true,
+});
+frappe.job_tracker = new JobTrackerBoard(page);
+};
 
-	frappe.job_tracker = new JobTracker(page);
+// ─────────────────────────────────────────────────────────────────────────────
+// Job Tracker — Kanban Board
+// Managers see ALL active service requests in status columns.
+// Click any card to open the detail drawer. Assign from the drawer.
+// ─────────────────────────────────────────────────────────────────────────────
+class JobTrackerBoard {
+constructor(page) {
+this.page       = page;
+this.parent     = $(page.body);
+this._detail    = null;
+this._data      = null;
+this._filters   = {
+date_from: frappe.datetime.add_days(frappe.datetime.nowdate(), -30),
+date_to:   frappe.datetime.nowdate(),
+warehouse: null,
+search:    '',
+};
+this.setup();
 }
 
-class JobTracker {
-	constructor(page) {
-		this.page = page;
-		this.parent = $(this.page.body);
-		this.service_request = null;
-		this.setup();
-	}
+setup() {
+this._build_toolbar();
+this._build_layout();
+this._load();
+this._setup_realtime();
+}
 
-	setup() {
-		this.setup_toolbar();
-		this.render_layout();
-		this.setup_realtime();
-	}
+_build_toolbar() {
+this.page.add_field({
+fieldname: 'date_from', label: __('From'), fieldtype: 'Date',
+default: this._filters.date_from,
+change: () => { this._filters.date_from = this.page.fields_dict.date_from.get_value(); this._load(); },
+});
+this.page.add_field({
+fieldname: 'date_to', label: __('To'), fieldtype: 'Date',
+default: this._filters.date_to,
+change: () => { this._filters.date_to = this.page.fields_dict.date_to.get_value(); this._load(); },
+});
+this.page.add_field({
+fieldname: 'warehouse', label: __('Store'), fieldtype: 'Link', options: 'Warehouse',
+change: () => { this._filters.warehouse = this.page.fields_dict.warehouse.get_value() || null; this._load(); },
+});
+this.page.add_button(__('Refresh'), () => this._load(), { icon: 'refresh' });
+}
 
-	setup_toolbar() {
-		// Search bar
-		this.page.add_field({
-			fieldname: 'service_request',
-			label: __('Service Request'),
-			fieldtype: 'Link',
-			options: 'Service Request',
-			change: () => {
-				this.service_request = this.page.fields_dict.service_request.get_value();
-				if (this.service_request) {
-					this.load_service_request();
-				}
-			}
-		});
+_build_layout() {
+this.parent.html(`
+<div class="jt-wrapper">
+<div class="jt-summary" id="jt-summary"></div>
+<div class="jt-search-bar">
+<input type="text" id="jt-search" class="form-control input-sm jt-search-input"
+placeholder="${__('Search SR, customer, device, serial…')}">
+</div>
+<div class="jt-board" id="jt-board">
+<div class="jt-loading"><i class="fa fa-spinner fa-spin fa-2x"></i><br>${__('Loading…')}</div>
+</div>
+<div class="jt-drawer-overlay" id="jt-drawer-overlay"></div>
+<div class="jt-drawer" id="jt-drawer">
+<div class="jt-drawer-header">
+<span class="jt-drawer-title" id="jt-drawer-title">—</span>
+<span class="jt-drawer-close" id="jt-drawer-close"><i class="fa fa-times"></i></span>
+</div>
+<div class="jt-drawer-body" id="jt-drawer-body">
+<div class="jt-loading"><i class="fa fa-spinner fa-spin"></i></div>
+</div>
+</div>
+</div>
+`);
 
-		// Refresh button
-		this.page.add_button(__('Refresh'), () => {
-			if (this.service_request) {
-				this.load_service_request();
-			}
-		}, {icon: 'refresh'});
+let _st;
+this.parent.find('#jt-search').on('input', e => {
+clearTimeout(_st);
+_st = setTimeout(() => { this._filters.search = e.target.value.trim(); this._render(this._data); }, 350);
+});
+this.parent.on('click', '#jt-drawer-close, #jt-drawer-overlay', () => this._close_drawer());
+}
 
-		// Print button
-		this.page.add_button(__('Print Job Sheet'), () => {
-			if (this.service_request) {
-				this.print_job_sheet();
-			}
-		}, {icon: 'printer'});
-	}
+_load() {
+this.parent.find('#jt-board').html(
+`<div class="jt-loading"><i class="fa fa-spinner fa-spin fa-2x"></i><br>${__('Loading…')}</div>`
+);
+frappe.xcall('gofix.gofix_services.page.job_tracker.job_tracker.get_board_data', {
+warehouse: this._filters.warehouse || '',
+date_from: this._filters.date_from,
+date_to:   this._filters.date_to,
+}).then(data => {
+this._data = data;
+this._render(data);
+}).catch(() => {
+this.parent.find('#jt-board').html(
+`<div class="jt-loading text-danger"><i class="fa fa-exclamation-circle"></i> ${__('Failed to load jobs')}</div>`
+);
+});
+}
 
-	render_layout() {
-		this.parent.html(`
-			<div class="job-tracker-container">
-				<!-- Service Request Summary -->
-				<div class="row">
-					<div class="col-md-8">
-						<div class="card shadow-sm mb-3">
-							<div class="card-header bg-primary text-white">
-								<h5 class="mb-0"><i class="fa fa-briefcase"></i> Service Request Details</h5>
-							</div>
-							<div class="card-body" id="service-details">
-								<p class="text-muted">Please select a Service Request from above</p>
-							</div>
-						</div>
+_render(data) {
+if (!data) return;
+const search = (this._filters.search || '').toLowerCase();
 
-						<!-- Assignment Section -->
-						<div class="card shadow-sm mb-3">
-							<div class="card-header bg-info text-white">
-								<h5 class="mb-0"><i class="fa fa-users"></i> Assignment</h5>
-							</div>
-							<div class="card-body" id="assignment-section">
-								<div class="row">
-									<div class="col-md-12">
-										<button class="btn btn-sm btn-primary mb-3" id="btn-assign-team">
-											<i class="fa fa-plus"></i> Assign Team
-										</button>
-										<button class="btn btn-sm btn-info mb-3" id="btn-assign-user">
-											<i class="fa fa-user"></i> Assign User
-										</button>
-										<button class="btn btn-sm btn-success mb-3" id="btn-assign-technician">
-											<i class="fa fa-wrench"></i> Assign Technician
-										</button>
-									</div>
-								</div>
-								<div id="assignment-history"></div>
-							</div>
-						</div>
+// Summary pills
+const sumHTML = data.columns.map(col => {
+const count = (data.cards_by_status[col.status] || []).length;
+return `<div class="jt-sum-pill" style="border-color:${col.color};" data-status="${frappe.utils.escape_html(col.status)}">
+<span class="jt-sum-count" style="color:${col.color};">${count}</span>
+<span class="jt-sum-label">${__(col.label)}</span>
+</div>`;
+}).join('');
+this.parent.find('#jt-summary').html(sumHTML);
 
-						<!-- Spare Parts Section -->
-						<div class="card shadow-sm mb-3">
-							<div class="card-header bg-warning text-dark">
-								<h5 class="mb-0"><i class="fa fa-cogs"></i> Spare Parts Management</h5>
-							</div>
-							<div class="card-body">
-								<div class="mb-3">
-									<button class="btn btn-sm btn-primary" id="btn-add-spare">
-										<i class="fa fa-plus"></i> Add Spare Part
-									</button>
-									<span class="badge badge-info ml-2" id="spare-count">0 Parts Used</span>
-								</div>
-								<div id="spare-parts-list"></div>
-							</div>
-						</div>
+// Board columns
+let boardHTML = '';
+data.columns.forEach(col => {
+const all_cards = data.cards_by_status[col.status] || [];
+const cards = all_cards.filter(sr => {
+if (!search) return true;
+return (sr.name + ' ' + (sr.customer_name || '') + ' ' + (sr.device_item_name || '') + ' ' + (sr.serial_no || '') + ' ' + (sr.contact_number || ''))
+.toLowerCase().includes(search);
+});
+const cardHTML = cards.map(sr => this._card_html(sr)).join('') ||
+`<div class="jt-no-cards text-muted"><i class="fa fa-inbox"></i><br>${__('No jobs')}</div>`;
 
-						<!-- Service Closure -->
-						<div class="card shadow-sm mb-3">
-							<div class="card-header bg-success text-white">
-								<h5 class="mb-0"><i class="fa fa-check-circle"></i> Service Closure</h5>
-							</div>
-							<div class="card-body" id="closure-section">
-								<div class="row">
-									<div class="col-md-12">
-										<button class="btn btn-success" id="btn-mark-repaired">
-											<i class="fa fa-check"></i> Mark as Repaired
-										</button>
-										<button class="btn btn-danger ml-2" id="btn-mark-not-repaired">
-											<i class="fa fa-times"></i> Not Repaired
-										</button>
-									</div>
-								</div>
-							</div>
-						</div>
-					</div>
+boardHTML += `
+<div class="jt-col">
+<div class="jt-col-header" style="border-top:3px solid ${col.color};">
+<span class="jt-col-title">
+<i class="fa ${col.icon}" style="color:${col.color};"></i> ${__(col.label)}
+</span>
+<span class="badge jt-col-badge" style="background:${col.color};">${cards.length}</span>
+</div>
+<div class="jt-col-body" data-status="${frappe.utils.escape_html(col.status)}">
+${cardHTML}
+</div>
+</div>`;
+});
 
-					<!-- Right Sidebar -->
-					<div class="col-md-4">
-						<!-- Customer Info -->
-						<div class="card shadow-sm mb-3">
-							<div class="card-header bg-secondary text-white">
-								<h6 class="mb-0"><i class="fa fa-user"></i> Customer</h6>
-							</div>
-							<div class="card-body" id="customer-info">
-								<p class="text-muted small">No customer data</p>
-							</div>
-						</div>
+this.parent.find('#jt-board').html(boardHTML);
+this.parent.find('.jt-card').on('click', e => {
+const name = $(e.currentTarget).closest('.jt-card').data('name');
+if (name) this._open_drawer(name);
+});
 
-						<!-- Device Info -->
-						<div class="card shadow-sm mb-3">
-							<div class="card-header bg-dark text-white">
-								<h6 class="mb-0"><i class="fa fa-mobile"></i> Device</h6>
-							</div>
-							<div class="card-body" id="device-info">
-								<p class="text-muted small">No device data</p>
-							</div>
-						</div>
+// Summary pill click → scroll to column (if visible)
+this.parent.find('.jt-sum-pill').on('click', e => {
+const status = $(e.currentTarget).data('status');
+const col = this.parent.find(`.jt-col-body[data-status="${CSS.escape(status)}"]`).closest('.jt-col');
+if (col.length) col[0].scrollIntoView({ behavior: 'smooth', inline: 'center' });
+});
+}
 
-						<!-- Audit Trails -->
-						<div class="card shadow-sm mb-3">
-							<div class="card-header bg-purple text-white">
-								<h6 class="mb-0"><i class="fa fa-history"></i> Activity Log</h6>
-							</div>
-							<div class="card-body">
-								<ul class="nav nav-tabs" role="tablist">
-									<li class="nav-item">
-										<a class="nav-link active" data-toggle="tab" href="#tab-technician">Technician</a>
-									</li>
-									<li class="nav-item">
-										<a class="nav-link" data-toggle="tab" href="#tab-spare">Spare Parts</a>
-									</li>
-									<li class="nav-item">
-										<a class="nav-link" data-toggle="tab" href="#tab-logs">Logs</a>
-									</li>
-								</ul>
-								<div class="tab-content mt-2">
-									<div id="tab-technician" class="tab-pane fade show active">
-										<div id="technician-audit"></div>
-									</div>
-									<div id="tab-spare" class="tab-pane fade">
-										<div id="spare-audit"></div>
-									</div>
-									<div id="tab-logs" class="tab-pane fade">
-										<div id="support-logs"></div>
-									</div>
-								</div>
-							</div>
-						</div>
-					</div>
-				</div>
-			</div>
-		`);
+_card_html(sr) {
+const esc = frappe.utils.escape_html;
+const pColors = { High: '#ef4444', Urgent: '#dc2626', Medium: '#f59e0b', Low: '#10b981' };
+const pColor  = pColors[sr.priority] || '#6b7280';
+const today   = frappe.datetime.nowdate();
+const daysOpen = frappe.datetime.get_day_diff(today, sr.service_date);
+const overdue  = sr.expected_completion_date && sr.expected_completion_date < today;
 
-		this.bind_events();
-	}
+return `
+<div class="jt-card${overdue ? ' jt-card-overdue' : ''}" data-name="${esc(sr.name)}">
+<div class="jt-card-head">
+<span class="jt-card-sr">${esc(sr.name)}</span>
+<span class="jt-card-priority" style="background:${pColor}20;color:${pColor};">${esc(sr.priority)}</span>
+</div>
+<div class="jt-card-customer">
+<i class="fa fa-user text-muted"></i>
+<b>${esc(sr.customer_name || sr.customer)}</b>
+${sr.contact_number ? `<span class="text-muted"> · ${esc(sr.contact_number)}</span>` : ''}
+</div>
+<div class="jt-card-device">
+<i class="fa fa-mobile text-muted"></i>
+${esc(sr.device_item_name || sr.device_item)}
+${sr.serial_no ? `<code class="jt-card-serial"> ${esc(sr.serial_no)}</code>` : ''}
+</div>
+${sr.issue_category ? `<div class="jt-card-issue"><i class="fa fa-tag text-muted"></i> ${esc(sr.issue_category)}</div>` : ''}
+<div class="jt-card-footer">
+<span class="jt-card-meta"><i class="fa fa-calendar text-muted"></i> ${frappe.datetime.str_to_user(sr.service_date)}</span>
+<span class="jt-card-age ${daysOpen > 7 ? 'jt-age-warn' : ''}">${daysOpen}d</span>
+</div>
+${sr.engineer_name
+? `<div class="jt-card-engineer">
+<i class="fa fa-wrench text-muted"></i>
+${esc(sr.engineer_name)}
+${sr.assignment_status ? `<span class="jt-eng-badge">${esc(sr.assignment_status)}</span>` : ''}
+</div>`
+: `<div class="jt-card-unassigned"><i class="fa fa-user-times"></i> ${__('Unassigned')}</div>`
+}
+</div>`;
+}
 
-	bind_events() {
-		// Assignment buttons
-		$('#btn-assign-team').on('click', () => this.show_assignment_dialog('Team'));
-		$('#btn-assign-user').on('click', () => this.show_assignment_dialog('User'));
-		$('#btn-assign-technician').on('click', () => this.show_assignment_dialog('Technician'));
+// ─────────── Detail Drawer ───────────────────────────────────────────────
 
-		// Spare parts
-		$('#btn-add-spare').on('click', () => this.show_spare_dialog());
+_open_drawer(sr_name) {
+this._detail = sr_name;
+this.parent.find('#jt-drawer-title').text(sr_name);
+this.parent.find('#jt-drawer-body').html(
+`<div class="jt-loading"><i class="fa fa-spinner fa-spin"></i></div>`
+);
+this.parent.find('#jt-drawer').addClass('jt-drawer-open');
+this.parent.find('#jt-drawer-overlay').addClass('jt-overlay-open');
 
-		// Service closure
-		$('#btn-mark-repaired').on('click', () => this.mark_service_complete('Repaired'));
-		$('#btn-mark-not-repaired').on('click', () => this.mark_service_complete('Not Repaired'));
-	}
+frappe.xcall('gofix.gofix_services.page.job_tracker.job_tracker.get_sr_detail', { sr_name })
+.then(d => this._render_drawer(d))
+.catch(() => {
+this.parent.find('#jt-drawer-body').html(
+`<p class="text-danger">${__('Failed to load details')}</p>`
+);
+});
+}
 
-	load_service_request() {
-		frappe.call({
-			method: 'frappe.client.get',
-			args: {
-				doctype: 'Service Request',
-				name: this.service_request
-			},
-			callback: (r) => {
-				if (r.message) {
-					this.render_service_details(r.message);
-					this.load_customer_info(r.message.customer);
-					this.load_device_info(r.message);
-					this.load_assignments();
-					this.load_spare_parts();
-					this.load_audit_trails();
-				}
-			}
-		});
-	}
+_close_drawer() {
+this._detail = null;
+this.parent.find('#jt-drawer').removeClass('jt-drawer-open');
+this.parent.find('#jt-drawer-overlay').removeClass('jt-overlay-open');
+}
 
-	render_service_details(doc) {
-		const status_colors = {
-			'Draft': 'secondary',
-			'Accepted': 'primary',
-			'In Service': 'info',
-			'Completed': 'success',
-			'Invoiced': 'success',
-			'Delivered': 'success',
-			'Withdrawn': 'warning',
-			'Rejected': 'danger',
-			'Cancelled': 'danger'
-		};
-		const esc = frappe.utils.escape_html;
+_render_drawer(d) {
+const esc = frappe.utils.escape_html;
+const sr   = d.sr;
+const ci   = d.customer_info || {};
+const asgn = d.assignments  || [];
+const parts = d.spare_parts || [];
 
-		$('#service-details').html(`
-			<div class="row">
-				<div class="col-md-6">
-					<p><strong>SR No:</strong> ${esc(doc.name)}</p>
-					<p><strong>Date:</strong> ${frappe.datetime.str_to_user(doc.service_date)}</p>
-					<p><strong>Status:</strong> <span class="badge badge-${status_colors[doc.status] || 'secondary'}">${esc(doc.status)}</span></p>
-				</div>
-				<div class="col-md-6">
-					<p><strong>Priority:</strong> <span class="badge badge-secondary">${esc(doc.priority)}</span></p>
-					<p><strong>Expected:</strong> ${doc.expected_completion_date ? frappe.datetime.str_to_user(doc.expected_completion_date) : '-'}</p>
-					<p><strong>Issue:</strong> ${esc(doc.issue_category || '-')}</p>
-				</div>
-			</div>
-			<hr>
-			<p><strong>Issue Description:</strong></p>
-			<p class="text-muted">${esc(doc.issue_description || 'No description provided')}</p>
-		`);
-	}
+const STATUS_COLORS = {
+Draft:'#6b7280', Accepted:'#3b82f6', 'In Service':'#f59e0b',
+Completed:'#10b981', Invoiced:'#8b5cf6', Delivered:'#10b981',
+Withdrawn:'#ef4444', Rejected:'#ef4444', Cancelled:'#ef4444',
+};
+const sc = STATUS_COLORS[sr.decision] || '#6b7280';
 
-	load_customer_info(customer) {
-		frappe.call({
-			method: 'frappe.client.get',
-			args: {
-				doctype: 'Customer',
-				name: customer
-			},
-			callback: (r) => {
-				if (r.message) {
-					const esc = frappe.utils.escape_html;
-					$('#customer-info').html(`
-						<p class="mb-1"><strong>${esc(r.message.customer_name)}</strong></p>
-						<p class="mb-1 small"><i class="fa fa-phone"></i> ${esc(r.message.mobile_no || '-')}</p>
-						<p class="mb-1 small"><i class="fa fa-envelope"></i> ${esc(r.message.email_id || '-')}</p>
-						<p class="mb-0 small"><i class="fa fa-map-marker"></i> ${esc(r.message.customer_primary_address || '-')}</p>
-					`);
-				}
-			}
-		});
-	}
+const assign_html = asgn.length
+? `<table class="jt-table">
+<thead><tr><th>${__('Date')}</th><th>${__('Technician')}</th><th>${__('Type')}</th><th>${__('Status')}</th></tr></thead>
+<tbody>${asgn.map(a => `
+<tr>
+<td>${frappe.datetime.str_to_user(a.assignment_date)}</td>
+<td>${esc(a.engineer_display)}</td>
+<td>${esc(a.job_type || a.assignment_type || '—')}</td>
+<td><span class="jt-badge">${esc(a.assignment_status)}</span></td>
+</tr>`).join('')}</tbody>
+</table>`
+: `<p class="text-muted small">${__('No assignments yet')}</p>`;
 
-	load_device_info(doc) {
-		const esc = frappe.utils.escape_html;
-		$('#device-info').html(`
-			<p class="mb-1"><strong>${esc(doc.device_item_name || doc.device_item)}</strong></p>
-			<p class="mb-1 small">Brand: ${esc(doc.brand || '-')}</p>
-			<p class="mb-1 small">Serial/IMEI: ${esc(doc.serial_no || '-')}</p>
-			<p class="mb-1 small">Condition: ${esc(doc.device_condition || '-')}</p>
-			<p class="mb-0 small">Warranty: <span class="badge badge-sm badge-info">${esc(doc.warranty_status || 'Unknown')}</span></p>
-		`);
-	}
+const parts_html = parts.length
+? `<table class="jt-table">
+<thead><tr><th>${__('Part')}</th><th>${__('Qty')}</th><th>${__('Price')}</th><th>${__('Status')}</th></tr></thead>
+<tbody>${parts.map(p => `
+<tr>
+<td>${esc(p.item_name || p.spare_part_item)}</td>
+<td>${p.qty_used}</td>
+<td>${format_currency(p.sales_price || 0)}</td>
+<td>${esc(p.status)}</td>
+</tr>`).join('')}</tbody>
+</table>`
+: `<p class="text-muted small">${__('No spare parts used')}</p>`;
 
-	load_assignments() {
-		frappe.call({
-			method: 'frappe.client.get_list',
-			args: {
-				doctype: 'Job Assignment',
-				filters: {service_request: this.service_request},
-				fields: ['name', 'assignment_date', 'team', 'user', 'service_engineer', 'assignment_status'],
-				order_by: 'assignment_date desc'
-			},
-			callback: (r) => {
-				this.render_assignments(r.message || []);
-			}
-		});
-	}
+const today = frappe.datetime.nowdate();
+const daysOpen = frappe.datetime.get_day_diff(today, sr.service_date);
 
-	render_assignments(assignments) {
-		if (!assignments.length) {
-			$('#assignment-history').html('<p class="text-muted small">No assignments yet</p>');
-			return;
-		}
+this.parent.find('#jt-drawer-body').html(`
+<div class="jt-dw-actions">
+<a href="/app/service-request/${encodeURIComponent(sr.name)}" target="_blank"
+   class="btn btn-xs btn-default"><i class="fa fa-external-link"></i> ${__('Open Form')}</a>
+<button class="btn btn-xs btn-primary" id="jt-btn-assign">
+<i class="fa fa-user-plus"></i> ${__('Assign Technician')}</button>
+<button class="btn btn-xs btn-default" id="jt-btn-print">
+<i class="fa fa-print"></i> ${__('Print')}</button>
+</div>
 
-		let html = '<div class="timeline">';
-		assignments.forEach(a => {
-			const esc = frappe.utils.escape_html;
-			const assigned_to = esc(a.service_engineer || a.user || a.team || 'Unassigned');
-			html += `
-				<div class="timeline-item">
-					<div class="timeline-badge bg-info"></div>
-					<div class="timeline-panel">
-						<div class="timeline-heading">
-							<h6 class="mb-0">${assigned_to}</h6>
-							<p class="small text-muted mb-0">${frappe.datetime.str_to_user(a.assignment_date)}</p>
-						</div>
-						<div class="timeline-body">
-							<span class="badge badge-sm badge-${a.assignment_status === 'Completed' ? 'success' : 'warning'}">${esc(a.assignment_status)}</span>
-						</div>
-					</div>
-				</div>
-			`;
-		});
-		html += '</div>';
-		$('#assignment-history').html(html);
-	}
+<div class="jt-dw-badges">
+<span class="jt-badge" style="background:${sc}20;color:${sc};">${esc(sr.decision)}</span>
+<span class="jt-badge jt-badge-pri">${esc(sr.priority || '—')}</span>
+<span class="jt-badge">${esc(sr.warranty_status || __('No Warranty'))}</span>
+<span class="jt-badge text-muted">${daysOpen} ${__('day(s) open')}</span>
+</div>
 
-	load_spare_parts() {
-		frappe.call({
-			method: 'frappe.client.get_list',
-			args: {
-				doctype: 'Spare Parts Usage',
-				filters: {service_request: this.service_request},
-				fields: ['name', 'spare_part_item', 'barcode_value', 'qty_used', 'sales_price', 'status'],
-				order_by: 'line_seq_no'
-			},
-			callback: (r) => {
-				this.render_spare_parts(r.message || []);
-			}
-		});
-	}
+<div class="jt-dw-grid">
+<div class="jt-dw-box">
+<h6 class="jt-dw-h"><i class="fa fa-user"></i> ${__('Customer')}</h6>
+<p class="mb-1"><b>${esc(ci.customer_name || sr.customer)}</b></p>
+<p class="mb-1 small"><i class="fa fa-phone"></i> ${esc(sr.contact_number || ci.mobile_no || '—')}</p>
+<p class="mb-0 small"><i class="fa fa-envelope"></i> ${esc(ci.email_id || '—')}</p>
+</div>
+<div class="jt-dw-box">
+<h6 class="jt-dw-h"><i class="fa fa-mobile"></i> ${__('Device')}</h6>
+<p class="mb-1"><b>${esc(sr.device_item_name || sr.device_item)}</b></p>
+<p class="mb-1 small">Serial: <code>${esc(sr.serial_no || '—')}</code></p>
+<p class="mb-0 small">${__('Condition')}: ${esc(sr.device_condition || '—')}</p>
+</div>
+</div>
 
-	render_spare_parts(parts) {
-		$('#spare-count').text(`${parts.length} Parts Used`);
-		
-		if (!parts.length) {
-			$('#spare-parts-list').html('<p class="text-muted small">No spare parts used</p>');
-			return;
-		}
+<div class="jt-dw-box">
+<h6 class="jt-dw-h"><i class="fa fa-exclamation-circle"></i> ${__('Issue')}</h6>
+<p class="mb-1"><b>${esc(sr.issue_category || '—')}</b></p>
+<p class="mb-0 small">${esc(sr.issue_description ? sr.issue_description.replace(/<[^>]+>/g,'').substring(0,200) : '—')}</p>
+</div>
 
-		let html = '<div class="table-responsive"><table class="table table-sm table-hover">';
-		html += '<thead><tr><th>Part</th><th>Barcode</th><th>Qty</th><th>Price</th><th>Status</th><th>Actions</th></tr></thead><tbody>';
-		
-		parts.forEach(p => {
-			const esc = frappe.utils.escape_html;
-			html += `
-				<tr>
-					<td><small>${esc(p.spare_part_item)}</small></td>
-					<td><small><code>${esc(p.barcode_value)}</code></small></td>
-					<td>${p.qty_used}</td>
-					<td>${format_currency(p.sales_price || 0)}</td>
-					<td><span class="badge badge-sm badge-${p.status === 'Active' ? 'success' : 'secondary'}">${esc(p.status)}</span></td>
-					<td>
-						<button class="btn btn-xs btn-secondary" onclick="frappe.job_tracker.move_spare_to_main('${esc(p.name)}')">
-							<i class="fa fa-undo"></i>
-						</button>
-						<button class="btn btn-xs btn-danger" onclick="frappe.job_tracker.move_spare_to_dispose('${esc(p.name)}')">
-							<i class="fa fa-trash"></i>
-						</button>
-					</td>
-				</tr>
-			`;
-		});
-		
-		html += '</tbody></table></div>';
-		$('#spare-parts-list').html(html);
-	}
+<div class="jt-dw-grid jt-dw-dates">
+<div><span class="text-muted small">${__('Received')}</span><br><b>${frappe.datetime.str_to_user(sr.service_date)}</b></div>
+<div><span class="text-muted small">${__('Expected')}</span><br><b class="${sr.expected_completion_date && sr.expected_completion_date < today ? 'text-danger' : ''}">${sr.expected_completion_date ? frappe.datetime.str_to_user(sr.expected_completion_date) : '—'}</b></div>
+<div><span class="text-muted small">${__('Store')}</span><br><b>${esc(sr.source_warehouse || '—')}</b></div>
+</div>
 
-	load_audit_trails() {
-		// Load technician audit — child table in Job Assignment, must query Technician Audit doctype directly
-		frappe.call({
-			method: 'frappe.client.get_list',
-			args: {
-				doctype: 'Job Assignment',
-				filters: {service_request: this.service_request},
-				fields: ['name'],
-				order_by: 'assignment_date asc'
-			},
-			callback: (r) => {
-				const ja_names = (r.message || []).map(j => j.name);
-				if (ja_names.length) {
-					frappe.call({
-						method: 'frappe.client.get_list',
-						args: {
-							doctype: 'Technician Audit',
-							filters: [['parent', 'in', ja_names]],
-							fields: ['service_engineer', 'assignment_from_time', 'assignment_to_time', 'time_duration', 'operation', 'is_active_record'],
-							order_by: 'assignment_from_time asc',
-							limit: 50
-						},
-						callback: (res) => {
-							this.render_technician_audit(res.message || []);
-						}
-					});
-				} else {
-					this.render_technician_audit([]);
-				}
-			}
-		});
+<div class="jt-dw-section">
+<h6 class="jt-dw-h"><i class="fa fa-users"></i> ${__('Assignments')} <span class="badge ml-1">${asgn.length}</span></h6>
+${assign_html}
+</div>
 
-		// Load spare parts audit
-		this.load_spare_parts_audit();
+<div class="jt-dw-section">
+<h6 class="jt-dw-h"><i class="fa fa-cogs"></i> ${__('Spare Parts')} <span class="badge ml-1">${parts.length}</span></h6>
+${parts_html}
+</div>
+`);
 
-		// Load support logs (comments)
-		this.load_support_logs();
-	}
+this.parent.find('#jt-btn-assign').on('click', () => this._show_assign_dialog(sr.name));
+this.parent.find('#jt-btn-print').on('click', () => frappe.set_route('print', 'Service Request', sr.name));
+}
 
-	render_technician_audit(audits) {
-		if (!audits || !audits.length) {
-			$('#technician-audit').html('<p class="text-muted small">No audit records</p>');
-			return;
-		}
+// ─────────── Assign Dialog ───────────────────────────────────────────────
 
-		let html = '<ul class="list-unstyled">';
-		audits.forEach(a => {
-			const esc = frappe.utils.escape_html;
-			html += `
-				<li class="mb-2 small">
-					<strong>${esc(a.service_engineer)}</strong><br>
-					<span class="text-muted">${esc(a.operation)} - ${esc(a.time_duration)}</span><br>
-					${frappe.datetime.str_to_user(a.assignment_from_time)} → ${a.assignment_to_time ? frappe.datetime.str_to_user(a.assignment_to_time) : 'Ongoing'}
-				</li>
-			`;
-		});
-		html += '</ul>';
-		$('#technician-audit').html(html);
-	}
+_show_assign_dialog(sr_name) {
+const dlg = new frappe.ui.Dialog({
+title: __('Assign Technician — {0}', [sr_name]),
+fields: [
+{ fieldname:'service_engineer', label:__('Technician'), fieldtype:'Link', options:'Employee', reqd:1 },
+{
+fieldname:'job_type', label:__('Job Type'), fieldtype:'Select', reqd:1, default:'Repair',
+options:'Repair\nDiagnosis\nQC\nSpare Parts Replacement\nSoftware Update\nTesting',
+},
+{ fieldname:'estimated_hours', label:__('Estimated Hours'), fieldtype:'Float', default:1 },
+],
+primary_action_label: __('Assign'),
+primary_action: vals => {
+frappe.xcall('gofix.gofix_services.page.job_tracker.job_tracker.create_assignment', {
+service_request: sr_name,
+engineer:        vals.service_engineer,
+job_type:        vals.job_type,
+estimated_hours: vals.estimated_hours || null,
+}).then(() => {
+frappe.show_alert({ message: __('Assigned successfully'), indicator: 'green' });
+dlg.hide();
+this._open_drawer(sr_name);
+this._load();
+}).catch(err => {
+frappe.msgprint({ title: __('Assignment Failed'), indicator: 'red',
+message: frappe.utils.strip_html((err && err.message) || String(err)) });
+});
+},
+});
+dlg.show();
+}
 
-	load_spare_parts_audit() {
-		frappe.call({
-			method: 'frappe.client.get_list',
-			args: {
-				doctype: 'Spare Parts Usage',
-				filters: {service_request: this.service_request},
-				fields: ['spare_part_item', 'item_name', 'qty_used', 'sales_price', 'status', 'reason_desc', 'transaction_date'],
-				order_by: 'transaction_date asc',
-				limit: 50
-			},
-			callback: (r) => {
-				const parts = r.message || [];
-				if (!parts.length) {
-					$('#spare-audit').html('<p class="text-muted small">No spare parts history</p>');
-					return;
-				}
-				const status_badge = {Active: 'success', 'Moved to Main Stock': 'info', 'Moved to Dispose Stock': 'warning', 'Deleted': 'danger'};
-				let html = '<ul class="list-unstyled">';
-				parts.forEach(p => {
-					const esc = frappe.utils.escape_html;
-					const badge = status_badge[p.status] || 'secondary';
-					html += `<li class="mb-2 small">
-						<strong>${esc(p.item_name || p.spare_part_item)}</strong> x${p.qty_used}<br>
-						<span class="badge badge-sm badge-${badge}">${esc(p.status)}</span>
-						${p.reason_desc ? ' <span class="text-muted">— ' + esc(p.reason_desc) + '</span>' : ''}<br>
-						<span class="text-muted">${frappe.datetime.str_to_user(p.transaction_date)}</span>
-					</li>`;
-				});
-				html += '</ul>';
-				$('#spare-audit').html(html);
-			}
-		});
-	}
-
-	load_support_logs() {
-		frappe.call({
-			method: 'frappe.client.get_list',
-			args: {
-				doctype: 'Comment',
-				filters: {
-					reference_doctype: 'Service Request',
-					reference_name: this.service_request
-				},
-				fields: ['content', 'comment_type', 'creation', 'owner'],
-				order_by: 'creation desc',
-				limit: 20
-			},
-			callback: (r) => {
-				const logs = r.message || [];
-				if (!logs.length) {
-					$('#support-logs').html('<p class="text-muted small">No activity logs</p>');
-					return;
-				}
-				let html = '<ul class="list-unstyled">';
-				logs.forEach(log => {
-					const esc = frappe.utils.escape_html;
-					html += `<li class="mb-2 small">
-						<span class="badge badge-sm badge-secondary">${esc(log.comment_type)}</span>
-						<span class="text-muted ml-1">${frappe.datetime.str_to_user(log.creation)}</span>
-						<span class="text-muted"> by ${esc(log.owner)}</span><br>
-						<span>${esc(log.content || '')}</span>
-					</li>`;
-				});
-				html += '</ul>';
-				$('#support-logs').html(html);
-			}
-		});
-	}
-
-	show_assignment_dialog(type) {
-		if (!this.service_request) {
-			frappe.msgprint(__('Please select a Service Request first'));
-			return;
-		}
-
-		let d = new frappe.ui.Dialog({
-			title: __('Assign {0}', [type]),
-			fields: [
-				{
-					fieldname: 'team',
-					label: __('Team'),
-					fieldtype: 'Link',
-					options: 'Employee Group',
-					reqd: type === 'Team'
-				},
-				{
-					fieldname: 'user',
-					label: __('User'),
-					fieldtype: 'Link',
-					options: 'User',
-					reqd: type === 'User'
-				},
-				{
-					fieldname: 'service_engineer',
-					label: __('Service Engineer'),
-					fieldtype: 'Link',
-					options: 'Employee',
-					reqd: type === 'Technician'
-				},
-				{
-					fieldname: 'comments',
-					label: __('Comments'),
-					fieldtype: 'Small Text'
-				}
-			],
-			primary_action_label: __('Assign'),
-			primary_action: (values) => {
-				frappe.call({
-					method: 'frappe.client.insert',
-					args: {
-						doc: {
-							doctype: 'Job Assignment',
-							service_request: this.service_request,
-							assignment_date: frappe.datetime.nowdate(),
-							team: values.team,
-							user: values.user,
-							service_engineer: values.service_engineer,
-							assignment_type: type + ' Assignment',
-							comments: values.comments
-						}
-					},
-					callback: (r) => {
-						if (r.message) {
-							frappe.show_alert({message: __('Assignment created successfully'), indicator: 'green'});
-							d.hide();
-							this.load_assignments();
-						}
-					}
-				});
-			}
-		});
-
-		d.show();
-	}
-
-	show_spare_dialog() {
-		if (!this.service_request) {
-			frappe.msgprint(__('Please select a Service Request first'));
-			return;
-		}
-
-		let d = new frappe.ui.Dialog({
-			title: __('Add Spare Part'),
-			fields: [
-				{
-					fieldname: 'spare_part_item',
-					label: __('Spare Part'),
-					fieldtype: 'Link',
-					options: 'Item',
-					reqd: 1
-				},
-				{
-					fieldname: 'barcode_value',
-					label: __('Barcode'),
-					fieldtype: 'Data',
-					reqd: 1
-				},
-				{
-					fieldname: 'qty_used',
-					label: __('Quantity'),
-					fieldtype: 'Float',
-					default: 1,
-					reqd: 1
-				},
-				{
-					fieldname: 'is_billable',
-					label: __('Billable'),
-					fieldtype: 'Check',
-					default: 1
-				}
-			],
-			primary_action_label: __('Add'),
-			primary_action: (values) => {
-				frappe.call({
-					method: 'frappe.client.insert',
-					args: {
-						doc: {
-							doctype: 'Spare Parts Usage',
-							service_request: this.service_request,
-							transaction_date: frappe.datetime.nowdate(),
-							spare_part_item: values.spare_part_item,
-							barcode_value: values.barcode_value,
-							qty_used: values.qty_used,
-							is_billable: values.is_billable
-						}
-					},
-					callback: (r) => {
-						if (r.message) {
-							frappe.show_alert({message: __('Spare part added successfully'), indicator: 'green'});
-							d.hide();
-							this.load_spare_parts();
-						}
-					}
-				});
-			}
-		});
-
-		d.show();
-	}
-
-	move_spare_to_main(spare_name) {
-		frappe.prompt({
-			label: __('Reason'),
-			fieldname: 'reason',
-			fieldtype: 'Select',
-			options: 'Wrong Spare\nNot Suitable\nOrder Cancel\nReplace',
-			reqd: 1
-		}, (values) => {
-			frappe.call({
-				method: 'gofix.gofix_services.doctype.spare_parts_usage.spare_parts_usage.move_to_main_stock',
-				args: {
-					name: spare_name,
-					reason: values.reason
-				},
-				callback: () => {
-					frappe.show_alert({message: __('Moved to main stock'), indicator: 'green'});
-					this.load_spare_parts();
-				}
-			});
-		}, __('Move to Main Stock'));
-	}
-
-	move_spare_to_dispose(spare_name) {
-		frappe.prompt({
-			label: __('Reason'),
-			fieldname: 'reason',
-			fieldtype: 'Select',
-			options: 'Manufacture Defect\nDamage\nLost',
-			reqd: 1
-		}, (values) => {
-			frappe.call({
-				method: 'gofix.gofix_services.doctype.spare_parts_usage.spare_parts_usage.move_to_dispose_stock',
-				args: {
-					name: spare_name,
-					reason: values.reason
-				},
-				callback: () => {
-					frappe.show_alert({message: __('Moved to dispose stock'), indicator: 'orange'});
-					this.load_spare_parts();
-				}
-			});
-		}, __('Move to Dispose'));
-	}
-
-	mark_service_complete(status) {
-		if (!this.service_request) {
-			frappe.msgprint(__('Please select a Service Request first'));
-			return;
-		}
-
-		frappe.prompt({
-			label: __('Closing Comments'),
-			fieldname: 'comments',
-			fieldtype: 'Small Text',
-			reqd: 1
-		}, (values) => {
-			frappe.call({
-				method: 'frappe.client.set_value',
-				args: {
-					doctype: 'Service Request',
-					name: this.service_request,
-					fieldname: {
-						decision: status === 'Repaired' ? 'Completed' : 'In Service',
-						remarks: values.comments + `\n\nService Status: ${status}`
-					}
-				},
-				callback: () => {
-					frappe.show_alert({message: __('Service marked as {0}', [status]), indicator: 'green'});
-					this.load_service_request();
-				}
-			});
-		}, __('Close Service - {0}', [status]));
-	}
-
-	print_job_sheet() {
-		if (!this.service_request) {
-			frappe.msgprint(__('Please select a Service Request first'));
-			return;
-		}
-
-		frappe.set_route('print', 'Service Request', this.service_request);
-	}
-
-	setup_realtime() {
-		// Listen for real-time updates
-		frappe.realtime.on('job_assignment_update', () => {
-			if (this.service_request) {
-				this.load_assignments();
-			}
-		});
-
-		frappe.realtime.on('spare_parts_update', () => {
-			if (this.service_request) {
-				this.load_spare_parts();
-			}
-		});
-	}
+_setup_realtime() {
+frappe.realtime.on('job_assignment_update', () => this._load());
+frappe.realtime.on('spare_parts_update',     () => this._load());
+}
 }

@@ -20,8 +20,8 @@ class SparePartsUsage(Document):
 			frappe.throw(_("Service Request is mandatory"))
 		
 		service_request = frappe.get_doc("Service Request", self.service_request)
-		if service_request.service_status == "Closed":
-			frappe.throw(_("Cannot add spare parts to a closed Service Request"))
+		if service_request.status in ["Completed", "Invoiced", "Delivered", "Cancelled", "Rejected", "Withdrawn"]:
+			frappe.throw(_("Cannot add spare parts when Service Request is in status {0}").format(service_request.status))
 	
 	def validate_barcode(self):
 		"""Validate barcode uniqueness and availability"""
@@ -78,19 +78,30 @@ class SparePartsUsage(Document):
 		"""Create stock entry for spare part consumption"""
 		if self.status != "Active":
 			return
+
+		service_request = frappe.get_doc("Service Request", self.service_request)
+		company = service_request.company or frappe.defaults.get_user_default("Company")
+		source_warehouse = service_request.source_warehouse or frappe.db.get_value(
+			"Item Default",
+			{"parent": self.spare_part_item, "company": company},
+			"default_warehouse",
+		) or frappe.db.get_value("Item", self.spare_part_item, "default_warehouse")
+
+		if not source_warehouse:
+			frappe.throw(_("Warehouse is required to issue spare part {0}").format(self.spare_part_item))
 		
 		# Create Stock Entry for consumption
 		stock_entry = frappe.new_doc("Stock Entry")
 		stock_entry.stock_entry_type = "Material Issue"
 		stock_entry.purpose = "Material Issue"
-		stock_entry.company = frappe.defaults.get_user_default("Company")
+		stock_entry.company = company
 		
 		stock_entry.append("items", {
 			"item_code": self.spare_part_item,
 			"qty": self.qty_used,
 			"uom": self.uom,
 			"basic_rate": self.purchase_cost,
-			"s_warehouse": frappe.db.get_value("Item", self.spare_part_item, "default_warehouse"),
+			"s_warehouse": source_warehouse,
 			"serial_no": self.barcode_value if self.barcode_value else None
 		})
 		
@@ -157,17 +168,28 @@ class SparePartsUsage(Document):
 	
 	def create_return_stock_entry(self):
 		"""Create stock entry for returning spare to warehouse"""
+		service_request = frappe.get_doc("Service Request", self.service_request)
+		company = service_request.company or frappe.defaults.get_user_default("Company")
+		target_warehouse = service_request.source_warehouse or frappe.db.get_value(
+			"Item Default",
+			{"parent": self.spare_part_item, "company": company},
+			"default_warehouse",
+		) or frappe.db.get_value("Item", self.spare_part_item, "default_warehouse")
+
+		if not target_warehouse:
+			frappe.throw(_("Warehouse is required to return spare part {0}").format(self.spare_part_item))
+
 		stock_entry = frappe.new_doc("Stock Entry")
 		stock_entry.stock_entry_type = "Material Receipt"
 		stock_entry.purpose = "Material Receipt"
-		stock_entry.company = frappe.defaults.get_user_default("Company")
+		stock_entry.company = company
 		
 		stock_entry.append("items", {
 			"item_code": self.spare_part_item,
 			"qty": self.qty_used,
 			"uom": self.uom,
 			"basic_rate": self.purchase_cost,
-			"t_warehouse": frappe.db.get_value("Item", self.spare_part_item, "default_warehouse"),
+			"t_warehouse": target_warehouse,
 			"serial_no": self.barcode_value if self.barcode_value else None
 		})
 		

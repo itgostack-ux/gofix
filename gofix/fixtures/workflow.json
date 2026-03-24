@@ -41,8 +41,8 @@
     "update_value": null,
     "workflow_builder_id": null
    },
-   {
-    "allow_edit": "Service Manager,Service Engineer",
+    {
+     "allow_edit": "All",
     "avoid_status_override": 0,
     "doc_status": "1",
     "is_optional_state": 0,
@@ -89,8 +89,8 @@
     "update_value": "Pass",
     "workflow_builder_id": null
    },
-   {
-    "allow_edit": "Service Manager,Service Engineer",
+    {
+     "allow_edit": "All",
     "avoid_status_override": 0,
     "doc_status": "1",
     "is_optional_state": 1,
@@ -168,10 +168,23 @@
     "state": "Draft",
     "workflow_builder_id": null
    },
-   {
-    "action": "Start Work",
-    "allow_self_approval": 0,
-    "allowed": "Service Manager,Service Engineer",
+    {
+     "action": "Start Work",
+     "allow_self_approval": 0,
+     "allowed": "Service Manager",
+     "condition": "doc.is_service_order == 1",
+     "next_state": "Work in Progress",
+     "parent": "Service Order Workflow",
+     "parentfield": "transitions",
+     "parenttype": "Workflow",
+     "send_email_to_creator": 0,
+     "state": "Submitted",
+     "workflow_builder_id": null
+    },
+    {
+     "action": "Start Work",
+     "allow_self_approval": 0,
+     "allowed": "Service Engineer",
     "condition": "doc.is_service_order == 1",
     "next_state": "Work in Progress",
     "parent": "Service Order Workflow",
@@ -181,10 +194,23 @@
     "state": "Submitted",
     "workflow_builder_id": null
    },
-   {
-    "action": "Complete Job",
-    "allow_self_approval": 0,
-    "allowed": "Service Manager,Service Engineer",
+    {
+     "action": "Complete Job",
+     "allow_self_approval": 0,
+     "allowed": "Service Manager",
+     "condition": "frappe.db.count('Job Assignment', {'service_order': doc.name, 'assignment_status': ['in', ['Completed', 'Closed']]}) > 0",
+     "next_state": "QC Awaiting",
+     "parent": "Service Order Workflow",
+     "parentfield": "transitions",
+     "parenttype": "Workflow",
+     "send_email_to_creator": 0,
+     "state": "Work in Progress",
+     "workflow_builder_id": null
+    },
+    {
+     "action": "Complete Job",
+     "allow_self_approval": 0,
+     "allowed": "Service Engineer",
     "condition": "frappe.db.count('Job Assignment', {'service_order': doc.name, 'assignment_status': ['in', ['Completed', 'Closed']]}) > 0",
     "next_state": "QC Awaiting",
     "parent": "Service Order Workflow",
@@ -194,10 +220,23 @@
     "state": "Work in Progress",
     "workflow_builder_id": null
    },
-   {
-    "action": "Mark Not Repairable",
-    "allow_self_approval": 0,
-    "allowed": "Service Manager,Service Engineer",
+    {
+     "action": "Mark Not Repairable",
+     "allow_self_approval": 0,
+     "allowed": "Service Manager",
+     "condition": "doc.is_service_order == 1",
+     "next_state": "Not Repairable",
+     "parent": "Service Order Workflow",
+     "parentfield": "transitions",
+     "parenttype": "Workflow",
+     "send_email_to_creator": 0,
+     "state": "Work in Progress",
+     "workflow_builder_id": null
+    },
+    {
+     "action": "Mark Not Repairable",
+     "allow_self_approval": 0,
+     "allowed": "Service Engineer",
     "condition": "doc.is_service_order == 1",
     "next_state": "Not Repairable",
     "parent": "Service Order Workflow",

@@ -123,6 +123,7 @@ class CustomSalesOrder(SalesOrder):
 		"""Sync status when SO is submitted"""
 		super().on_submit()
 		if self.is_service_order and self.service_request:
+			move_service_order_to_qc_if_ready(self)
 			self.sync_to_service_request()
 	
 	def on_cancel(self):
@@ -208,13 +209,43 @@ def update_service_request_on_qc(doc, method=None):
 	"""Hook: Update SR when QC status changes"""
 	if hasattr(doc, 'is_service_order') and doc.is_service_order and doc.service_request and hasattr(doc, 'qc_status'):
 		if doc.qc_status == "Pass":
+			if getattr(doc, 'workflow_state', None) != "QC Pass":
+				doc.db_set("workflow_state", "QC Pass", update_modified=False)
+
 			# Update QC metadata
 			doc.db_set("qc_checked_by", frappe.session.user, update_modified=False)
 			doc.db_set("qc_datetime", frappe.utils.now(), update_modified=False)
-			
-			# Update Service Request
-			sr = frappe.get_doc("Service Request", doc.service_request)
-			sr.db_set("status", "Completed", update_modified=True)
-			sr.db_set("decision", "Completed", update_modified=False)
+
+			from gofix.gofix_services.doctype.service_request.service_request import complete_service_request
+
+			complete_service_request(doc.service_request, completion_date=frappe.utils.today())
 			
 			frappe.msgprint("QC passed. Service Order can now be billed.", indicator="green")
+		elif doc.qc_status == "Fail" and getattr(doc, 'workflow_state', None) != "QC Fail":
+			doc.db_set("workflow_state", "QC Fail", update_modified=False)
+
+
+def move_service_order_to_qc_if_ready(doc):
+	"""Align workflow fields after submit when repair work is already complete."""
+	job_sheets = frappe.get_all(
+		"Job Assignment",
+		filters={"service_order": doc.name},
+		fields=["assignment_status"],
+	)
+	if not job_sheets:
+		return
+
+	if any(js.assignment_status not in ["Completed", "Closed"] for js in job_sheets):
+		return
+
+	repair_outcome = getattr(doc, 'repair_outcome', None)
+	if repair_outcome in ["Not Repairable", "Customer Cancelled"]:
+		if getattr(doc, 'workflow_state', None) != repair_outcome:
+			doc.db_set("workflow_state", repair_outcome, update_modified=False)
+		return
+
+	if getattr(doc, 'qc_status', None) not in ["Pass", "Fail"]:
+		doc.db_set("qc_status", "Awaiting", update_modified=False)
+
+	if getattr(doc, 'workflow_state', None) != "QC Awaiting":
+		doc.db_set("workflow_state", "QC Awaiting", update_modified=False)

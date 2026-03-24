@@ -242,7 +242,8 @@ def create_sales_order_custom_fields():
 				"fieldtype": "Select",
 				"options": "Pending\nAwaiting\nIn Progress\nPass\nFail",
 				"insert_after": "quality_control_section",
-				"default": "Pending"
+				"default": "Pending",
+				"allow_on_submit": 1
 			},
 			{
 				"fieldname": "repair_outcome",
@@ -250,6 +251,7 @@ def create_sales_order_custom_fields():
 				"fieldtype": "Select",
 				"options": "\nRepaired\nNot Repairable\nCustomer Cancelled",
 				"insert_after": "qc_status",
+				"allow_on_submit": 1,
 				"description": "Mark as Not Repairable or Customer Cancelled to close without QC"
 			},
 			{

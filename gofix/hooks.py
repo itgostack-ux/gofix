@@ -127,7 +127,8 @@ doctype_list_js = {
 after_install = "gofix.setup.install.after_install"
 after_migrate = [
 	"gofix.setup.sales_order_custom_fields.create_sales_order_custom_fields",
-	"gofix.setup.notifications.create_notifications"
+    "gofix.setup.notifications.create_notifications",
+    "gofix.setup.workflow.ensure_service_order_workflow",
 ]
 
 # Uninstallation
@@ -186,6 +187,7 @@ doc_events = {
 	"Sales Order": {
 		"validate": "gofix.overrides.sales_order.validate_service_order_before_submit",
 		"on_update": "gofix.overrides.sales_order.update_service_request_on_qc",
+        "on_update_after_submit": "gofix.overrides.sales_order.update_service_request_on_qc",
 		"on_submit": "gofix.overrides.sales_order.update_service_request_on_qc",
 		"on_cancel": "gofix.overrides.sales_order.update_service_request_on_qc"
 	},

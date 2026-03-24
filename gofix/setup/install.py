@@ -7,10 +7,13 @@ After Install Hook - Create custom fields for multi-store setup
 
 import frappe
 
+from gofix.setup.workflow import ensure_service_order_workflow
+
 
 def after_install():
 	"""Create custom fields after app installation"""
 	create_custom_fields()
+	ensure_service_order_workflow()
 
 
 def create_custom_fields():

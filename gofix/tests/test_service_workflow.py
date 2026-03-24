@@ -108,39 +108,22 @@ def setup_test_data():
 	else:
 		print(f"✅ Customer exists: {customer}")
 	
-	# 5. Ensure device item exists
-	device_item = frappe.db.get_value("Item", {"item_name": "iPhone 12"}, "name")
+	# 5. Reuse a valid stock item from the customized item master
+	device_item = frappe.db.get_value(
+		"Item",
+		"PH000001",
+		["name", "item_name", "brand"],
+		as_dict=True,
+	)
 	if not device_item:
-		print(f"⚠️  Creating device item...")
-		item = frappe.new_doc("Item")
-		item.item_code = "DEVICE-IPHONE-12"
-		item.item_name = "iPhone 12"
-		item.item_group = "Products"
-		item.stock_uom = "Nos"
-		item.is_stock_item = 1
-		item.insert(ignore_permissions=True)
-		frappe.db.commit()
-		device_item = item.name
-		print(f"✅ Created device item: {device_item}")
-	else:
-		print(f"✅ Device item exists: {device_item}")
+		frappe.throw("Required test item PH000001 was not found")
+	print(f"✅ Device item exists: {device_item.name}")
 	
-	# 6. Ensure service item exists (non-stock)
-	service_item = frappe.db.get_value("Item", {"is_stock_item": 0, "item_group": "Services"}, "name")
+	# 6. Reuse an existing repair service item
+	service_item = frappe.db.get_value("Item", "SVC-SCREEN-REPAIR", "name")
 	if not service_item:
-		print(f"⚠️  Creating service item...")
-		item = frappe.new_doc("Item")
-		item.item_code = "SERVICE-REPAIR"
-		item.item_name = "Device Repair Service"
-		item.item_group = "Services"
-		item.stock_uom = "Nos"
-		item.is_stock_item = 0
-		item.insert(ignore_permissions=True)
-		frappe.db.commit()
-		service_item = item.name
-		print(f"✅ Created service item: {service_item}")
-	else:
-		print(f"✅ Service item exists: {service_item}")
+		frappe.throw("Required test item SVC-SCREEN-REPAIR was not found")
+	print(f"✅ Service item exists: {service_item}")
 	
 	print(f"\n✅ Test data setup complete!")
 	return {
@@ -148,7 +131,9 @@ def setup_test_data():
 		"company_address": company_address,
 		"warehouse": warehouse,
 		"customer": customer,
-		"device_item": device_item,
+		"device_item": device_item.name,
+		"device_item_name": device_item.item_name,
+		"device_brand": device_item.brand,
 		"service_item": service_item
 	}
 
@@ -167,10 +152,12 @@ def test_service_request_workflow():
 	sr.customer = data["customer"]
 	sr.company = data["company"]
 	sr.device_item = data["device_item"]
-	sr.device_item_name = "iPhone 12"
-	sr.brand = "Apple"
-	sr.serial_no = "TEST-12345"
+	sr.device_item_name = data["device_item_name"]
+	sr.brand = data["device_brand"]
+	sr.contact_number = "9876543210"
 	sr.issue_description = "Screen not working"
+	sr.product_condition_desc = "Minor scratches on body, display cracked"
+	sr.backup_info = "Customer confirmed backup completed"
 	sr.source_warehouse = data["warehouse"]
 	sr.current_location = data["warehouse"]
 	sr.estimated_cost = 5000.00
@@ -207,12 +194,22 @@ def test_service_request_workflow():
 			print(f"   - Item: {so.items[0].item_name}")
 			print(f"   - Rate: {so.items[0].rate}")
 		print(f"   Total: {so.grand_total}")
-		
+
 		# Create Job Sheet
 		print("\n4️⃣  Creating Job Sheet...")
 		from gofix.gofix_services.doctype.job_assignment.job_assignment import create_job_sheet_from_service_order
 		
-		technician = frappe.db.get_value("User", {"name": ["!=", "Administrator"]}, "name") or "Administrator"
+		technician = frappe.db.get_value("Employee", {"status": "Active"}, "name")
+		if not technician:
+			emp = frappe.new_doc("Employee")
+			emp.first_name = "Test"
+			emp.last_name = "Technician"
+			emp.employee_name = "Test Technician"
+			emp.company = data["company"]
+			emp.status = "Active"
+			emp.insert(ignore_permissions=True)
+			frappe.db.commit()
+			technician = emp.name
 		
 		js_name = create_job_sheet_from_service_order(
 			service_order=so.name,
@@ -225,9 +222,59 @@ def test_service_request_workflow():
 		print(f"✅ Job Sheet created: {js.name}")
 		print(f"   Service Order: {js.service_order}")
 		print(f"   Service Request: {js.service_request}")
-		print(f"   Assigned To: {js.assigned_to}")
+		print(f"   Service Engineer: {js.service_engineer}")
 		print(f"   Job Type: {js.job_type}")
 		print(f"   Status: {js.assignment_status}")
+
+		print("\n5️⃣  Completing Job Sheet...")
+		js.start_datetime = frappe.utils.now_datetime()
+		js.end_datetime = frappe.utils.add_to_date(js.start_datetime, hours=2)
+		js.work_performed = "Diagnostic completed and repair finished"
+		js.technician_remarks = "QC-ready"
+		js.assignment_status = "Completed"
+		js.save(ignore_permissions=True)
+		js.reload()
+		print(f"✅ Job Sheet completed: {js.name}")
+		print(f"   Actual Hours: {js.actual_hours}")
+		print(f"   Status: {js.assignment_status}")
+
+		print("\n6️⃣  Submitting Service Order...")
+		so.reload()
+		so.submit()
+		so.reload()
+		print(f"✅ Service Order submitted: {so.name}")
+		print(f"   Docstatus: {so.docstatus}")
+		print(f"   Workflow State: {so.workflow_state}")
+
+		print("\n7️⃣  Passing QC and verifying invoice creation...")
+		so.reload()
+		so.qc_status = "Pass"
+		so.save(ignore_permissions=True)
+		so.reload()
+		sr.reload()
+
+		invoice_names = frappe.get_all(
+			"Sales Invoice Item",
+			filters={"sales_order": so.name},
+			pluck="parent",
+		)
+		invoice_names = list(dict.fromkeys(invoice_names))
+
+		if not invoice_names:
+			invoice_names = frappe.get_all(
+				"Sales Invoice",
+				filters={
+					"customer": sr.customer,
+					"remarks": ["like", f"%Service Request {sr.name}%"],
+				},
+				pluck="name",
+			)
+
+		if not invoice_names:
+			raise AssertionError("Repair completion did not create a Sales Invoice")
+
+		print(f"✅ Service Request status after QC: {sr.status}")
+		print(f"✅ Repair invoice(s): {', '.join(invoice_names)}")
 		
 		frappe.db.commit()
 		
@@ -238,6 +285,7 @@ def test_service_request_workflow():
 		print(f"   Service Request: {sr.name}")
 		print(f"   Service Order: {so.name}")
 		print(f"   Job Sheet: {js.name}")
+		print(f"   Repair Invoice: {', '.join(invoice_names)}")
 		print(f"\n✨ All systems working correctly!")
 		
 		return True

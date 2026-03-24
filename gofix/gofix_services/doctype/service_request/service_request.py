@@ -228,14 +228,15 @@ class ServiceRequest(Document):
 				frappe.throw(_("Received Date & Time cannot be in the future"))
 			
 			# Validate expected completion datetime >= received datetime
-			if self.expected_completion_date and self.expected_completion_time:
-				expected_dt = get_datetime(f"{self.expected_completion_date} {self.expected_completion_time}")
+			expected_completion_time = self.get("expected_completion_time")
+			if self.expected_completion_date and expected_completion_time:
+				expected_dt = get_datetime(f"{self.expected_completion_date} {expected_completion_time}")
 				if expected_dt < get_datetime(self.received_datetime):
 					frappe.throw(_("Expected Completion Date & Time must be after Received Date & Time"))
 		
 		# Validate actual completion date
 		if self.get("actual_completion_date") and self.service_date:
-			if getdate(self.actual_completion_date) < getdate(self.service_date):
+			if getdate(self.get("actual_completion_date")) < getdate(self.service_date):
 				frappe.throw(_("Actual Completion Date cannot be before Service Request Date"))
 
 	def validate_withdrawal(self):
@@ -272,11 +273,34 @@ class ServiceRequest(Document):
 		if self.decision == "Accepted" and not self.service_order:
 			self.create_service_order()
 
-		# Set repair warranty expiry when completed
-		if self.decision == "Completed" and not self.repair_warranty_expiry:
+		if self.is_completed_status():
+			self.ensure_completion_artifacts()
+
+	def is_completed_status(self):
+		return self.status == "Completed" or self.decision == "Completed"
+
+	def ensure_completion_artifacts(self):
+		"""Create the billing and stock artifacts expected at repair completion."""
+		completion_date = self.get("actual_completion_date") or today()
+
+		if self.meta.has_field("actual_completion_date") and not self.get("actual_completion_date"):
+			self.db_set("actual_completion_date", completion_date, update_modified=False)
+			self.set("actual_completion_date", completion_date)
+
+		if self.meta.has_field("repair_warranty_expiry") and not self.repair_warranty_expiry:
 			warranty_days = self.repair_warranty_days or 30
-			self.db_set("repair_warranty_expiry",
-				add_days(today(), warranty_days), update_modified=False)
+			self.db_set(
+				"repair_warranty_expiry",
+				add_days(completion_date, warranty_days),
+				update_modified=False,
+			)
+			self.repair_warranty_expiry = add_days(completion_date, warranty_days)
+
+		if not self.get("service_invoice"):
+			self.create_service_invoice()
+
+		if self.spare_parts and not self.get("stock_entry"):
+			self.create_stock_entry()
 	
 	def create_service_order(self):
 		"""Create Service Order (Sales Order) from accepted Service Request"""
@@ -422,10 +446,8 @@ class ServiceRequest(Document):
 
 	def on_submit(self):
 		"""Actions on submission"""
-		if self.status == "Completed":
-			self.create_service_invoice()
-			if self.spare_parts:
-				self.create_stock_entry()
+		if self.is_completed_status():
+			self.ensure_completion_artifacts()
 
 	def on_cancel(self):
 		"""Cancel related documents"""
@@ -475,46 +497,25 @@ class ServiceRequest(Document):
 
 	def create_service_invoice(self):
 		"""Create Sales Invoice for completed service with service items and spare parts"""
-		if self.service_invoice:
+		if self.get("service_invoice"):
 			return
 		
-		if self.status != "Completed":
+		if not self.is_completed_status():
 			frappe.throw(_("Service Invoice can only be created for Completed requests"))
 		
-		items = []
-		
-		# Add service items
-		for service_item in self.service_items:
-			items.append({
-				"item_code": service_item.service_item,
-				"item_name": service_item.item_name,
-				"description": service_item.description or service_item.item_name,
-				"qty": 1,
-				"rate": service_item.actual_cost or service_item.estimated_cost or 0,
-				"uom": "Nos"
-			})
-		
-		# Add spare parts
-		for spare_part in self.spare_parts:
-			items.append({
-				"item_code": spare_part.spare_part_item,
-				"item_name": spare_part.item_name,
-				"description": spare_part.description or spare_part.item_name,
-				"qty": spare_part.qty,
-				"rate": spare_part.rate,
-				"uom": spare_part.uom
-			})
-		
+		items = self.get_service_invoice_items()
 		if not items:
 			frappe.throw(_("No service items or spare parts to invoice"))
+
+		posting_date = self.get("actual_completion_date") or today()
 		
 		# Create invoice
 		invoice = frappe.get_doc({
 			"doctype": "Sales Invoice",
 			"customer": self.customer,
 			"company": self.company,
-			"posting_date": self.actual_completion_date or today(),
-			"due_date": self.actual_completion_date or today(),
+			"posting_date": posting_date,
+			"due_date": posting_date,
 			"items": items,
 			"remarks": f"Service Invoice for Service Request {self.name}"
 		})
@@ -529,17 +530,62 @@ class ServiceRequest(Document):
 				"allocated_amount": min(self.advance_amount, invoice.grand_total)
 			})
 		
-		invoice.insert()
+		invoice.insert(ignore_permissions=True)
 		invoice.submit()
 		
-		self.service_invoice = invoice.name
-		self.db_set("service_invoice", invoice.name)
+		self._set_optional_field("service_invoice", invoice.name)
+		self.db_set("status", "Invoiced", update_modified=True)
+		self.db_set("decision", "Invoiced", update_modified=False)
 		
 		frappe.msgprint(_("Service Invoice {0} created successfully").format(invoice.name))
 
+	def get_service_invoice_items(self):
+		items = []
+
+		for service_item in self.service_items:
+			items.append({
+				"item_code": service_item.service_item,
+				"item_name": service_item.item_name,
+				"description": service_item.description or service_item.item_name,
+				"qty": 1,
+				"rate": service_item.actual_cost or service_item.estimated_cost or 0,
+				"uom": "Nos"
+			})
+
+		for spare_part in self.spare_parts:
+			items.append({
+				"item_code": spare_part.spare_part_item,
+				"item_name": spare_part.item_name,
+				"description": spare_part.description or spare_part.item_name,
+				"qty": spare_part.qty,
+				"rate": spare_part.rate,
+				"uom": spare_part.uom
+			})
+
+		if items:
+			return items
+
+		if self.service_order:
+			service_order = frappe.get_doc("Sales Order", self.service_order)
+			for row in service_order.items:
+				item_row = {
+					"item_code": row.item_code,
+					"item_name": row.item_name,
+					"description": row.description or row.item_name,
+					"qty": row.qty or 1,
+					"rate": row.rate,
+					"uom": row.uom,
+				}
+				if service_order.docstatus == 1:
+					item_row["sales_order"] = service_order.name
+					item_row["so_detail"] = row.name
+				items.append(item_row)
+
+		return items
+
 	def create_stock_entry(self):
 		"""Create Stock Entry to consume spare parts"""
-		if self.stock_entry:
+		if self.get("stock_entry"):
 			return
 		
 		if not self.spare_parts:
@@ -550,11 +596,21 @@ class ServiceRequest(Document):
 			# Get default warehouse
 			item = frappe.get_doc("Item", spare_part.spare_part_item)
 			if item.is_stock_item:
+				source_warehouse = self.source_warehouse or frappe.db.get_value(
+					"Item Default",
+					{"parent": spare_part.spare_part_item, "company": self.company},
+					"default_warehouse",
+				) or item.default_warehouse
+				if not source_warehouse:
+					frappe.throw(
+						_("Warehouse is required to issue spare part {0}").format(spare_part.spare_part_item)
+					)
 				items.append({
 					"item_code": spare_part.spare_part_item,
 					"qty": spare_part.qty,
 					"uom": spare_part.uom,
-					"basic_rate": spare_part.rate
+					"basic_rate": spare_part.rate,
+					"s_warehouse": source_warehouse,
 				})
 		
 		if not items:
@@ -565,18 +621,22 @@ class ServiceRequest(Document):
 			"doctype": "Stock Entry",
 			"stock_entry_type": "Material Issue",
 			"company": self.company,
-			"posting_date": self.actual_completion_date or today(),
+			"posting_date": self.get("actual_completion_date") or today(),
 			"items": items,
 			"remarks": f"Spare parts consumed for Service Request {self.name}"
 		})
 		
-		stock_entry.insert()
+		stock_entry.insert(ignore_permissions=True)
 		stock_entry.submit()
 		
-		self.stock_entry = stock_entry.name
-		self.db_set("stock_entry", stock_entry.name)
+		self._set_optional_field("stock_entry", stock_entry.name)
 		
 		frappe.msgprint(_("Stock Entry {0} created successfully").format(stock_entry.name))
+
+	def _set_optional_field(self, fieldname, value):
+		self.set(fieldname, value)
+		if self.meta.has_field(fieldname):
+			self.db_set(fieldname, value, update_modified=False)
 
 	def validate_contact_details(self):
 		"""Validate mobile number and email format using Frappe built-ins"""
@@ -595,10 +655,10 @@ class ServiceRequest(Document):
 
 	def validate_courier_details(self):
 		"""Validate courier details are mandatory if delivery mode is Courier"""
-		if self.delivery_mode == "Courier":
-			if not self.courier_name:
+		if self.get("delivery_mode") == "Courier":
+			if not self.get("courier_name"):
 				frappe.throw(_("Courier Name is mandatory when Delivery Mode is Courier"))
-			if not self.delivery_address:
+			if not self.get("delivery_address"):
 				frappe.msgprint(_("Warning: Delivery Address is not provided"), 
 					indicator="orange", alert=True)
 
@@ -986,6 +1046,28 @@ def reject_service_request(service_request, rejection_reason):
 	doc.db_set("walkin_status", None, update_modified=False)  # Clear walk-in status
 	
 	return True
+
+
+def complete_service_request(service_request, completion_date=None):
+	"""Mark a Service Request completed and create monetization artifacts."""
+	doc = frappe.get_doc("Service Request", service_request)
+	updates = {}
+
+	if doc.status != "Completed":
+		updates["status"] = "Completed"
+
+	if doc.meta.has_field("decision") and doc.decision != "Completed":
+		updates["decision"] = "Completed"
+
+	if completion_date and doc.meta.has_field("actual_completion_date") and not doc.get("actual_completion_date"):
+		updates["actual_completion_date"] = completion_date
+
+	if updates:
+		frappe.db.set_value("Service Request", doc.name, updates, update_modified=True)
+		doc.reload()
+
+	doc.ensure_completion_artifacts()
+	return doc.name
 
 @frappe.whitelist()
 def get_warehouse_state(warehouse):

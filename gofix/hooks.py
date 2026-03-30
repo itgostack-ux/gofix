@@ -208,6 +208,11 @@ scheduler_events = {
 	"daily": [
 		"gofix.gofix_services.doctype.service_request.service_request.flag_unclaimed_devices"
 	],
+	"cron": {
+		"*/15 * * * *": [
+			"gofix.gofix_services.doctype.gofix_sla_rule.gofix_sla_rule.check_gofix_sla_breach"
+		]
+	},
 }
 
 # Testing

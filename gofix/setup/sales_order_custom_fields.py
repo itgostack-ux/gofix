@@ -280,13 +280,29 @@ def create_sales_order_custom_fields():
 				"fieldtype": "Text",
 				"insert_after": "qc_column_break"
 			},
+			{
+				"fieldname": "qc_checklist_section",
+				"label": "QC Checklist",
+				"fieldtype": "Section Break",
+				"insert_after": "qc_remarks",
+				"depends_on": "eval:doc.is_service_order==1",
+				"collapsible": 1
+			},
+			{
+				"fieldname": "qc_checklist",
+				"label": "QC Checklist",
+				"fieldtype": "Table",
+				"options": "GoFix QC Checklist",
+				"insert_after": "qc_checklist_section",
+				"allow_on_submit": 1
+			},
 			
 			# Delivery Information Section
 			{
 				"fieldname": "delivery_information_section",
 				"label": "Delivery Information",
 				"fieldtype": "Section Break",
-				"insert_after": "qc_remarks",
+				"insert_after": "qc_checklist",
 				"collapsible": 1,
 				"depends_on": "eval:doc.is_service_order==1"
 			},

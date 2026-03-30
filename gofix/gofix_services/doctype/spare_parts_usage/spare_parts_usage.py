@@ -73,6 +73,28 @@ class SparePartsUsage(Document):
 		"""Update stock and create stock entry"""
 		self.create_stock_entry()
 		self.update_spare_parts_count()
+		self.sync_to_service_request()
+
+	def sync_to_service_request(self):
+		"""Add this spare part to the Service Request spare_parts child table
+		so it is included in the auto-generated repair invoice."""
+		if self.status != "Active":
+			return
+		sr = frappe.get_doc("Service Request", self.service_request)
+		# Avoid duplicates — check if already synced
+		for row in sr.spare_parts:
+			if row.get("spu_reference") == self.name:
+				return
+		sr.append("spare_parts", {
+			"spare_part_item": self.spare_part_item,
+			"qty": self.qty_used,
+			"uom": self.uom,
+			"rate": self.sales_price or 0,
+			"amount": (self.qty_used or 0) * (self.sales_price or 0),
+			"spu_reference": self.name,
+		})
+		sr.flags.ignore_validate = True
+		sr.save(ignore_permissions=True)
 	
 	def create_stock_entry(self):
 		"""Create stock entry for spare part consumption"""

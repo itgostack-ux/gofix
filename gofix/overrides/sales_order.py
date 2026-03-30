@@ -90,6 +90,8 @@ class CustomSalesOrder(SalesOrder):
 						frappe.throw(_(
 						"QC must be completed and passed before proceeding. Current QC Status: {0}"
 					).format(getattr(self, 'qc_status', None) or "Pending"))
+					# Enforce QC checklist: all mandatory checks must have a result
+					self._validate_qc_checklist()
 				
 				# Check repair outcome allowance
 				if transition.allow_if_repair_outcome:
@@ -182,6 +184,19 @@ class CustomSalesOrder(SalesOrder):
 			sr.db_set("decision", status, update_modified=False)
 		except Exception as e:
 			frappe.log_error(f"Failed to update SR status: {str(e)}")
+
+	def _validate_qc_checklist(self):
+		"""Ensure all mandatory QC checklist items have a result before QC Pass."""
+		checklist = getattr(self, "qc_checklist", None) or []
+		if not checklist:
+			return  # No checklist attached — legacy behaviour
+		incomplete = [row.check_name for row in checklist if not row.result]
+		if incomplete:
+			frappe.throw(
+				_("QC Checklist incomplete. The following checks have no result: {0}").format(
+					", ".join(incomplete)
+				)
+			)
 
 
 def validate_service_order_before_submit(doc, method=None):

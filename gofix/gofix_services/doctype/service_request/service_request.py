@@ -38,6 +38,29 @@ class ServiceRequest(Document):
 			self.fetch_warehouse_details()
 		# Sync walk-in status with decision
 		self.sync_walkin_status()
+		# Log status transitions
+		self._log_status_transition()
+
+	def _log_status_transition(self):
+		"""Append a GoFix Status Log row whenever decision/status changes."""
+		old_decision = (self.get_doc_before_save() or {}).get("decision") if self.get_doc_before_save() else None
+		new_decision = self.decision
+		if not old_decision or old_decision == new_decision:
+			return
+		from frappe.utils import now_datetime, time_diff_in_hours
+		prev_at = None
+		if self.status_log:
+			prev_at = self.status_log[-1].changed_at
+		elapsed = 0
+		if prev_at:
+			elapsed = round(time_diff_in_hours(now_datetime(), prev_at), 2)
+		self.append("status_log", {
+			"from_status": old_decision,
+			"to_status": new_decision,
+			"changed_by": frappe.session.user,
+			"changed_at": now_datetime(),
+			"time_in_previous_status_hours": elapsed,
+		})
 	
 	def set_received_by(self):
 		"""Set received_by to current user if not set"""

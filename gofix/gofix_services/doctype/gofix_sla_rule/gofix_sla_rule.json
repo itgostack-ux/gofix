@@ -1,0 +1,139 @@
+{
+ "actions": [],
+ "autoname": "format:GSLA-{####}",
+ "creation": "2026-03-30 10:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "rule_name",
+  "is_active",
+  "column_break_main",
+  "company",
+  "section_criteria",
+  "issue_category",
+  "priority",
+  "section_sla",
+  "target_hours",
+  "warning_pct",
+  "column_break_sla",
+  "escalation_1_role",
+  "escalation_2_role"
+ ],
+ "fields": [
+  {
+   "fieldname": "rule_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Rule Name",
+   "reqd": 1
+  },
+  {
+   "default": "1",
+   "fieldname": "is_active",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Active"
+  },
+  {
+   "fieldname": "column_break_main",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "label": "Company",
+   "options": "Company"
+  },
+  {
+   "fieldname": "section_criteria",
+   "fieldtype": "Section Break",
+   "label": "Matching Criteria"
+  },
+  {
+   "fieldname": "issue_category",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Issue Category",
+   "options": "Issue Category",
+   "description": "Leave blank to match all categories"
+  },
+  {
+   "fieldname": "priority",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Priority",
+   "options": "\nLow\nMedium\nHigh\nUrgent",
+   "description": "Leave blank to match all priorities"
+  },
+  {
+   "fieldname": "section_sla",
+   "fieldtype": "Section Break",
+   "label": "SLA Targets"
+  },
+  {
+   "fieldname": "target_hours",
+   "fieldtype": "Float",
+   "in_list_view": 1,
+   "label": "Target Hours",
+   "precision": 1,
+   "reqd": 1,
+   "description": "Maximum hours from intake to completion"
+  },
+  {
+   "default": "80",
+   "fieldname": "warning_pct",
+   "fieldtype": "Percent",
+   "label": "Warning at %",
+   "description": "Send warning to assigned tech when SLA is this percent consumed"
+  },
+  {
+   "fieldname": "column_break_sla",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "escalation_1_role",
+   "fieldtype": "Link",
+   "label": "Escalation Level 1 Role",
+   "options": "Role",
+   "description": "Notify this role at 100% SLA"
+  },
+  {
+   "fieldname": "escalation_2_role",
+   "fieldtype": "Link",
+   "label": "Escalation Level 2 Role",
+   "options": "Role",
+   "description": "Notify this role at 120% SLA"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-03-30 10:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "GoFix Services",
+ "name": "GoFix SLA Rule",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "read": 1,
+   "role": "System Manager",
+   "write": 1
+  },
+  {
+   "create": 1,
+   "read": 1,
+   "role": "Service Manager",
+   "write": 1
+  },
+  {
+   "read": 1,
+   "role": "Service Engineer"
+  }
+ ],
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

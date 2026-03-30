@@ -198,7 +198,10 @@ doc_events = {
 	"Delivery Note": {
 		"on_submit": "gofix.overrides.delivery_note.update_service_request_on_delivery",
 		"on_cancel": "gofix.overrides.delivery_note.update_service_request_on_delivery"
-	}
+	},
+	"Service Request": {
+		"on_update": "gofix.gofix_services.whatsapp_notifications.on_service_request_update",
+	},
 }
 
 # Scheduled Tasks

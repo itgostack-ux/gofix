@@ -264,3 +264,56 @@ def move_service_order_to_qc_if_ready(doc):
 
 	if getattr(doc, 'workflow_state', None) != "QC Awaiting":
 		doc.db_set("workflow_state", "QC Awaiting", update_modified=False)
+
+	# Auto-populate QC checklist from matching template
+	_populate_qc_checklist(doc)
+
+
+def _populate_qc_checklist(doc):
+	"""Auto-populate QC checklist from GoFix QC Template matching the issue category."""
+	if not hasattr(doc, "qc_checklist"):
+		return
+	# Skip if already populated
+	if doc.qc_checklist:
+		return
+
+	issue_category = None
+	if doc.service_request:
+		issue_category = frappe.db.get_value("Service Request", doc.service_request, "issue_category")
+
+	# Find best-match template: exact category > catch-all (no category)
+	filters = {"is_active": 1}
+	if doc.company:
+		filters["company"] = ["in", [doc.company, "", None]]
+
+	templates = frappe.get_all(
+		"GoFix QC Template",
+		filters=filters,
+		fields=["name", "issue_category"],
+		order_by="issue_category desc",
+	)
+
+	template = None
+	for t in templates:
+		if t.issue_category == issue_category:
+			template = t
+			break
+	if not template and templates:
+		# Fallback: template without issue_category (generic)
+		for t in templates:
+			if not t.issue_category:
+				template = t
+				break
+
+	if not template:
+		return
+
+	tmpl_doc = frappe.get_doc("GoFix QC Template", template.name)
+	for check in tmpl_doc.checks:
+		doc.append("qc_checklist", {
+			"check_name": check.check_name,
+			"is_mandatory": check.is_mandatory,
+			"check_type": check.get("check_type", "Pass-Fail"),
+			"result": "",
+		})
+	doc.save(ignore_permissions=True)

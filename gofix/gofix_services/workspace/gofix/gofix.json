@@ -1,6 +1,6 @@
 {
  "charts": [],
- "content": "[{\"type\": \"header\", \"data\": {\"text\": \"Job Tracker\", \"col\": 12}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Job Tracker\", \"col\": 4}}, {\"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"type\": \"header\", \"data\": {\"text\": \"Services\", \"col\": 12}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Service Request\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Job Assignment\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Spare Parts\", \"col\": 3}}, {\"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"type\": \"header\", \"data\": {\"text\": \"Masters\", \"col\": 12}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Walkin Source\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Issue Category\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Withdrawal Reason\", \"col\": 3}}, {\"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"type\": \"header\", \"data\": {\"text\": \"Quick Access\", \"col\": 12}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Service Requests\", \"col\": 4}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Job Management\", \"col\": 4}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Items\", \"col\": 4}}]",
+ "content": "[{\"type\": \"header\", \"data\": {\"text\": \"Job Tracker\", \"col\": 12}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Job Tracker\", \"col\": 4}}, {\"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"type\": \"header\", \"data\": {\"text\": \"Services\", \"col\": 12}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Service Request\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Job Assignment\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Spare Parts\", \"col\": 3}}, {\"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"type\": \"header\", \"data\": {\"text\": \"Masters\", \"col\": 12}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Walkin Source\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Issue Category\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Withdrawal Reason\", \"col\": 3}}, {\"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"type\": \"header\", \"data\": {\"text\": \"Quick Access\", \"col\": 12}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Service Requests\", \"col\": 4}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Job Management\", \"col\": 4}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Items\", \"col\": 4}}, {\"id\": \"card_qc\", \"type\": \"card\", \"data\": {\"card_name\": \"Quality Control\", \"col\": 4}}, {\"id\": \"card_sla\", \"type\": \"card\", \"data\": {\"card_name\": \"SLA & Monitoring\", \"col\": 4}}]",
  "creation": "2025-12-05 07:30:00",
  "custom_blocks": [],
  "docstatus": 0,
@@ -111,7 +111,26 @@
   {
    "hidden": 0,
    "is_query_report": 0,
-   "label": "SLA & Quality",
+   "label": "Quality Control",
+   "link_count": 0,
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Card Break"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "GoFix QC Template",
+   "link_count": 0,
+   "link_to": "GoFix QC Template",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "SLA & Monitoring",
    "link_count": 0,
    "link_type": "DocType",
    "onboard": 0,
@@ -130,15 +149,15 @@
   {
    "hidden": 0,
    "is_query_report": 0,
-   "label": "GoFix QC Template",
+   "label": "GoFix Status Log",
    "link_count": 0,
-   "link_to": "GoFix QC Template",
+   "link_to": "GoFix Status Log",
    "link_type": "DocType",
    "onboard": 0,
    "type": "Link"
   }
  ],
- "modified": "2026-03-13 00:11:11.552620",
+ "modified": "2026-03-31 06:25:31.534385",
  "modified_by": "Administrator",
  "module": "GoFix Services",
  "name": "GoFix",
@@ -149,13 +168,13 @@
  "quick_lists": [
   {
    "document_type": "Service Request",
-   "label": "Accepted Requests",
-   "quick_list_filter": "{\"decision\": \"Accepted\"}"
+   "label": "Open Service Requests",
+   "quick_list_filter": "{\"status\": \"Open\"}"
   },
   {
    "document_type": "Service Request",
-   "label": "In Service",
-   "quick_list_filter": "{\"decision\": \"In Service\"}"
+   "label": "In Progress",
+   "quick_list_filter": "{\"status\": \"In Progress\"}"
   }
  ],
  "roles": [],
@@ -164,10 +183,10 @@
   {
    "color": "Blue",
    "doc_view": "List",
-   "format": "{} Accepted",
+   "format": "{} Open",
    "label": "Service Request",
    "link_to": "Service Request",
-   "stats_filter": "{\"decision\": [\"=\", \"Accepted\"]}",
+   "stats_filter": "{\"status\": [\"=\", \"Open\"]}",
    "type": "DocType"
   },
   {
@@ -219,7 +238,7 @@
    "format": "{} Active",
    "label": "Job Assignment",
    "link_to": "Job Assignment",
-   "stats_filter": "{\"assignment_status\": [\"=\", \"Open\"]}",
+   "stats_filter": "{\"assignment_status\": [\"=\", \"Assigned\"]}",
    "type": "DocType"
   },
   {

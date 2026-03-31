@@ -387,7 +387,7 @@ def create_sales_order_custom_fields():
 		]
 	}
 	
-	create_custom_fields(custom_fields, update=True)
+	create_custom_fields(custom_fields, update=False)
 	frappe.db.commit()
 	
 	print("✅ Sales Order custom fields created successfully")

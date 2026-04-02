@@ -130,11 +130,17 @@ class SparePartsUsage(Document):
 		try:
 			stock_entry.insert(ignore_permissions=True)
 			stock_entry.submit()
-			
+			# GF-1 fix: Link stock entry back to spare parts usage for traceability
+			self.db_set("stock_entry", stock_entry.name, update_modified=False)
 			frappe.msgprint(_("Stock Entry {0} created").format(stock_entry.name))
 		except Exception as e:
 			frappe.log_error(message=str(e), title="Spare Parts Stock Entry Error")
-			frappe.msgprint(_("Could not create stock entry: {0}").format(str(e)), alert=True)
+			# GF-1 fix: Raise the error instead of silently continuing
+			frappe.throw(
+				_("Could not create stock entry for spare part {0}: {1}").format(
+					self.spare_part_item, str(e)),
+				title=_("Stock Entry Creation Failed"),
+			)
 	
 	def update_spare_parts_count(self):
 		"""Update spare parts count in service request"""

@@ -61,6 +61,9 @@ class ServiceRequest(Document):
 			"changed_at": now_datetime(),
 			"time_in_previous_status_hours": elapsed,
 		})
+
+		# GF-11 fix: Notify customer on key status changes
+		self._notify_customer_on_status_change(old_decision, new_decision)
 	
 	def set_received_by(self):
 		"""Set received_by to current user if not set"""
@@ -221,6 +224,56 @@ class ServiceRequest(Document):
 		except ImportError:
 			# ch_item_master not installed — use basic Serial No lookup
 			self._fallback_warranty_from_serial(serial)
+		except Exception:
+			# GF-6 fix: Any other error (DB, config, etc) — fallback gracefully instead of blocking
+			frappe.log_error(frappe.get_traceback(), f"Warranty lookup failed for {self.serial_no}")
+			self._fallback_warranty_from_serial(serial)
+
+	def _notify_customer_on_status_change(self, old_status, new_status):
+		"""GF-11: Send email/SMS notification to customer on key status transitions."""
+		# Only notify on customer-relevant transitions
+		notify_statuses = {
+			"Received", "Diagnosis Complete", "Repair In Progress",
+			"QC Pass", "Ready for Delivery", "Delivered",
+			"Not Repairable", "Customer Cancelled",
+		}
+		if new_status not in notify_statuses:
+			return
+
+		customer_email = self.get("customer_email") or self.get("email")
+		customer_mobile = self.get("customer_mobile") or self.get("mobile_no")
+		customer_name = self.get("customer_name") or "Customer"
+
+		subject = f"Service Request {self.name} — Status Update: {new_status}"
+		message = (
+			f"Dear {customer_name},<br><br>"
+			f"Your service request <b>{self.name}</b> for <b>{self.get('item_name', 'your device')}</b> "
+			f"has been updated to: <b>{new_status}</b>.<br><br>"
+			f"Previous status: {old_status}<br><br>"
+			f"Thank you for choosing GoFix Services."
+		)
+
+		if customer_email:
+			try:
+				frappe.sendmail(
+					recipients=[customer_email],
+					subject=subject,
+					message=message,
+					reference_doctype="Service Request",
+					reference_name=self.name,
+					now=True,
+				)
+			except Exception:
+				frappe.log_error(frappe.get_traceback(),
+								f"SR {self.name} customer email notification failed")
+
+		if customer_mobile:
+			try:
+				from frappe.core.doctype.sms_settings.sms_settings import send_sms
+				sms_text = f"GoFix: Service Request {self.name} status updated to {new_status}."
+				send_sms([customer_mobile], sms_text)
+			except Exception:
+				pass  # SMS is optional
 
 	def _fallback_warranty_from_serial(self, serial):
 		"""Basic warranty check from Serial No.warranty_expiry_date (legacy fallback)."""
@@ -882,6 +935,12 @@ class ServiceRequest(Document):
 	def _create_serial_sub_exception(self):
 		"""Create a CH Exception Request for serial substitution."""
 		if not frappe.db.exists("CH Exception Type", "Serial Substitution"):
+			# GF-2 fix: Warn instead of silently returning
+			frappe.msgprint(
+				_("CH Exception Type 'Serial Substitution' not found. "
+				  "Exception request was not created. Please configure it in CH Item Master."),
+				indicator="orange", alert=True,
+			)
 			return
 		try:
 			from ch_item_master.ch_item_master.exception_api import raise_exception, approve_exception
@@ -904,8 +963,18 @@ class ServiceRequest(Document):
 						channel="Manager PIN",
 						remarks=f"Old: {self.original_serial_no} → New: {self.replacement_serial_no}",
 					)
+		except ImportError:
+			# GF-2 fix: Explicit error when ch_item_master not installed
+			frappe.throw(
+				_("ch_item_master app is required for serial substitution exceptions but is not installed."),
+				title=_("Missing App Dependency"),
+			)
 		except Exception:
 			frappe.log_error("Serial substitution exception creation failed")
+			frappe.throw(
+				_("Failed to create serial substitution exception request. Check error log."),
+				title=_("Exception Request Failed"),
+			)
 
 	# ── Exception Framework: Service Discount (#10) ──────────────────
 
@@ -929,6 +998,11 @@ class ServiceRequest(Document):
 	def _create_service_discount_exception(self):
 		"""Create a CH Exception Request for service discount."""
 		if not frappe.db.exists("CH Exception Type", "Service Discount"):
+			frappe.msgprint(
+				_("CH Exception Type 'Service Discount' not found. "
+				  "Exception request was not created. Please configure it in CH Item Master."),
+				indicator="orange", alert=True,
+			)
 			return
 		try:
 			from ch_item_master.ch_item_master.exception_api import raise_exception, approve_exception
@@ -951,8 +1025,17 @@ class ServiceRequest(Document):
 						approver_user=self.discount_approved_by,
 						channel="Manager PIN",
 					)
+		except ImportError:
+			frappe.throw(
+				_("ch_item_master app is required for service discount exceptions but is not installed."),
+				title=_("Missing App Dependency"),
+			)
 		except Exception:
 			frappe.log_error("Service discount exception creation failed")
+			frappe.throw(
+				_("Failed to create service discount exception request. Check error log."),
+				title=_("Exception Request Failed"),
+			)
 
 
 # API Methods

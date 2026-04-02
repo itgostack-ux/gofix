@@ -86,17 +86,17 @@ class JobAssignment(Document):
 		
 		if all_completed:
 			# Check repair outcome
-			if hasattr(self, 'repair_outcome') and self.repair_outcome in ["Not Repairable", "Customer Cancelled"]:
+			# GF-9 fix: Handle "Beyond Repair" alongside other non-repairable outcomes
+			non_repairable_outcomes = ("Not Repairable", "Beyond Repair", "Customer Cancelled")
+			if hasattr(self, 'repair_outcome') and self.repair_outcome in non_repairable_outcomes:
 				# Allow closing without QC
 				so.db_set("repair_outcome", self.repair_outcome, update_modified=False)
 
 				# Set workflow state based on outcome
-				if self.repair_outcome == "Not Repairable":
-					# so.db_set("workflow_state", "Not Repairable", update_modified=False)
-					pass
+				if self.repair_outcome in ("Not Repairable", "Beyond Repair"):
+					so.db_set("workflow_state", "Not Repairable", update_modified=False)
 				elif self.repair_outcome == "Customer Cancelled":
-					# so.db_set("workflow_state", "Customer Cancelled", update_modified=False)
-					pass
+					so.db_set("workflow_state", "Customer Cancelled", update_modified=False)
 
 				frappe.msgprint(
 					_("Service Order {0} marked as {1}. Can be closed without QC.").format(
@@ -108,7 +108,7 @@ class JobAssignment(Document):
 			else:
 				# Set to QC Awaiting for repairable items
 				so.db_set("qc_status", "Awaiting", update_modified=False)
-				# so.db_set("workflow_state", "QC Awaiting", update_modified=False)
+				so.db_set("workflow_state", "QC Awaiting", update_modified=False)
 
 				frappe.msgprint(
 					_("Service Order {0} is now awaiting QC").format(self.service_order),

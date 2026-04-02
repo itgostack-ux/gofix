@@ -56,15 +56,27 @@ class CustomSalesOrder(SalesOrder):
 					if not any(role in user_roles for role in allowed_roles):
 						continue  # Try next transition
 				
-				# Check condition script
+				# Check condition script — GF-3 fix: use restricted eval context
 				if transition.condition_script:
 					try:
 						doc = self
-						condition_met = frappe.safe_eval(transition.condition_script, {"doc": doc})
+						# Only allow safe attribute access on doc, no builtins
+						condition_met = frappe.safe_eval(
+							transition.condition_script,
+							eval_globals={"doc": doc, "frappe": frappe._dict({
+								"utils": frappe._dict({
+									"flt": frappe.utils.flt,
+									"cint": frappe.utils.cint,
+									"getdate": frappe.utils.getdate,
+									"nowdate": frappe.utils.nowdate,
+								}),
+							})},
+							eval_locals={},
+						)
 						if not condition_met:
 							continue  # Try next transition
 					except Exception as e:
-						frappe.log_error(f"Condition script error: {str(e)}")
+						frappe.log_error(f"Condition script error for transition {from_state}→{to_state}: {str(e)}")
 						continue
 				
 				# Check Job Sheet completion requirement
@@ -190,7 +202,10 @@ class CustomSalesOrder(SalesOrder):
 		checklist = getattr(self, "qc_checklist", None) or []
 		if not checklist:
 			return  # No checklist attached — legacy behaviour
-		incomplete = [row.check_name for row in checklist if not row.result]
+		# GF-4 fix: Allow "N/A" as a valid result so technicians can skip irrelevant checks
+		incomplete = [row.check_name for row in checklist
+					  if not row.result or (hasattr(row, 'is_mandatory') and row.is_mandatory
+											and str(row.result).strip().upper() == "N/A")]
 		if incomplete:
 			frappe.throw(
 				_("QC Checklist incomplete. The following checks have no result: {0}").format(
@@ -224,6 +239,15 @@ def update_service_request_on_qc(doc, method=None):
 	"""Hook: Update SR when QC status changes"""
 	if hasattr(doc, 'is_service_order') and doc.is_service_order and doc.service_request and hasattr(doc, 'qc_status'):
 		if doc.qc_status == "Pass":
+			# GF-5 fix: Only users with QC Manager/Store Manager/System Manager role can approve QC Pass
+			allowed_roles = {"QC Manager", "Store Manager", "System Manager", "Administrator"}
+			user_roles = set(frappe.get_roles())
+			if not user_roles.intersection(allowed_roles):
+				frappe.throw(
+					_("Only QC Managers or Store Managers can approve QC Pass."),
+					title=_("Insufficient Permission"),
+				)
+
 			if getattr(doc, 'workflow_state', None) != "QC Pass":
 				doc.db_set("workflow_state", "QC Pass", update_modified=False)
 

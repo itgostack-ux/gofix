@@ -352,6 +352,10 @@ class ServiceRequest(Document):
 
 		if self.is_completed_status():
 			self.ensure_completion_artifacts()
+			# INT-1 fix: Sync completion back to linked Warranty Claim
+			self._sync_warranty_claim_completion()
+			# INT-2 fix: Update serial lifecycle status to "Repaired"
+			self._update_serial_lifecycle_on_completion()
 
 	def is_completed_status(self):
 		return self.status == "Completed" or self.decision == "Completed"
@@ -378,7 +382,49 @@ class ServiceRequest(Document):
 
 		if self.spare_parts and not self.get("stock_entry"):
 			self.create_stock_entry()
-	
+
+	def _sync_warranty_claim_completion(self):
+		"""INT-1: When Service Request is completed, mark the linked Warranty Claim as repair-complete."""
+		try:
+			claim_name = frappe.db.get_value(
+				"CH Warranty Claim", {"service_request": self.name, "docstatus": 1}, "name"
+			)
+			if not claim_name:
+				return
+			claim = frappe.get_doc("CH Warranty Claim", claim_name)
+			if claim.claim_status in ("Ticket Created", "In Repair", "Sent to Manufacturer"):
+				claim.mark_repair_complete(
+					remarks=_("Auto-completed via Service Request {0}").format(self.name)
+				)
+		except Exception:
+			frappe.log_error(
+				frappe.get_traceback(),
+				_("Failed to sync warranty claim for SR {0}").format(self.name),
+			)
+
+	def _update_serial_lifecycle_on_completion(self):
+		"""INT-2: Update serial lifecycle status to 'Repaired' when repair is completed."""
+		serial_no = self.get("serial_no")
+		if not serial_no:
+			return
+		try:
+			from ch_item_master.ch_item_master.doctype.ch_serial_lifecycle.ch_serial_lifecycle import (
+				update_lifecycle_status,
+			)
+			update_lifecycle_status(
+				serial_no=serial_no,
+				new_status="Repaired",
+				company=self.company,
+				remarks=_("Repair completed via Service Request {0}").format(self.name),
+			)
+		except ImportError:
+			pass  # ch_item_master not installed
+		except Exception:
+			frappe.log_error(
+				frappe.get_traceback(),
+				_("Failed to update serial lifecycle for SR {0}").format(self.name),
+			)
+
 	def create_service_order(self):
 		"""Create Service Order (Sales Order) from accepted Service Request"""
 		if self.service_order:
@@ -864,28 +910,35 @@ class ServiceRequest(Document):
 			return "MO"
 	
 	def get_next_barcode_sequence(self, prefix, date_str):
-		"""Get next sequence number for barcode generation"""
-		# Find the last barcode with this prefix and date using range scan (B-tree friendly)
-		range_start = f"{prefix}/{date_str}"
-		range_end = f"{prefix}/{date_str}\xff"  # \xff sorts after all digit chars
-		last_barcode = frappe.db.sql("""
-			SELECT serial_no
-			FROM `tabService Request`
-			WHERE serial_no >= %s AND serial_no < %s
-			ORDER BY serial_no DESC
-			LIMIT 1
-		""", (range_start, range_end), as_dict=True)
-		
-		if last_barcode and last_barcode[0].serial_no:
-			# Extract sequence number from last barcode
-			try:
-				last_seq_str = last_barcode[0].serial_no.split(date_str)[1]
-				last_seq = int(last_seq_str)
-				return last_seq + 1
-			except (IndexError, ValueError):
-				return 1
-		
-		return 1
+		"""Get next sequence number for barcode generation.
+		Uses an advisory lock to prevent race conditions with concurrent requests.
+		"""
+		lock_name = f"barcode_seq_{prefix}_{date_str}"
+		# GF-7 fix: Acquire advisory lock to prevent duplicate sequence numbers
+		frappe.db.sql("SELECT GET_LOCK(%s, 10)", (lock_name,))
+		try:
+			range_start = f"{prefix}/{date_str}"
+			range_end = f"{prefix}/{date_str}\xff"
+			last_barcode = frappe.db.sql("""
+				SELECT serial_no
+				FROM `tabService Request`
+				WHERE serial_no >= %s AND serial_no < %s
+				ORDER BY serial_no DESC
+				LIMIT 1
+				FOR UPDATE
+			""", (range_start, range_end), as_dict=True)
+
+			if last_barcode and last_barcode[0].serial_no:
+				try:
+					last_seq_str = last_barcode[0].serial_no.split(date_str)[1]
+					last_seq = int(last_seq_str)
+					return last_seq + 1
+				except (IndexError, ValueError):
+					return 1
+
+			return 1
+		finally:
+			frappe.db.sql("SELECT RELEASE_LOCK(%s)", (lock_name,))
 	
 	def create_serial_no_document(self, barcode, item):
 		"""Create Serial No document for the generated barcode"""

@@ -143,6 +143,8 @@ class SparePartsUsage(Document):
 			self.create_stock_entry()
 		self.update_spare_parts_count()
 		self.sync_to_service_request()
+		# GF-14 fix: Create audit trail for parts consumption
+		self._log_parts_consumption()
 
 	def sync_to_service_request(self):
 		"""Add this spare part to the Service Request spare_parts child table
@@ -226,6 +228,27 @@ class SparePartsUsage(Document):
 			"total_spares_used_count": total_count,
 			"billable_spares_count": billable_count
 		}, update_modified=False)
+
+	def _log_parts_consumption(self):
+		"""GF-14 fix: Create Activity Log entry for spare parts consumption audit trail."""
+		try:
+			frappe.get_doc({
+				"doctype": "Activity Log",
+				"subject": _("Spare part {0} (x{1}) {2} for Service Request {3}").format(
+					self.spare_part_item, self.qty_used, self.part_status, self.service_request
+				),
+				"content": _("Item: {0}, Qty: {1}, Status: {2}, Cost: {3}, Stock Entry: {4}").format(
+					self.spare_part_item, self.qty_used, self.part_status,
+					self.purchase_cost or 0, self.stock_entry or "N/A"
+				),
+				"reference_doctype": "Spare Parts Usage",
+				"reference_name": self.name,
+				"link_doctype": "Service Request",
+				"link_name": self.service_request,
+				"user": frappe.session.user,
+			}).insert(ignore_permissions=True)
+		except Exception:
+			frappe.log_error(frappe.get_traceback(), _("Spare parts audit log failed"))
 
 	def move_to_main_stock(self, reason):
 		"""Move spare part back to main stock"""

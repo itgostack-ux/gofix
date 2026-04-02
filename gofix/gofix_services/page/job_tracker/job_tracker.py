@@ -152,6 +152,16 @@ def create_assignment(service_request, engineer, job_type="Repair", estimated_ho
 	"""Quick-assign a service engineer to a Service Request."""
 	frappe.has_permission("Job Assignment", "create", throw=True)
 
+	# GF-12 fix: Check technician workload before assigning
+	from gofix.gofix_services.doctype.job_assignment.job_assignment import get_technician_workload
+	workload = get_technician_workload(engineer)
+	if workload["open_count"] >= 10:
+		frappe.msgprint(
+			_("Warning: {0} already has {1} open jobs").format(engineer, workload["open_count"]),
+			indicator="orange",
+			alert=True,
+		)
+
 	from frappe.utils import nowdate
 	ja = frappe.new_doc("Job Assignment")
 	ja.service_request = service_request

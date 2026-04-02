@@ -69,7 +69,14 @@ class JobAssignment(Document):
 		"""Update Service Order status when Job Sheet is completed"""
 		if not self.service_order:
 			return
-		
+
+		# GF-10 fix: Lock the Service Order row to prevent concurrent job sheets
+		# from racing past the all_completed check simultaneously
+		frappe.db.sql(
+			"SELECT name FROM `tabSales Order` WHERE name=%s FOR UPDATE",
+			self.service_order,
+		)
+
 		# Get Service Order
 		so = frappe.get_doc("Sales Order", self.service_order)
 		
@@ -180,6 +187,24 @@ class JobAssignment(Document):
 
 # API Methods
 @frappe.whitelist()
+def get_technician_workload(engineer):
+	"""Get count of open/in-progress jobs for a technician.
+	Returns dict with open_count and list of active job names.
+	"""
+	active_jobs = frappe.get_all(
+		"Job Assignment",
+		filters={
+			"service_engineer": engineer,
+			"assignment_status": ["in", ["Open", "In Progress"]],
+			"docstatus": ["<", 2],
+		},
+		fields=["name", "service_order", "job_type", "assignment_date"],
+		order_by="assignment_date desc",
+	)
+	return {"open_count": len(active_jobs), "active_jobs": active_jobs}
+
+
+@frappe.whitelist()
 def create_job_sheet_from_service_order(service_order, service_engineer=None, job_type="Repair", estimated_hours=None):
 	"""Create Job Sheet (Job Assignment) from Service Order
 	
@@ -215,6 +240,27 @@ def create_job_sheet_from_service_order(service_order, service_engineer=None, jo
 		job_sheet.service_engineer = service_engineer
 		job_sheet.assignment_type = "Technician Assignment"
 		job_sheet.assignment_status = "In Progress"
+		# GF-12 fix: Warn if technician has high workload
+		workload = get_technician_workload(service_engineer)
+		if workload["open_count"] >= 10:
+			frappe.msgprint(
+				_("Warning: {0} already has {1} open jobs").format(
+					service_engineer, workload["open_count"]
+				),
+				indicator="orange",
+				alert=True,
+			)
+	else:
+		# GF-12 fix: Auto-suggest least-loaded technician when none specified
+		suggested = _get_least_loaded_technician(so.company if hasattr(so, 'company') else None)
+		if suggested:
+			frappe.msgprint(
+				_("Tip: {0} has the fewest open jobs ({1}). Consider assigning to them.").format(
+					suggested["engineer"], suggested["open_count"]
+				),
+				indicator="blue",
+				alert=True,
+			)
 	
 	job_sheet.insert(ignore_permissions=True)
 	
@@ -223,3 +269,24 @@ def create_job_sheet_from_service_order(service_order, service_engineer=None, jo
 		indicator="green")
 	
 	return job_sheet.name
+
+
+def _get_least_loaded_technician(company=None):
+	"""GF-12 fix: Find the technician with the fewest open jobs for auto-balancing."""
+	filters = {"designation": ["like", "%Technician%"], "status": "Active"}
+	if company:
+		filters["company"] = company
+	technicians = frappe.get_all("Employee", filters=filters, pluck="name", limit=50)
+	if not technicians:
+		return None
+
+	best = None
+	for emp in technicians:
+		count = frappe.db.count("Job Assignment", {
+			"service_engineer": emp,
+			"assignment_status": ["in", ["Open", "In Progress"]],
+			"docstatus": ["<", 2],
+		})
+		if best is None or count < best["open_count"]:
+			best = {"engineer": emp, "open_count": count}
+	return best

@@ -108,22 +108,12 @@ class CustomSalesOrder(SalesOrder):
 					if not any(role in user_roles for role in allowed_roles):
 						continue  # Try next transition
 				
-				# Check condition script — GF-3 fix: use restricted eval context
+				# Check condition script — GF-3 fix: use declarative matcher first,
+				# fall back to restricted safe_eval for complex expressions
 				if transition.condition_script:
 					try:
-						doc = self
-						# Only allow safe attribute access on doc, no builtins
-						condition_met = frappe.safe_eval(
-							transition.condition_script,
-							eval_globals={"doc": doc, "frappe": frappe._dict({
-								"utils": frappe._dict({
-									"flt": frappe.utils.flt,
-									"cint": frappe.utils.cint,
-									"getdate": frappe.utils.getdate,
-									"nowdate": frappe.utils.nowdate,
-								}),
-							})},
-							eval_locals={},
+						condition_met = self._evaluate_transition_condition(
+							transition.condition_script
 						)
 						if not condition_met:
 							continue  # Try next transition
@@ -178,7 +168,78 @@ class CustomSalesOrder(SalesOrder):
 			frappe.throw(_(
 			"Transition {0} → {1} is not allowed. Check your permissions and required conditions."
 		).format(from_state, to_state))
-	
+
+	def _evaluate_transition_condition(self, condition_script):
+		"""GF-3 fix: Evaluate a transition condition using declarative field matching.
+
+		Supports simple expressions like:
+		  doc.status == "Completed"
+		  doc.grand_total > 5000
+		  doc.qc_status == "Passed" and doc.repair_outcome != "Not Repairable"
+
+		Falls back to restricted safe_eval for complex expressions.
+		"""
+		import re
+		import operator
+
+		# Try declarative parsing first — simple field comparisons joined by and/or
+		simple_pattern = re.compile(
+			r'doc\.(\w+)\s*(==|!=|>=|<=|>|<)\s*(?:"([^"]*)"|\'([^\']*)\'|(\d+(?:\.\d+)?))'
+		)
+		ops = {
+			"==": operator.eq, "!=": operator.ne,
+			">": operator.gt, "<": operator.lt,
+			">=": operator.ge, "<=": operator.le,
+		}
+
+		parts = re.split(r'\b(and|or)\b', condition_script.strip())
+		if all(
+			p.strip() in ("and", "or", "") or simple_pattern.fullmatch(p.strip())
+			for p in parts
+		):
+			results = []
+			connectors = []
+			for p in parts:
+				p = p.strip()
+				if p in ("and", "or"):
+					connectors.append(p)
+					continue
+				if not p:
+					continue
+				m = simple_pattern.fullmatch(p)
+				field = m.group(1)
+				op_str = m.group(2)
+				value = m.group(3) or m.group(4) or flt(m.group(5))
+				doc_val = self.get(field)
+				if isinstance(value, str):
+					doc_val = str(doc_val or "")
+				else:
+					doc_val = flt(doc_val)
+				results.append(ops[op_str](doc_val, value))
+
+			# Evaluate and/or chain
+			result = results[0] if results else True
+			for i, conn in enumerate(connectors):
+				if conn == "and":
+					result = result and results[i + 1]
+				else:
+					result = result or results[i + 1]
+			return result
+
+		# Fallback: restricted safe_eval for complex expressions
+		return frappe.safe_eval(
+			condition_script,
+			eval_globals={"doc": self, "frappe": frappe._dict({
+				"utils": frappe._dict({
+					"flt": frappe.utils.flt,
+					"cint": frappe.utils.cint,
+					"getdate": frappe.utils.getdate,
+					"nowdate": frappe.utils.nowdate,
+				}),
+			})},
+			eval_locals={},
+		)
+
 	def on_update(self):
 		"""Sync status to Service Request"""
 		super().on_update()

@@ -101,6 +101,11 @@
   "substitution_reason",
   "substitution_approved_by",
   "substitution_exception_request",
+  "section_repeat_complaint",
+  "is_repeat_complaint",
+  "previous_service_request",
+  "column_break_repeat",
+  "repeat_complaint_count",
   "section_repair_tracking",
   "data_backup_disclaimer",
   "unclaimed_flag",
@@ -771,6 +776,42 @@
    "label": "Status Log",
    "options": "GoFix Status Log",
    "read_only": 1
+  },
+  {
+   "fieldname": "section_repeat_complaint",
+   "fieldtype": "Section Break",
+   "label": "Repeat Complaint",
+   "collapsible": 1,
+   "depends_on": "eval:doc.is_repeat_complaint"
+  },
+  {
+   "default": "0",
+   "fieldname": "is_repeat_complaint",
+   "fieldtype": "Check",
+   "label": "Is Repeat Complaint",
+   "read_only": 1,
+   "in_standard_filter": 1,
+   "description": "Auto-detected: same device + same issue within 30 days"
+  },
+  {
+   "fieldname": "previous_service_request",
+   "fieldtype": "Link",
+   "label": "Previous Service Request",
+   "options": "Service Request",
+   "read_only": 1,
+   "depends_on": "eval:doc.is_repeat_complaint"
+  },
+  {
+   "fieldname": "column_break_repeat",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "0",
+   "fieldname": "repeat_complaint_count",
+   "fieldtype": "Int",
+   "label": "Repeat Count",
+   "read_only": 1,
+   "description": "Number of previous service requests for same device + issue"
   }
  ],
  "index_web_pages_for_search": 1,

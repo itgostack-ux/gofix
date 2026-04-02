@@ -6,6 +6,8 @@
  "field_order": [
   "check_name",
   "result",
+  "is_mandatory",
+  "is_critical",
   "photo",
   "remarks"
  ],
@@ -25,6 +27,21 @@
    "options": "\nPass\nFail\nNA"
   },
   {
+   "default": "1",
+   "fieldname": "is_mandatory",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Mandatory"
+  },
+  {
+   "default": "0",
+   "fieldname": "is_critical",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Critical",
+   "description": "Critical checks auto-fail the entire QC if failed"
+  },
+  {
    "fieldname": "photo",
    "fieldtype": "Attach Image",
    "label": "Photo"
@@ -39,7 +56,7 @@
  "index_web_pages_for_search": 0,
  "istable": 1,
  "links": [],
- "modified": "2025-01-01 00:00:00.000000",
+ "modified": "2025-01-15 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "GoFix Services",
  "name": "GoFix QC Checklist",

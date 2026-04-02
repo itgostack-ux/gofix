@@ -12,12 +12,17 @@
   "section_criteria",
   "issue_category",
   "priority",
+  "warranty_plan",
+  "warranty_status",
   "section_sla",
   "target_hours",
   "warning_pct",
   "column_break_sla",
   "escalation_1_role",
-  "escalation_2_role"
+  "escalation_2_role",
+  "escalation_1_email",
+  "escalation_2_email",
+  "send_email_alert"
  ],
  "fields": [
   {
@@ -103,6 +108,41 @@
    "label": "Escalation Level 2 Role",
    "options": "Role",
    "description": "Notify this role at 120% SLA"
+  },
+  {
+   "fieldname": "warranty_plan",
+   "fieldtype": "Link",
+   "label": "Warranty Plan",
+   "options": "CH Warranty Plan",
+   "description": "Match specific warranty plan (leave blank for all)"
+  },
+  {
+   "fieldname": "warranty_status",
+   "fieldtype": "Select",
+   "label": "Warranty Status",
+   "options": "\nUnder Warranty\nOut of Warranty\nNo Warranty",
+   "description": "Match specific warranty status (leave blank for all)"
+  },
+  {
+   "fieldname": "escalation_1_email",
+   "fieldtype": "Data",
+   "options": "Email",
+   "label": "Escalation 1 Email",
+   "description": "Additional email to notify at Level 1 escalation"
+  },
+  {
+   "fieldname": "escalation_2_email",
+   "fieldtype": "Data",
+   "options": "Email",
+   "label": "Escalation 2 Email",
+   "description": "Additional email to notify at Level 2 escalation"
+  },
+  {
+   "default": "0",
+   "fieldname": "send_email_alert",
+   "fieldtype": "Check",
+   "label": "Send Email Alert",
+   "description": "Send email in addition to real-time notification on escalation"
   }
  ],
  "index_web_pages_for_search": 0,

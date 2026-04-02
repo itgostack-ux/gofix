@@ -11,7 +11,7 @@ class GoFixSLARule(Document):
 	pass
 
 
-def get_sla_rule(issue_category, priority, company=None):
+def get_sla_rule(issue_category, priority, company=None, warranty_plan=None, warranty_status=None):
 	"""Return the best-matching SLA rule for the given criteria."""
 	filters = {"is_active": 1}
 	if company:
@@ -20,21 +20,35 @@ def get_sla_rule(issue_category, priority, company=None):
 	rules = frappe.get_all("GoFix SLA Rule",
 		filters=filters,
 		fields=["name", "issue_category", "priority", "target_hours",
-				"warning_pct", "escalation_1_role", "escalation_2_role"],
+				"warning_pct", "escalation_1_role", "escalation_2_role",
+				"warranty_plan", "warranty_status",
+				"escalation_1_email", "escalation_2_email", "send_email_alert"],
 		order_by="issue_category desc, priority desc")
 
-	# Best match: exact category+priority > category only > priority only > catch-all
+	# Best match: exact category+priority+warranty > category+priority > category > catch-all
 	best = None
+	best_score = -1
 	for r in rules:
+		score = 0
 		cat_match = (not r.issue_category) or r.issue_category == issue_category
 		pri_match = (not r.priority) or r.priority == priority
-		if cat_match and pri_match:
-			if r.issue_category and r.priority:
-				return r  # exact match — best possible
-			if not best:
-				best = r
-			elif r.issue_category and not best.issue_category:
-				best = r
+		plan_match = (not r.warranty_plan) or r.warranty_plan == warranty_plan
+		wstatus_match = (not r.warranty_status) or r.warranty_status == warranty_status
+
+		if not (cat_match and pri_match and plan_match and wstatus_match):
+			continue
+
+		if r.issue_category:
+			score += 4
+		if r.priority:
+			score += 2
+		if r.warranty_plan or r.warranty_status:
+			score += 1
+
+		if score > best_score:
+			best = r
+			best_score = score
+
 	return best
 
 
@@ -49,12 +63,16 @@ def check_gofix_sla_breach():
 			"docstatus": 1,
 		},
 		fields=["name", "issue_category", "priority", "received_datetime",
-				"company", "source_warehouse"])
+				"company", "source_warehouse", "warranty_plan", "warranty_status"])
 
 	for sr in open_srs:
 		if not sr.received_datetime:
 			continue
-		sla = get_sla_rule(sr.issue_category, sr.priority, sr.company)
+		sla = get_sla_rule(
+			sr.issue_category, sr.priority, sr.company,
+			warranty_plan=sr.get("warranty_plan"),
+			warranty_status=sr.get("warranty_status"),
+		)
 		if not sla:
 			continue
 
@@ -72,7 +90,7 @@ def check_gofix_sla_breach():
 
 
 def _send_sla_alert(sr_name, sla, level, elapsed):
-	"""Send in-app escalation notification for SLA breach."""
+	"""Send in-app + optional email escalation notification for SLA breach."""
 	key = f"sla_escalation_{level}_{sr_name}"
 	if frappe.cache.get_value(key):
 		return  # already sent
@@ -81,12 +99,39 @@ def _send_sla_alert(sr_name, sla, level, elapsed):
 	users = frappe.get_all("Has Role", filters={"role": role, "parenttype": "User"},
 						   pluck="parent")
 
+	message = _("SLA Breach (Level {0}): Service Request {1} — {2:.1f}h elapsed (target: {3}h)").format(
+		level, sr_name, elapsed, sla.target_hours)
+
 	for user in users:
 		frappe.publish_realtime("msgprint",
-			{"message": _("SLA Breach (Level {0}): Service Request {1} — {2:.1f}h elapsed (target: {3}h)").format(
-				level, sr_name, elapsed, sla.target_hours),
-			 "alert": True},
+			{"message": message, "alert": True},
 			user=user)
+
+	# Send email if configured
+	if sla.send_email_alert:
+		email_addr = sla.escalation_1_email if level == 1 else sla.escalation_2_email
+		recipients = [u for u in users if "@" in (u or "")]
+		if email_addr:
+			recipients.append(email_addr)
+		if recipients:
+			try:
+				frappe.sendmail(
+					recipients=list(set(recipients)),
+					subject=f"GoFix SLA Breach Level {level}: {sr_name}",
+					message=(
+						f"<b>SLA Breach Alert — Level {level}</b><br><br>"
+						f"Service Request: <b>{sr_name}</b><br>"
+						f"Elapsed: <b>{elapsed:.1f} hours</b><br>"
+						f"Target: <b>{sla.target_hours} hours</b><br>"
+						f"SLA Rule: {sla.name}<br><br>"
+						f"Please take immediate action."
+					),
+					reference_doctype="Service Request",
+					reference_name=sr_name,
+					now=True,
+				)
+			except Exception:
+				frappe.log_error(frappe.get_traceback(), f"SLA alert email failed for {sr_name}")
 
 	frappe.cache.set_value(key, 1, expires_in_sec=3600)
 

@@ -3,17 +3,69 @@
 
 import frappe
 from frappe import _
+from frappe.utils import flt
 from erpnext.selling.doctype.sales_order.sales_order import SalesOrder
 
 
 class CustomSalesOrder(SalesOrder):
 	"""Extended Sales Order with Service Order sync"""
-	
+
 	def validate(self):
 		"""Validate Service Order workflow"""
 		super().validate()
 		if self.is_service_order and self.service_request:
 			self.validate_service_order_status()
+			self._check_estimate_approval()
+			self._check_decision_approval()
+
+	def _check_estimate_approval(self):
+		"""Check if estimate requires approval based on GoFix Approval Rules."""
+		if not frappe.db.exists("DocType", "GoFix Approval Rule"):
+			return
+		from gofix.gofix_services.doctype.gofix_approval_rule.gofix_approval_rule import check_approval_required
+
+		total = flt(self.grand_total) or flt(self.total)
+		rule = check_approval_required(
+			"High Estimate", total, self.company,
+			issue_category=getattr(self, "issue_category", None),
+			warranty_status=getattr(self, "warranty_status", None),
+		)
+		if rule and not getattr(self, "estimate_approved", None):
+			if not getattr(self, "estimate_approval_status", None) or self.estimate_approval_status == "Pending":
+				self.estimate_approval_status = "Pending"
+				self.estimate_approval_rule = rule.name
+
+	def _check_decision_approval(self):
+		"""Check if repair decisions (free repair, write-off, replacement, beyond repair, discount) need approval."""
+		if not frappe.db.exists("DocType", "GoFix Approval Rule"):
+			return
+		from gofix.gofix_services.doctype.gofix_approval_rule.gofix_approval_rule import check_approval_required
+
+		# Free repair check (total == 0 but parts used)
+		total = flt(self.grand_total) or flt(self.total)
+		if total == 0 and self._has_spare_parts():
+			rule = check_approval_required("Free Repair", 0, self.company)
+			if rule and not getattr(self, "decision_approved_by", None):
+				self.decision_approval_status = "Pending"
+				self.decision_approval_rule = rule.name
+
+		# Beyond repair / write-off check
+		repair_outcome = getattr(self, "repair_outcome", None)
+		if repair_outcome in ("Not Repairable", "Beyond Repair"):
+			rule_type = "Beyond Repair"
+			rule = check_approval_required(rule_type, total, self.company)
+			if rule and not getattr(self, "decision_approved_by", None):
+				self.decision_approval_status = "Pending"
+				self.decision_approval_rule = rule.name
+
+	def _has_spare_parts(self):
+		if self.service_request:
+			return frappe.db.count("Spare Parts Usage", {
+				"service_request": self.service_request,
+				"status": "Active",
+				"part_status": ["in", ["Consumed", "Issued"]],
+			}) > 0
+		return False
 	
 	def validate_service_order_status(self):
 		"""Validate Service Order workflow based on configured states and transitions"""
@@ -198,10 +250,24 @@ class CustomSalesOrder(SalesOrder):
 			frappe.log_error(f"Failed to update SR status: {str(e)}")
 
 	def _validate_qc_checklist(self):
-		"""Ensure all mandatory QC checklist items have a result before QC Pass."""
+		"""Ensure all mandatory QC checklist items have a result before QC Pass.
+		Critical checks that fail auto-fail the entire QC."""
 		checklist = getattr(self, "qc_checklist", None) or []
 		if not checklist:
 			return  # No checklist attached — legacy behaviour
+
+		# Check for critical failures first
+		critical_failures = [row.check_name for row in checklist
+							 if getattr(row, "is_critical", False) and row.result == "Fail"]
+		if critical_failures:
+			frappe.throw(
+				_("QC auto-failed due to critical check failure(s): {0}. "
+				  "These must Pass before QC can be approved.").format(
+					", ".join(critical_failures)
+				),
+				title=_("Critical QC Failure"),
+			)
+
 		# GF-4 fix: Allow "N/A" as a valid result so technicians can skip irrelevant checks
 		incomplete = [row.check_name for row in checklist
 					  if not row.result or (hasattr(row, 'is_mandatory') and row.is_mandatory
@@ -255,13 +321,73 @@ def update_service_request_on_qc(doc, method=None):
 			doc.db_set("qc_checked_by", frappe.session.user, update_modified=False)
 			doc.db_set("qc_datetime", frappe.utils.now(), update_modified=False)
 
+			# Calculate and store service costing
+			_update_service_costing(doc)
+
 			from gofix.gofix_services.doctype.service_request.service_request import complete_service_request
 
 			complete_service_request(doc.service_request, completion_date=frappe.utils.today())
-			
+
 			frappe.msgprint("QC passed. Service Order can now be billed.", indicator="green")
 		elif doc.qc_status == "Fail" and getattr(doc, 'workflow_state', None) != "QC Fail":
 			doc.db_set("workflow_state", "QC Fail", update_modified=False)
+
+			# Increment rework count
+			rework_count = (getattr(doc, "rework_count", 0) or 0) + 1
+			doc.db_set("rework_count", rework_count, update_modified=False)
+
+			max_rework = getattr(doc, "max_rework_limit", 3) or 3
+			if rework_count >= max_rework:
+				# Alert managers that max rework limit reached
+				_alert_max_rework(doc, rework_count, max_rework)
+
+
+def _update_service_costing(doc):
+	"""Calculate and store service costing fields on QC Pass."""
+	if not doc.service_request:
+		return
+
+	# Sum spare parts costs
+	parts = frappe.get_all("Spare Parts Usage",
+		filters={
+			"service_request": doc.service_request,
+			"status": "Active",
+			"part_status": ["in", ["Consumed", "Issued"]],
+		},
+		fields=["sum(purchase_cost * qty_used) as total_cost",
+				"sum(sales_price * qty_used) as total_revenue"])
+
+	parts_cost = flt(parts[0].total_cost) if parts else 0
+	parts_revenue = flt(parts[0].total_revenue) if parts else 0
+	labor_cost = flt(getattr(doc, "labor_cost", 0))
+	total_cost = parts_cost + labor_cost
+	total_revenue = flt(doc.grand_total) or flt(doc.total)
+	margin = total_revenue - total_cost
+	margin_pct = (margin / total_revenue * 100) if total_revenue else 0
+
+	doc.db_set("spare_parts_cost", parts_cost, update_modified=False)
+	doc.db_set("spare_parts_revenue", parts_revenue, update_modified=False)
+	doc.db_set("total_repair_cost", total_cost, update_modified=False)
+	doc.db_set("repair_margin", margin, update_modified=False)
+	doc.db_set("repair_margin_pct", margin_pct, update_modified=False)
+
+
+def _alert_max_rework(doc, rework_count, max_rework):
+	"""Alert managers when max rework limit is reached."""
+	message = _(
+		"⚠️ Service Order {0} has reached {1} rework attempts (limit: {2}). "
+		"Immediate attention required — consider reassigning technician or escalating."
+	).format(doc.name, rework_count, max_rework)
+
+	# Send real-time alert to Service Managers
+	manager_users = frappe.get_all("Has Role",
+		filters={"role": "Service Manager", "parenttype": "User"},
+		pluck="parent")
+
+	for user in manager_users:
+		frappe.publish_realtime("msgprint",
+			{"message": message, "alert": True},
+			user=user)
 
 
 def move_service_order_to_qc_if_ready(doc):
@@ -337,6 +463,7 @@ def _populate_qc_checklist(doc):
 		doc.append("qc_checklist", {
 			"check_name": check.check_name,
 			"is_mandatory": check.is_mandatory,
+			"is_critical": getattr(check, "is_critical", 0),
 			"check_type": check.get("check_type", "Pass-Fail"),
 			"result": "",
 		})

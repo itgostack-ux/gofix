@@ -209,7 +209,8 @@ doc_events = {
 
 scheduler_events = {
 	"daily": [
-		"gofix.gofix_services.doctype.service_request.service_request.flag_unclaimed_devices"
+		"gofix.gofix_services.doctype.service_request.service_request.flag_unclaimed_devices",
+		"gofix.gofix_services.api.expire_pending_estimates",
 	],
 	"cron": {
 		"*/15 * * * *": [

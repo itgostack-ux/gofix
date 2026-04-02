@@ -29,6 +29,7 @@ class ServiceRequest(Document):
 		self.sync_decision_to_status()
 		self._validate_serial_substitution()
 		self._validate_service_discount()
+		self._detect_repeat_complaint()
 
 	def before_save(self):
 		"""Generate barcode if not exists and fetch warehouse details"""
@@ -908,6 +909,46 @@ class ServiceRequest(Document):
 				_("Barcode generated but Serial No creation failed: {0}").format(str(e)),
 				indicator="orange",
 				alert=True
+			)
+
+	# ── Repeat Complaint Detection ───────────────────────────────────
+
+	def _detect_repeat_complaint(self):
+		"""Detect if same device + same issue category was serviced within last 30 days.
+
+		Sets is_repeat_complaint flag and links previous SR for audit trail.
+		"""
+		if not self.serial_no or not self.issue_category:
+			return
+
+		# Only check on new requests or when not already flagged
+		if self.get("is_repeat_complaint"):
+			return
+
+		repeat_window_days = 30
+
+		previous = frappe.db.sql("""
+			SELECT name, service_date, issue_category, decision
+			FROM `tabService Request`
+			WHERE serial_no = %s
+			  AND issue_category = %s
+			  AND name != %s
+			  AND service_date >= DATE_SUB(%s, INTERVAL %s DAY)
+			  AND decision IN ('Completed', 'Delivered', 'Invoiced')
+			ORDER BY service_date DESC
+			LIMIT 1
+		""", (self.serial_no, self.issue_category, self.name or "",
+			  self.service_date or today(), repeat_window_days), as_dict=True)
+
+		if previous:
+			self._set_optional_field("is_repeat_complaint", 1)
+			self._set_optional_field("previous_service_request", previous[0].name)
+			frappe.msgprint(
+				_("⚠️ Repeat Complaint Detected — Same device & issue category was serviced on {0} "
+				  "(SR: {1}). This may indicate incomplete previous repair.").format(
+					previous[0].service_date, previous[0].name),
+				title=_("Repeat Complaint"),
+				indicator="red",
 			)
 
 	# ── Exception Framework: Serial Substitution (#8) ────────────────

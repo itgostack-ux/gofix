@@ -30,11 +30,31 @@
   "pur_line_seq_no",
   "section_break_23",
   "status",
+  "part_status",
+  "part_source",
   "deleted",
   "narration",
   "column_break_27",
   "reason_desc",
-  "moved_to_stock_type"
+  "moved_to_stock_type",
+  "section_break_approval",
+  "requires_approval",
+  "approval_status",
+  "approved_by",
+  "approval_datetime",
+  "approval_remarks",
+  "column_break_approval",
+  "approval_rule",
+  "approval_threshold",
+  "section_break_defective",
+  "is_defective",
+  "defect_type",
+  "defect_description",
+  "column_break_defective",
+  "defective_action",
+  "defective_stock_entry",
+  "section_break_stock_link",
+  "stock_entry"
  ],
  "fields": [
   {
@@ -193,6 +213,24 @@
    "options": "Active\nMoved to Main Stock\nMoved to Dispose Stock\nDeleted"
   },
   {
+   "default": "Reserved",
+   "fieldname": "part_status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Part Status",
+   "options": "Reserved\nIssued\nConsumed\nReturned\nDefective",
+   "description": "Lifecycle: Reserved (before repair) → Issued (during repair) → Consumed (used up) / Returned (unused) / Defective"
+  },
+  {
+   "fieldname": "part_source",
+   "fieldtype": "Select",
+   "in_list_view": 0,
+   "label": "Part Source",
+   "options": "\nStore Stock\nCentral Warehouse\nCross-Store Transfer\nNew Procurement",
+   "description": "Where the part was sourced from"
+  },
+  {
    "default": "0",
    "fieldname": "deleted",
    "fieldtype": "Check",
@@ -219,6 +257,127 @@
    "fieldtype": "Select",
    "label": "Moved To",
    "options": "\nMain Stock\nDispose Stock"
+  },
+  {
+   "fieldname": "section_break_approval",
+   "fieldtype": "Section Break",
+   "label": "Approval",
+   "collapsible": 1,
+   "depends_on": "eval:doc.requires_approval"
+  },
+  {
+   "default": "0",
+   "fieldname": "requires_approval",
+   "fieldtype": "Check",
+   "label": "Requires Approval",
+   "read_only": 1,
+   "description": "Auto-set when part value exceeds threshold or part is a substitute"
+  },
+  {
+   "fieldname": "approval_status",
+   "fieldtype": "Select",
+   "label": "Approval Status",
+   "options": "\nPending\nApproved\nRejected",
+   "depends_on": "eval:doc.requires_approval",
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "approved_by",
+   "fieldtype": "Link",
+   "label": "Approved By",
+   "options": "User",
+   "read_only": 1,
+   "depends_on": "eval:doc.approval_status=='Approved'"
+  },
+  {
+   "fieldname": "approval_datetime",
+   "fieldtype": "Datetime",
+   "label": "Approval Date & Time",
+   "read_only": 1,
+   "depends_on": "eval:doc.approval_status=='Approved'"
+  },
+  {
+   "fieldname": "approval_remarks",
+   "fieldtype": "Small Text",
+   "label": "Approval Remarks"
+  },
+  {
+   "fieldname": "column_break_approval",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "approval_rule",
+   "fieldtype": "Link",
+   "label": "Approval Rule",
+   "options": "GoFix Approval Rule",
+   "read_only": 1,
+   "description": "The rule that triggered approval requirement"
+  },
+  {
+   "fieldname": "approval_threshold",
+   "fieldtype": "Currency",
+   "label": "Approval Threshold",
+   "read_only": 1,
+   "description": "The threshold amount that was exceeded"
+  },
+  {
+   "fieldname": "section_break_defective",
+   "fieldtype": "Section Break",
+   "label": "Defective Part Details",
+   "collapsible": 1,
+   "depends_on": "eval:doc.part_status=='Defective'"
+  },
+  {
+   "default": "0",
+   "fieldname": "is_defective",
+   "fieldtype": "Check",
+   "label": "Is Defective"
+  },
+  {
+   "fieldname": "defect_type",
+   "fieldtype": "Select",
+   "label": "Defect Type",
+   "options": "\nDOA (Dead on Arrival)\nManufacture Defect\nInstallation Damage\nTransit Damage\nOther",
+   "depends_on": "eval:doc.is_defective"
+  },
+  {
+   "fieldname": "defect_description",
+   "fieldtype": "Small Text",
+   "label": "Defect Description",
+   "depends_on": "eval:doc.is_defective"
+  },
+  {
+   "fieldname": "column_break_defective",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "defective_action",
+   "fieldtype": "Select",
+   "label": "Defective Action",
+   "options": "\nReturn to Vendor\nDispose\nSend for Repair",
+   "depends_on": "eval:doc.is_defective"
+  },
+  {
+   "fieldname": "defective_stock_entry",
+   "fieldtype": "Link",
+   "label": "Defective Stock Entry",
+   "options": "Stock Entry",
+   "read_only": 1,
+   "depends_on": "eval:doc.is_defective"
+  },
+  {
+   "fieldname": "section_break_stock_link",
+   "fieldtype": "Section Break",
+   "label": "Stock Entry",
+   "collapsible": 1
+  },
+  {
+   "fieldname": "stock_entry",
+   "fieldtype": "Link",
+   "label": "Stock Entry",
+   "options": "Stock Entry",
+   "read_only": 1,
+   "description": "Stock Entry created on consumption"
   }
  ],
  "index_web_pages_for_search": 1,

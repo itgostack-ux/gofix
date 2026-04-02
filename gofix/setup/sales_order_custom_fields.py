@@ -383,13 +383,298 @@ def create_sales_order_custom_fields():
 				"insert_after": "state_name",
 				"read_only": 1,
 				"description": "GST State Code"
+			},
+
+			# ── Estimate Approval Section ────────────────────────────
+			{
+				"fieldname": "estimate_approval_section",
+				"label": "Estimate Approval",
+				"fieldtype": "Section Break",
+				"insert_after": "state_code",
+				"collapsible": 1,
+				"depends_on": "eval:doc.is_service_order==1"
+			},
+			{
+				"fieldname": "estimate_sent",
+				"label": "Estimate Sent",
+				"fieldtype": "Check",
+				"insert_after": "estimate_approval_section",
+				"default": "0"
+			},
+			{
+				"fieldname": "estimate_sent_datetime",
+				"label": "Estimate Sent At",
+				"fieldtype": "Datetime",
+				"insert_after": "estimate_sent",
+				"read_only": 1
+			},
+			{
+				"fieldname": "estimate_sent_via",
+				"label": "Estimate Sent Via",
+				"fieldtype": "Select",
+				"insert_after": "estimate_sent_datetime",
+				"options": "\nEmail\nWhatsApp\nSMS\nIn-Person",
+				"depends_on": "eval:doc.estimate_sent"
+			},
+			{
+				"fieldname": "estimate_approval_column_break",
+				"fieldtype": "Column Break",
+				"insert_after": "estimate_sent_via"
+			},
+			{
+				"fieldname": "estimate_approval_status",
+				"label": "Est. Approval Status",
+				"fieldtype": "Select",
+				"insert_after": "estimate_approval_column_break",
+				"options": "\nPending\nCustomer Approved\nCustomer Rejected\nExpired",
+				"in_standard_filter": 1,
+				"allow_on_submit": 1
+			},
+			{
+				"fieldname": "estimate_approved_datetime",
+				"label": "Customer Response At",
+				"fieldtype": "Datetime",
+				"insert_after": "estimate_approval_status",
+				"read_only": 1
+			},
+			{
+				"fieldname": "estimate_expiry_date",
+				"label": "Estimate Expiry Date",
+				"fieldtype": "Date",
+				"insert_after": "estimate_approved_datetime",
+				"description": "Auto-expire estimate after this date"
+			},
+			{
+				"fieldname": "estimate_approval_rule",
+				"label": "Approval Rule",
+				"fieldtype": "Link",
+				"options": "GoFix Approval Rule",
+				"insert_after": "estimate_expiry_date",
+				"read_only": 1
+			},
+			{
+				"fieldname": "estimate_customer_remarks",
+				"label": "Customer Remarks",
+				"fieldtype": "Small Text",
+				"insert_after": "estimate_approval_rule"
+			},
+
+			# ── Decision Approval (maker-checker) ───────────────────
+			{
+				"fieldname": "decision_approval_section",
+				"label": "Decision Approval",
+				"fieldtype": "Section Break",
+				"insert_after": "estimate_customer_remarks",
+				"collapsible": 1,
+				"depends_on": "eval:doc.is_service_order==1"
+			},
+			{
+				"fieldname": "decision_approval_status",
+				"label": "Decision Approval Status",
+				"fieldtype": "Select",
+				"insert_after": "decision_approval_section",
+				"options": "\nPending\nApproved\nRejected",
+				"allow_on_submit": 1
+			},
+			{
+				"fieldname": "decision_approved_by",
+				"label": "Decision Approved By",
+				"fieldtype": "Link",
+				"options": "User",
+				"insert_after": "decision_approval_status",
+				"read_only": 1,
+				"allow_on_submit": 1
+			},
+			{
+				"fieldname": "decision_approval_datetime",
+				"label": "Decision Approval At",
+				"fieldtype": "Datetime",
+				"insert_after": "decision_approved_by",
+				"read_only": 1
+			},
+			{
+				"fieldname": "decision_approval_column_break",
+				"fieldtype": "Column Break",
+				"insert_after": "decision_approval_datetime"
+			},
+			{
+				"fieldname": "decision_approval_rule",
+				"label": "Approval Rule",
+				"fieldtype": "Link",
+				"options": "GoFix Approval Rule",
+				"insert_after": "decision_approval_column_break",
+				"read_only": 1
+			},
+			{
+				"fieldname": "decision_approval_remarks",
+				"label": "Approval Remarks",
+				"fieldtype": "Small Text",
+				"insert_after": "decision_approval_rule",
+				"allow_on_submit": 1
+			},
+
+			# ── Delivery Control Section ─────────────────────────────
+			{
+				"fieldname": "delivery_control_section",
+				"label": "Delivery Control",
+				"fieldtype": "Section Break",
+				"insert_after": "decision_approval_remarks",
+				"collapsible": 1,
+				"depends_on": "eval:doc.is_service_order==1"
+			},
+			{
+				"fieldname": "delivery_otp",
+				"label": "Delivery OTP",
+				"fieldtype": "Data",
+				"insert_after": "delivery_control_section",
+				"read_only": 1,
+				"description": "OTP sent to customer for device handover verification"
+			},
+			{
+				"fieldname": "delivery_otp_verified",
+				"label": "OTP Verified",
+				"fieldtype": "Check",
+				"insert_after": "delivery_otp",
+				"read_only": 1,
+				"default": "0"
+			},
+			{
+				"fieldname": "delivery_otp_sent_at",
+				"label": "OTP Sent At",
+				"fieldtype": "Datetime",
+				"insert_after": "delivery_otp_verified",
+				"read_only": 1
+			},
+			{
+				"fieldname": "delivery_control_column_break",
+				"fieldtype": "Column Break",
+				"insert_after": "delivery_otp_sent_at"
+			},
+			{
+				"fieldname": "payment_verified",
+				"label": "Payment Verified",
+				"fieldtype": "Check",
+				"insert_after": "delivery_control_column_break",
+				"default": "0",
+				"description": "Confirm all pending payments are cleared before delivery"
+			},
+			{
+				"fieldname": "accessories_returned",
+				"label": "Accessories Returned",
+				"fieldtype": "Check",
+				"insert_after": "payment_verified",
+				"default": "0",
+				"description": "Confirm all accessories returned to customer"
+			},
+			{
+				"fieldname": "customer_signature",
+				"label": "Customer Signature",
+				"fieldtype": "Signature",
+				"insert_after": "accessories_returned",
+				"description": "Digital signature from customer on device handover"
+			},
+			{
+				"fieldname": "delivery_remarks",
+				"label": "Delivery Remarks",
+				"fieldtype": "Small Text",
+				"insert_after": "customer_signature"
+			},
+
+			# ── Service Costing Section ──────────────────────────────
+			{
+				"fieldname": "service_costing_section",
+				"label": "Service Costing",
+				"fieldtype": "Section Break",
+				"insert_after": "delivery_remarks",
+				"collapsible": 1,
+				"depends_on": "eval:doc.is_service_order==1"
+			},
+			{
+				"fieldname": "spare_parts_cost",
+				"label": "Spare Parts Cost",
+				"fieldtype": "Currency",
+				"insert_after": "service_costing_section",
+				"read_only": 1,
+				"description": "Total purchase cost of spare parts consumed"
+			},
+			{
+				"fieldname": "spare_parts_revenue",
+				"label": "Spare Parts Revenue",
+				"fieldtype": "Currency",
+				"insert_after": "spare_parts_cost",
+				"read_only": 1,
+				"description": "Total sales price of spare parts billed"
+			},
+			{
+				"fieldname": "labor_cost",
+				"label": "Labor Cost",
+				"fieldtype": "Currency",
+				"insert_after": "spare_parts_revenue",
+				"description": "Technician labor cost for this repair"
+			},
+			{
+				"fieldname": "service_costing_column_break",
+				"fieldtype": "Column Break",
+				"insert_after": "labor_cost"
+			},
+			{
+				"fieldname": "total_repair_cost",
+				"label": "Total Repair Cost",
+				"fieldtype": "Currency",
+				"insert_after": "service_costing_column_break",
+				"read_only": 1,
+				"description": "spare_parts_cost + labor_cost"
+			},
+			{
+				"fieldname": "repair_margin",
+				"label": "Repair Margin",
+				"fieldtype": "Currency",
+				"insert_after": "total_repair_cost",
+				"read_only": 1,
+				"description": "Revenue - Cost"
+			},
+			{
+				"fieldname": "repair_margin_pct",
+				"label": "Margin %",
+				"fieldtype": "Percent",
+				"insert_after": "repair_margin",
+				"read_only": 1
+			},
+			{
+				"fieldname": "cost_bearer",
+				"label": "Cost Bearer",
+				"fieldtype": "Select",
+				"insert_after": "repair_margin_pct",
+				"options": "\nCustomer\nCompany (Warranty)\nCompany (Goodwill)\nVendor Claim",
+				"description": "Who bears the repair cost"
+			},
+
+			# ── QC Rework Tracking ───────────────────────────────────
+			{
+				"fieldname": "rework_count",
+				"label": "Rework Count",
+				"fieldtype": "Int",
+				"insert_after": "qc_remarks",
+				"default": "0",
+				"read_only": 1,
+				"allow_on_submit": 1,
+				"description": "Number of times this SO was sent back for rework after QC Fail"
+			},
+			{
+				"fieldname": "max_rework_limit",
+				"label": "Max Rework Limit",
+				"fieldtype": "Int",
+				"insert_after": "rework_count",
+				"default": "3",
+				"allow_on_submit": 1,
+				"description": "Maximum allowed rework attempts before escalation"
 			}
 		]
 	}
-	
+
 	create_custom_fields(custom_fields, update=False)
 	frappe.db.commit()
-	
+
 	print("✅ Sales Order custom fields created successfully")
 
 

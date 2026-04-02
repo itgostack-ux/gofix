@@ -6,6 +6,7 @@
  "field_order": [
   "check_name",
   "is_mandatory",
+  "is_critical",
   "check_type"
  ],
  "fields": [
@@ -22,6 +23,14 @@
    "fieldtype": "Check",
    "in_list_view": 1,
    "label": "Is Mandatory"
+  },
+  {
+   "default": "0",
+   "fieldname": "is_critical",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Is Critical",
+   "description": "Critical checks auto-fail the entire QC if failed"
   },
   {
    "fieldname": "check_type",

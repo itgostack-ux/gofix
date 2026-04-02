@@ -320,6 +320,7 @@ def update_service_request_on_qc(doc, method=None):
 			# Update QC metadata
 			doc.db_set("qc_checked_by", frappe.session.user, update_modified=False)
 			doc.db_set("qc_datetime", frappe.utils.now(), update_modified=False)
+			doc.db_set("qc_pass_datetime", frappe.utils.now(), update_modified=False)
 
 			# Calculate and store service costing
 			_update_service_costing(doc)
@@ -343,7 +344,14 @@ def update_service_request_on_qc(doc, method=None):
 
 
 def _update_service_costing(doc):
-	"""Calculate and store service costing fields on QC Pass."""
+	"""Calculate and store service costing fields on QC Pass.
+	
+	Includes suggested pricing engine:
+	  suggested_labor = sum(actual_hours × technician hourly rate) across Job Assignments
+	  suggested_total = spare_parts_revenue + suggested_labor
+	  price_override = actual_billed - suggested_total
+	Also tracks technician damage cost from defective spare parts.
+	"""
 	if not doc.service_request:
 		return
 
@@ -359,17 +367,63 @@ def _update_service_costing(doc):
 
 	parts_cost = flt(parts[0].total_cost) if parts else 0
 	parts_revenue = flt(parts[0].total_revenue) if parts else 0
-	labor_cost = flt(getattr(doc, "labor_cost", 0))
+
+	# ── Suggested Labor Cost from Job Assignment hours × Employee hourly rate ──
+	job_sheets = frappe.get_all("Job Assignment",
+		filters={
+			"service_order": doc.name,
+			"assignment_status": ["in", ["Completed", "Closed"]],
+		},
+		fields=["actual_hours", "service_engineer"])
+
+	suggested_labor = 0
+	for js in job_sheets:
+		hours = flt(js.actual_hours)
+		hourly_rate = 0
+		if js.service_engineer:
+			# Try to get hourly rate from Employee custom field, fallback to ctc/2080
+			hourly_rate = flt(frappe.db.get_value("Employee", js.service_engineer, "custom_hourly_rate"))
+			if not hourly_rate:
+				ctc = flt(frappe.db.get_value("Employee", js.service_engineer, "ctc"))
+				if ctc:
+					hourly_rate = ctc / 2080  # Annual CTC ÷ working hours/year
+		suggested_labor += hours * hourly_rate
+
+	# Use suggested labor if calculated, otherwise fall back to manual labor_cost
+	labor_cost = flt(getattr(doc, "labor_cost", 0)) or suggested_labor
 	total_cost = parts_cost + labor_cost
 	total_revenue = flt(doc.grand_total) or flt(doc.total)
 	margin = total_revenue - total_cost
 	margin_pct = (margin / total_revenue * 100) if total_revenue else 0
+
+	suggested_total = parts_revenue + suggested_labor
+	price_override = total_revenue - suggested_total if suggested_total else 0
 
 	doc.db_set("spare_parts_cost", parts_cost, update_modified=False)
 	doc.db_set("spare_parts_revenue", parts_revenue, update_modified=False)
 	doc.db_set("total_repair_cost", total_cost, update_modified=False)
 	doc.db_set("repair_margin", margin, update_modified=False)
 	doc.db_set("repair_margin_pct", margin_pct, update_modified=False)
+	doc.db_set("suggested_labor_cost", suggested_labor, update_modified=False)
+	doc.db_set("suggested_total_cost", suggested_total, update_modified=False)
+	doc.db_set("price_override_amount", price_override, update_modified=False)
+	if not getattr(doc, "labor_cost", None) and suggested_labor:
+		doc.db_set("labor_cost", suggested_labor, update_modified=False)
+
+	# ── Technician Damage Cost ──
+	damage = frappe.get_all("Spare Parts Usage",
+		filters={
+			"service_request": doc.service_request,
+			"is_defective": 1,
+			"defect_type": "Installation Damage",
+		},
+		fields=["sum(purchase_cost * qty_used) as damage_cost"])
+	damage_cost = flt(damage[0].damage_cost) if damage else 0
+	doc.db_set("technician_damage_cost", damage_cost, update_modified=False)
+
+	# Track who overrode the price if actual differs from suggested
+	if abs(price_override) > 1 and not getattr(doc, "price_overridden_by", None):
+		doc.db_set("price_overridden_by", frappe.session.user, update_modified=False)
 
 
 def _alert_max_rework(doc, rework_count, max_rework):

@@ -649,6 +649,116 @@ def create_sales_order_custom_fields():
 				"description": "Who bears the repair cost"
 			},
 
+			# ── Suggested Pricing & Override Tracking ────────────────
+			{
+				"fieldname": "suggested_pricing_section",
+				"label": "Suggested Pricing",
+				"fieldtype": "Section Break",
+				"insert_after": "cost_bearer",
+				"collapsible": 1,
+				"depends_on": "eval:doc.is_service_order==1",
+				"description": "Auto-calculated suggested price vs actual billed. Overrides tracked for CEO dashboard."
+			},
+			{
+				"fieldname": "suggested_labor_cost",
+				"label": "Suggested Labor Cost",
+				"fieldtype": "Currency",
+				"insert_after": "suggested_pricing_section",
+				"read_only": 1,
+				"description": "Technician hourly rate × actual hours (from Job Assignment)"
+			},
+			{
+				"fieldname": "suggested_total_cost",
+				"label": "Suggested Total",
+				"fieldtype": "Currency",
+				"insert_after": "suggested_labor_cost",
+				"read_only": 1,
+				"description": "spare_parts_revenue + suggested_labor_cost"
+			},
+			{
+				"fieldname": "suggested_pricing_column_break",
+				"fieldtype": "Column Break",
+				"insert_after": "suggested_total_cost"
+			},
+			{
+				"fieldname": "price_override_amount",
+				"label": "Price Override (Δ)",
+				"fieldtype": "Currency",
+				"insert_after": "suggested_pricing_column_break",
+				"read_only": 1,
+				"description": "Actual billed amount - Suggested total. Positive = charged more, Negative = discount given."
+			},
+			{
+				"fieldname": "price_override_reason",
+				"label": "Override Reason",
+				"fieldtype": "Small Text",
+				"insert_after": "price_override_amount",
+				"allow_on_submit": 1
+			},
+			{
+				"fieldname": "price_overridden_by",
+				"label": "Overridden By",
+				"fieldtype": "Link",
+				"options": "User",
+				"insert_after": "price_override_reason",
+				"read_only": 1,
+				"allow_on_submit": 1
+			},
+			{
+				"fieldname": "technician_damage_cost",
+				"label": "Technician Damage Cost",
+				"fieldtype": "Currency",
+				"insert_after": "price_overridden_by",
+				"read_only": 1,
+				"description": "Total cost of spare parts damaged by technician during repair"
+			},
+
+			# ── Technician Issues (on Service Order) ─────────────────
+			{
+				"fieldname": "technician_issues_section",
+				"label": "Customer vs Technician Issues",
+				"fieldtype": "Section Break",
+				"insert_after": "technician_damage_cost",
+				"collapsible": 1,
+				"depends_on": "eval:doc.is_service_order==1"
+			},
+			{
+				"fieldname": "customer_reported_issues",
+				"label": "Customer Reported Issues",
+				"fieldtype": "Small Text",
+				"insert_after": "technician_issues_section",
+				"read_only": 1,
+				"description": "Copied from Service Request — what customer described"
+			},
+			{
+				"fieldname": "technician_identified_issues",
+				"label": "Technician Identified Issues",
+				"fieldtype": "Small Text",
+				"insert_after": "customer_reported_issues",
+				"allow_on_submit": 1,
+				"description": "What technician found during diagnosis (may differ from customer report)"
+			},
+
+			# ── QC & Delivery Timestamps ─────────────────────────────
+			{
+				"fieldname": "qc_pass_datetime",
+				"label": "QC Passed At",
+				"fieldtype": "Datetime",
+				"insert_after": "qc_datetime",
+				"read_only": 1,
+				"allow_on_submit": 1,
+				"description": "Auto-set when QC status changes to Pass"
+			},
+			{
+				"fieldname": "delivery_ready_datetime",
+				"label": "Delivery Ready At",
+				"fieldtype": "Datetime",
+				"insert_after": "delivered_datetime",
+				"read_only": 1,
+				"allow_on_submit": 1,
+				"description": "Auto-set when all delivery gates pass"
+			},
+
 			# ── QC Rework Tracking ───────────────────────────────────
 			{
 				"fieldname": "rework_count",

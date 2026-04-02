@@ -109,6 +109,7 @@ def complete_delivery(service_order, remarks=None):
 
 	so.db_set("delivered_datetime", now(), update_modified=False)
 	so.db_set("actual_delivery_date", today(), update_modified=False)
+	so.db_set("delivery_ready_datetime", now(), update_modified=False)
 	if remarks:
 		so.db_set("delivery_remarks", remarks, update_modified=False)
 
@@ -336,3 +337,287 @@ def reject_decision(service_order, remarks=None):
 
 	frappe.msgprint(_("Decision rejected"), indicator="orange")
 	return {"message": "Decision rejected"}
+
+
+# ── Advance Refund Flow ──────────────────────────────────────────────
+
+@frappe.whitelist()
+def process_advance_refund(service_request, amount=None, reason=None):
+	"""Refund advance payment when device is not repairable.
+
+	Creates a Payment Entry (refund) and updates the Service Request.
+	If *amount* is omitted, refunds the full advance_amount.
+	"""
+	frappe.only_for(["Sales Manager", "System Manager", "Service Manager"])
+	sr = frappe.get_doc("Service Request", service_request)
+
+	advance = flt(sr.advance_amount)
+	if not advance:
+		frappe.throw(_("No advance payment recorded on this Service Request"))
+
+	refund_amount = flt(amount) or advance
+	if refund_amount > advance:
+		frappe.throw(_("Refund amount (₹{0}) cannot exceed advance (₹{1})").format(
+			refund_amount, advance))
+
+	company = sr.company or frappe.defaults.get_user_default("Company")
+	mode_of_payment = sr.advance_received_via or "Cash"
+
+	# Map payment mode to ERPNext Mode of Payment
+	mop_map = {"Cash": "Cash", "UPI": "Cash", "Card": "Cash", "Bank Transfer": "Bank Draft"}
+	erp_mode = mop_map.get(mode_of_payment, "Cash")
+
+	# Get default accounts
+	company_account = frappe.db.get_value("Company", company, "default_cash_account") or \
+		frappe.db.get_value("Company", company, "default_bank_account")
+
+	if not company_account:
+		frappe.throw(_("Please set default Cash or Bank account for company {0}").format(company))
+
+	pe = frappe.new_doc("Payment Entry")
+	pe.payment_type = "Pay"
+	pe.party_type = "Customer"
+	pe.party = sr.customer
+	pe.company = company
+	pe.paid_from = company_account
+	pe.paid_to = company_account
+	pe.paid_amount = refund_amount
+	pe.received_amount = refund_amount
+	pe.reference_no = f"Refund-{sr.name}"
+	pe.reference_date = today()
+	pe.remarks = f"Advance refund for Service Request {sr.name}. Reason: {reason or 'Not Repairable'}"
+
+	pe.insert(ignore_permissions=True)
+
+	# Update Service Request
+	sr.db_set("advance_refund_amount", refund_amount, update_modified=False)
+	sr.db_set("advance_refund_reason", reason or "Not Repairable", update_modified=False)
+	sr.db_set("advance_refund_date", today(), update_modified=False)
+	sr.db_set("advance_refund_entry", pe.name, update_modified=False)
+
+	frappe.msgprint(
+		_("Advance refund of ₹{0} created: {1}").format(refund_amount, pe.name),
+		indicator="green")
+
+	return {"payment_entry": pe.name, "amount": refund_amount}
+
+
+# ── Inter-Store Service Transfer ─────────────────────────────────────
+
+@frappe.whitelist()
+def create_service_transfer(service_request, to_store, reason=None):
+	"""Transfer a device from source store to a zone service center for repair.
+
+	Updates Service Request transfer tracking fields. The device physically
+	moves via a Stock Entry (Material Transfer) created separately.
+	"""
+	frappe.only_for(["Sales Manager", "System Manager", "Service Manager", "Store Manager"])
+	sr = frappe.get_doc("Service Request", service_request)
+
+	if sr.transfer_status in ("In Transit", "Received at Service Center"):
+		frappe.throw(_("Device is already in transfer (status: {0})").format(sr.transfer_status))
+
+	if not to_store:
+		frappe.throw(_("Destination store/service center is required"))
+
+	sr.db_set("transferred_to_store", to_store, update_modified=True)
+	sr.db_set("transfer_status", "In Transit", update_modified=False)
+	sr.db_set("transfer_date", today(), update_modified=False)
+	sr.db_set("transfer_reason", reason or "", update_modified=False)
+
+	# Update current location
+	sr.db_set("current_location", None, update_modified=False)  # In transit
+
+	# Also update SO current_location if exists
+	if sr.service_order:
+		frappe.db.set_value("Sales Order", sr.service_order,
+			"current_location", None, update_modified=False)
+
+	frappe.msgprint(
+		_("Device transfer initiated: {0} → {1}").format(sr.source_warehouse, to_store),
+		indicator="blue")
+
+	return {"status": "In Transit", "from": sr.source_warehouse, "to": to_store}
+
+
+@frappe.whitelist()
+def receive_service_transfer(service_request):
+	"""Mark device as received at the destination service center."""
+	frappe.only_for(["Sales Manager", "System Manager", "Service Manager", "Store Manager"])
+	sr = frappe.get_doc("Service Request", service_request)
+
+	if sr.transfer_status != "In Transit":
+		frappe.throw(_("Device is not in transit (status: {0})").format(sr.transfer_status))
+
+	sr.db_set("transfer_status", "Received at Service Center", update_modified=True)
+	sr.db_set("transfer_received_date", today(), update_modified=False)
+	sr.db_set("current_location", sr.transferred_to_store, update_modified=False)
+
+	if sr.service_order:
+		frappe.db.set_value("Sales Order", sr.service_order,
+			"current_location", sr.transferred_to_store, update_modified=False)
+
+	frappe.msgprint(_("Device received at service center"), indicator="green")
+	return {"status": "Received at Service Center"}
+
+
+@frappe.whitelist()
+def return_service_transfer(service_request):
+	"""Initiate return of device from service center back to origin store."""
+	frappe.only_for(["Sales Manager", "System Manager", "Service Manager", "Store Manager"])
+	sr = frappe.get_doc("Service Request", service_request)
+
+	if sr.transfer_status not in ("Received at Service Center", "Repair Complete"):
+		frappe.throw(_("Device must be at service center to initiate return (status: {0})").format(
+			sr.transfer_status))
+
+	sr.db_set("transfer_status", "Return In Transit", update_modified=True)
+	sr.db_set("current_location", None, update_modified=False)
+
+	frappe.msgprint(_("Return transfer initiated"), indicator="blue")
+	return {"status": "Return In Transit"}
+
+
+@frappe.whitelist()
+def complete_service_transfer_return(service_request):
+	"""Mark device as returned to the origin store."""
+	frappe.only_for(["Sales Manager", "System Manager", "Service Manager", "Store Manager"])
+	sr = frappe.get_doc("Service Request", service_request)
+
+	if sr.transfer_status != "Return In Transit":
+		frappe.throw(_("Device is not in return transit (status: {0})").format(sr.transfer_status))
+
+	sr.db_set("transfer_status", "Returned to Store", update_modified=True)
+	sr.db_set("transfer_return_date", today(), update_modified=False)
+	sr.db_set("current_location", sr.source_warehouse, update_modified=False)
+
+	if sr.service_order:
+		frappe.db.set_value("Sales Order", sr.service_order,
+			"current_location", sr.source_warehouse, update_modified=False)
+
+	frappe.msgprint(_("Device returned to origin store"), indicator="green")
+	return {"status": "Returned to Store"}
+
+
+# ── Pickup & Outstation Tracking ─────────────────────────────────────
+
+@frappe.whitelist()
+def schedule_pickup(service_request, address, scheduled_datetime, agent=None):
+	"""Schedule a device pickup for outstation/courier mode service requests."""
+	frappe.only_for(["Sales Manager", "System Manager", "Service Manager", "Sales User"])
+	sr = frappe.get_doc("Service Request", service_request)
+
+	sr.db_set("pickup_address", address, update_modified=True)
+	sr.db_set("pickup_scheduled_datetime", scheduled_datetime, update_modified=False)
+	if agent:
+		sr.db_set("pickup_agent", agent, update_modified=False)
+
+	frappe.msgprint(_("Pickup scheduled"), indicator="blue")
+	return {"message": "Pickup scheduled", "scheduled": scheduled_datetime}
+
+
+@frappe.whitelist()
+def complete_pickup(service_request):
+	"""Mark device pickup as completed."""
+	frappe.only_for(["Sales Manager", "System Manager", "Service Manager", "Sales User"])
+	sr = frappe.get_doc("Service Request", service_request)
+
+	sr.db_set("pickup_completed_datetime", now(), update_modified=True)
+	frappe.msgprint(_("Pickup completed"), indicator="green")
+	return {"message": "Pickup completed", "completed_at": now()}
+
+
+@frappe.whitelist()
+def dispatch_return(service_request, courier_name=None, tracking_number=None):
+	"""Dispatch repaired device back to customer via courier."""
+	frappe.only_for(["Sales Manager", "System Manager", "Service Manager", "Sales User"])
+	sr = frappe.get_doc("Service Request", service_request)
+
+	sr.db_set("return_courier_name", courier_name or "", update_modified=True)
+	sr.db_set("return_tracking_number", tracking_number or "", update_modified=False)
+	sr.db_set("return_dispatched_date", today(), update_modified=False)
+
+	frappe.msgprint(_("Device dispatched to customer"), indicator="blue")
+	return {"message": "Dispatched", "tracking": tracking_number}
+
+
+@frappe.whitelist()
+def confirm_return_delivery(service_request):
+	"""Confirm customer received the returned device."""
+	frappe.only_for(["Sales Manager", "System Manager", "Service Manager", "Sales User"])
+	sr = frappe.get_doc("Service Request", service_request)
+
+	sr.db_set("return_delivered_date", today(), update_modified=True)
+	sr.db_set("status", "Delivered", update_modified=False)
+	sr.db_set("decision", "Delivered", update_modified=False)
+
+	frappe.msgprint(_("Return delivery confirmed"), indicator="green")
+	return {"message": "Delivered"}
+
+
+# ── Suggested Price Calculation ──────────────────────────────────────
+
+@frappe.whitelist()
+def calculate_suggested_price(service_order):
+	"""Calculate suggested repair price from technician hours and spare parts.
+
+	Returns breakdown:
+	  spare_parts_revenue, suggested_labor_cost, suggested_total,
+	  actual_billed, price_override
+	"""
+	so = frappe.get_doc("Sales Order", service_order)
+	if not so.is_service_order:
+		frappe.throw(_("Not a Service Order"))
+
+	sr_name = so.service_request
+
+	# Spare parts revenue
+	parts = frappe.get_all("Spare Parts Usage",
+		filters={
+			"service_request": sr_name,
+			"status": "Active",
+			"part_status": ["in", ["Consumed", "Issued"]],
+		},
+		fields=["sum(sales_price * qty_used) as total_revenue"])
+	parts_revenue = flt(parts[0].total_revenue) if parts else 0
+
+	# Labor from job sheets
+	job_sheets = frappe.get_all("Job Assignment",
+		filters={"service_order": service_order},
+		fields=["actual_hours", "service_engineer", "service_engineer as engineer_name"])
+
+	labor_details = []
+	suggested_labor = 0
+	for js in job_sheets:
+		hours = flt(js.actual_hours)
+		hourly_rate = 0
+		engineer_name = js.engineer_name or "Unassigned"
+		if js.service_engineer:
+			hourly_rate = flt(frappe.db.get_value("Employee", js.service_engineer, "custom_hourly_rate"))
+			if not hourly_rate:
+				ctc = flt(frappe.db.get_value("Employee", js.service_engineer, "ctc"))
+				if ctc:
+					hourly_rate = ctc / 2080
+			engineer_name = frappe.db.get_value("Employee", js.service_engineer, "employee_name") or engineer_name
+
+		line_total = hours * hourly_rate
+		suggested_labor += line_total
+		labor_details.append({
+			"engineer": engineer_name,
+			"hours": hours,
+			"hourly_rate": hourly_rate,
+			"line_total": line_total,
+		})
+
+	suggested_total = parts_revenue + suggested_labor
+	actual_billed = flt(so.grand_total) or flt(so.total)
+	price_override = actual_billed - suggested_total if suggested_total else 0
+
+	return {
+		"spare_parts_revenue": parts_revenue,
+		"suggested_labor_cost": suggested_labor,
+		"suggested_total": suggested_total,
+		"actual_billed": actual_billed,
+		"price_override": price_override,
+		"labor_details": labor_details,
+	}

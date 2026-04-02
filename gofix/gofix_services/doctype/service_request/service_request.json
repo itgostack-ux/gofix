@@ -106,13 +106,53 @@
   "previous_service_request",
   "column_break_repeat",
   "repeat_complaint_count",
+  "section_technician_findings",
+  "technician_identified_issues",
+  "section_advance_payment",
+  "advance_amount",
+  "advance_received_via",
+  "column_break_advance",
+  "advance_payment_entry",
+  "advance_refund_amount",
+  "advance_refund_reason",
+  "advance_refund_date",
+  "advance_refund_entry",
+  "section_pickup_delivery",
+  "pickup_address",
+  "pickup_scheduled_datetime",
+  "pickup_completed_datetime",
+  "pickup_agent",
+  "column_break_pickup",
+  "return_courier_name",
+  "return_tracking_number",
+  "return_dispatched_date",
+  "return_delivered_date",
+  "section_service_transfer",
+  "transferred_to_store",
+  "transfer_status",
+  "transfer_date",
+  "column_break_transfer",
+  "transfer_received_date",
+  "transfer_return_date",
+  "transfer_reason",
+  "section_assignment",
+  "service_engineer",
+  "assigned_to_user",
+  "column_break_assignment",
+  "assigned_to_team",
   "section_repair_tracking",
+  "actual_completion_date",
+  "service_invoice",
+  "stock_entry",
   "data_backup_disclaimer",
   "unclaimed_flag",
   "column_break_repair_track",
   "unclaimed_date",
   "repair_warranty_days",
   "repair_warranty_expiry",
+  "total_estimated_cost",
+  "total_spares_used_count",
+  "billable_spares_count",
   "section_remarks",
   "remarks",
   "section_status_log",
@@ -602,10 +642,257 @@
    "read_only": 1
   },
   {
+   "fieldname": "section_technician_findings",
+   "fieldtype": "Section Break",
+   "label": "Technician Findings",
+   "collapsible": 1,
+   "description": "Issues identified by technician during diagnosis (may differ from customer report)"
+  },
+  {
+   "fieldname": "technician_identified_issues",
+   "fieldtype": "Text Editor",
+   "label": "Issues Identified By Technician",
+   "allow_on_submit": 1,
+   "description": "Technician fills this during diagnosis. Compare with Issue Specified By Customer."
+  },
+  {
+   "fieldname": "section_advance_payment",
+   "fieldtype": "Section Break",
+   "label": "Advance Payment",
+   "collapsible": 1
+  },
+  {
+   "fieldname": "advance_amount",
+   "fieldtype": "Currency",
+   "label": "Advance Amount",
+   "options": "Company:company:default_currency",
+   "allow_on_submit": 1,
+   "description": "Advance collected from customer at intake"
+  },
+  {
+   "fieldname": "advance_received_via",
+   "fieldtype": "Select",
+   "label": "Advance Received Via",
+   "options": "\nCash\nUPI\nCard\nBank Transfer",
+   "depends_on": "eval:doc.advance_amount > 0",
+   "allow_on_submit": 1
+  },
+  {
+   "fieldname": "column_break_advance",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "advance_payment_entry",
+   "fieldtype": "Link",
+   "label": "Advance Payment Entry",
+   "options": "Payment Entry",
+   "read_only": 1,
+   "allow_on_submit": 1
+  },
+  {
+   "fieldname": "advance_refund_amount",
+   "fieldtype": "Currency",
+   "label": "Refund Amount",
+   "options": "Company:company:default_currency",
+   "read_only": 1,
+   "allow_on_submit": 1,
+   "description": "Amount refunded when repair not possible"
+  },
+  {
+   "fieldname": "advance_refund_reason",
+   "fieldtype": "Small Text",
+   "label": "Refund Reason",
+   "read_only": 1,
+   "allow_on_submit": 1
+  },
+  {
+   "fieldname": "advance_refund_date",
+   "fieldtype": "Date",
+   "label": "Refund Date",
+   "read_only": 1,
+   "allow_on_submit": 1
+  },
+  {
+   "fieldname": "advance_refund_entry",
+   "fieldtype": "Link",
+   "label": "Refund Payment Entry",
+   "options": "Payment Entry",
+   "read_only": 1,
+   "allow_on_submit": 1
+  },
+  {
+   "fieldname": "section_pickup_delivery",
+   "fieldtype": "Section Break",
+   "label": "Pickup & Delivery Tracking",
+   "collapsible": 1,
+   "depends_on": "eval:['Pickup','Courier','On-site'].includes(doc.mode_of_service)"
+  },
+  {
+   "fieldname": "pickup_address",
+   "fieldtype": "Small Text",
+   "label": "Pickup Address",
+   "depends_on": "eval:doc.mode_of_service=='Pickup' || doc.mode_of_service=='On-site'"
+  },
+  {
+   "fieldname": "pickup_scheduled_datetime",
+   "fieldtype": "Datetime",
+   "label": "Pickup Scheduled",
+   "allow_on_submit": 1
+  },
+  {
+   "fieldname": "pickup_completed_datetime",
+   "fieldtype": "Datetime",
+   "label": "Pickup Completed",
+   "read_only": 1,
+   "allow_on_submit": 1
+  },
+  {
+   "fieldname": "pickup_agent",
+   "fieldtype": "Data",
+   "label": "Pickup Agent",
+   "allow_on_submit": 1
+  },
+  {
+   "fieldname": "column_break_pickup",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "return_courier_name",
+   "fieldtype": "Data",
+   "label": "Return Courier",
+   "allow_on_submit": 1
+  },
+  {
+   "fieldname": "return_tracking_number",
+   "fieldtype": "Data",
+   "label": "Return Tracking Number",
+   "allow_on_submit": 1
+  },
+  {
+   "fieldname": "return_dispatched_date",
+   "fieldtype": "Date",
+   "label": "Return Dispatched Date",
+   "allow_on_submit": 1
+  },
+  {
+   "fieldname": "return_delivered_date",
+   "fieldtype": "Date",
+   "label": "Return Delivered Date",
+   "allow_on_submit": 1
+  },
+  {
+   "fieldname": "section_service_transfer",
+   "fieldtype": "Section Break",
+   "label": "Inter-Store Transfer",
+   "collapsible": 1,
+   "description": "Track device transfers between stores and zone service centers"
+  },
+  {
+   "fieldname": "transferred_to_store",
+   "fieldtype": "Link",
+   "label": "Transferred To",
+   "options": "Warehouse",
+   "allow_on_submit": 1,
+   "description": "Destination store or zone service center"
+  },
+  {
+   "fieldname": "transfer_status",
+   "fieldtype": "Select",
+   "label": "Transfer Status",
+   "options": "\nNot Transferred\nIn Transit\nReceived at Service Center\nRepair Complete\nReturn In Transit\nReturned to Store",
+   "allow_on_submit": 1,
+   "default": ""
+  },
+  {
+   "fieldname": "transfer_date",
+   "fieldtype": "Date",
+   "label": "Transfer Date",
+   "allow_on_submit": 1
+  },
+  {
+   "fieldname": "column_break_transfer",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "transfer_received_date",
+   "fieldtype": "Date",
+   "label": "Received At Service Center",
+   "allow_on_submit": 1
+  },
+  {
+   "fieldname": "transfer_return_date",
+   "fieldtype": "Date",
+   "label": "Returned To Store",
+   "allow_on_submit": 1
+  },
+  {
+   "fieldname": "transfer_reason",
+   "fieldtype": "Small Text",
+   "label": "Transfer Reason",
+   "allow_on_submit": 1
+  },
+  {
+   "fieldname": "section_assignment",
+   "fieldtype": "Section Break",
+   "label": "Assignment",
+   "collapsible": 1
+  },
+  {
+   "fieldname": "service_engineer",
+   "fieldtype": "Link",
+   "label": "Service Engineer",
+   "options": "Employee",
+   "allow_on_submit": 1,
+   "read_only": 1,
+   "description": "Auto-populated from Job Assignment"
+  },
+  {
+   "fieldname": "assigned_to_user",
+   "fieldtype": "Link",
+   "label": "Assigned To User",
+   "options": "User",
+   "allow_on_submit": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_assignment",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "assigned_to_team",
+   "fieldtype": "Data",
+   "label": "Assigned To Team",
+   "allow_on_submit": 1,
+   "read_only": 1
+  },
+  {
    "fieldname": "section_repair_tracking",
    "fieldtype": "Section Break",
    "label": "Repair Tracking",
    "collapsible": 1
+  },
+  {
+   "fieldname": "actual_completion_date",
+   "fieldtype": "Date",
+   "label": "Actual Completion Date",
+   "read_only": 1,
+   "allow_on_submit": 1
+  },
+  {
+   "fieldname": "service_invoice",
+   "fieldtype": "Link",
+   "label": "Service Invoice",
+   "options": "Sales Invoice",
+   "read_only": 1,
+   "allow_on_submit": 1
+  },
+  {
+   "fieldname": "stock_entry",
+   "fieldtype": "Link",
+   "label": "Stock Entry",
+   "options": "Stock Entry",
+   "read_only": 1,
+   "allow_on_submit": 1
   },
   {
    "default": "0",
@@ -644,6 +931,27 @@
    "fieldname": "repair_warranty_expiry",
    "fieldtype": "Date",
    "label": "Repair Warranty Expiry",
+   "read_only": 1,
+   "allow_on_submit": 1
+  },
+  {
+   "fieldname": "total_estimated_cost",
+   "fieldtype": "Currency",
+   "label": "Total Estimated Cost",
+   "options": "Company:company:default_currency",
+   "read_only": 1
+  },
+  {
+   "fieldname": "total_spares_used_count",
+   "fieldtype": "Int",
+   "label": "Total Spares Used",
+   "read_only": 1,
+   "allow_on_submit": 1
+  },
+  {
+   "fieldname": "billable_spares_count",
+   "fieldtype": "Int",
+   "label": "Billable Spares",
    "read_only": 1,
    "allow_on_submit": 1
   },

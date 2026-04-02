@@ -441,6 +441,9 @@ class ServiceRequest(Document):
 		so.issue_category = self.issue_category
 		so.issue_description = self.issue_description
 		
+		# Copy customer-reported issues for comparison with technician findings
+		so.customer_reported_issues = self.issue_description
+		
 		# Copy Security Information
 		so.password_pattern = self.password if self.password else ""
 		if self.pattern:

@@ -161,15 +161,14 @@ after_migrate = [
 
 # Permissions
 # -----------
-# Permissions evaluated in scripted ways
+# Company-wise visibility for service data
+permission_query_conditions = {
+	"Service Request": "gofix.security.get_service_request_query",
+}
 
-# permission_query_conditions = {
-# 	"Event": "frappe.desk.doctype.event.event.get_permission_query_conditions",
-# }
-#
-# has_permission = {
-# 	"Event": "frappe.desk.doctype.event.event.has_permission",
-# }
+has_permission = {
+	"Service Request": "gofix.security.has_service_request_permission",
+}
 
 # DocType Class
 # ---------------

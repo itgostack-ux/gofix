@@ -7,7 +7,14 @@ from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 
 def create_sales_order_custom_fields():
 	"""Create custom fields in Sales Order for Service Order functionality"""
-	
+	# Check if Service Request DocType exists before creating Link fields to it.
+	# During install/migrate the DocType module may not be synced yet.
+	if not frappe.db.table_exists("tabService Request") and not frappe.db.exists("DocType", "Service Request"):
+		frappe.logger("gofix").info(
+			"Skipping Sales Order custom fields: Service Request DocType not yet available"
+		)
+		return
+
 	custom_fields = {
 		"Sales Order": [
 			# Service Request Reference Section
@@ -782,7 +789,7 @@ def create_sales_order_custom_fields():
 		]
 	}
 
-	create_custom_fields(custom_fields, update=False)
+	create_custom_fields(custom_fields, ignore_validate=True, update=False)
 	frappe.db.commit()
 
 	print("✅ Sales Order custom fields created successfully")

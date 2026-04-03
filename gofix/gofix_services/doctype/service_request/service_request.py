@@ -1143,8 +1143,8 @@ def get_customer_details(customer):
 		return {}
 	
 	result = {}
+	frappe.has_permission("Customer", "read", customer, throw=True)
 	
-	# Get customer with ignore_permissions since we're just reading data
 	customer_doc = frappe.get_doc("Customer", customer)
 	result['customer_name'] = customer_doc.customer_name
 	result['gstin'] = customer_doc.gstin if hasattr(customer_doc, 'gstin') else None
@@ -1171,6 +1171,7 @@ def get_customer_details(customer):
 def get_open_requests(name):
 	"""Get open service requests for the same customer"""
 	doc = frappe.get_doc("Service Request", name)
+	doc.check_permission("read")
 	
 	if not doc.customer:
 		return []
@@ -1192,6 +1193,7 @@ def get_open_requests(name):
 def generate_barcode_manual(name):
 	"""Manually generate barcode for a service request"""
 	doc = frappe.get_doc("Service Request", name)
+	doc.check_permission("write")
 	
 	# Temporarily reset the flag to allow regeneration
 	doc.is_barcode_generated = 0
@@ -1211,6 +1213,7 @@ def accept_service_request(service_request):
 	"""
 	frappe.only_for(["Sales Manager", "System Manager", "Service Manager"])
 	doc = frappe.get_doc("Service Request", service_request)
+	doc.check_permission("write")
 	
 	# Check if already accepted
 	if doc.decision == "Accepted":
@@ -1241,6 +1244,7 @@ def reject_service_request(service_request, rejection_reason):
 	"""
 	frappe.only_for(["Sales Manager", "System Manager", "Service Manager"])
 	doc = frappe.get_doc("Service Request", service_request)
+	doc.check_permission("write")
 	
 	# Update decision using db_set to work with submitted docs
 	doc.db_set("decision", "Rejected", update_modified=True)
@@ -1254,6 +1258,7 @@ def reject_service_request(service_request, rejection_reason):
 def complete_service_request(service_request, completion_date=None):
 	"""Mark a Service Request completed and create monetization artifacts."""
 	doc = frappe.get_doc("Service Request", service_request)
+	doc.check_permission("write")
 	updates = {}
 
 	if doc.status != "Completed":

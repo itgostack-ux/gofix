@@ -3,7 +3,7 @@
 
 import frappe
 from frappe import _
-from frappe.utils import flt
+from frappe.utils import flt, now_datetime, time_diff_in_hours
 
 
 def execute(filters=None):
@@ -63,10 +63,40 @@ def get_data(filters):
 
 	data = frappe.db.sql(query, params, as_dict=True)
 
-	# Count SLA breaches per warehouse (approximate via flagged SRs)
-	for row in data:
-		# SLA "breached" = in-progress SRs older than their SLA target
-		row.sla_breached = 0  # placeholder — real count would need SLA rule lookup
+	# Count SLA breaches per warehouse
+	from gofix.gofix_services.doctype.gofix_sla_rule.gofix_sla_rule import get_sla_rule
+
+	warehouses = [row.warehouse for row in data]
+	if warehouses:
+		open_srs = frappe.get_all("Service Request",
+			filters={
+				"decision": ["in", ["Accepted", "In Service"]],
+				"docstatus": ["<", 2],
+				"source_warehouse": ["in", warehouses],
+			},
+			fields=["source_warehouse", "issue_category", "priority",
+					"received_datetime", "warranty_status", "warranty_plan", "company"])
+
+		breach_map = {}
+		now = now_datetime()
+		for sr in open_srs:
+			wh = sr.source_warehouse or "No Warehouse"
+			if not sr.received_datetime:
+				continue
+			rule = get_sla_rule(
+				sr.issue_category, sr.priority,
+				company=sr.company,
+				warranty_plan=sr.warranty_plan,
+				warranty_status=sr.warranty_status,
+			)
+			if rule and time_diff_in_hours(now, sr.received_datetime) > (rule.target_hours or 0):
+				breach_map[wh] = breach_map.get(wh, 0) + 1
+
+		for row in data:
+			row.sla_breached = breach_map.get(row.warehouse, 0)
+	else:
+		for row in data:
+			row.sla_breached = 0
 
 	return data
 

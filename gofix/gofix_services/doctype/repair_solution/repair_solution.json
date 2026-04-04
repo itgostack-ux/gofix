@@ -1,0 +1,149 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "autoname": "field:solution_name",
+ "creation": "2026-04-04 12:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "solution_name",
+  "issue_category",
+  "column_break_1",
+  "solution_code",
+  "is_active",
+  "section_break_details",
+  "description",
+  "column_break_2",
+  "estimated_minutes",
+  "requires_spare",
+  "section_break_skill",
+  "minimum_grade",
+  "skill_level"
+ ],
+ "fields": [
+  {
+   "fieldname": "solution_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Solution Name",
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "fieldname": "issue_category",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Issue Category",
+   "options": "Issue Category",
+   "reqd": 1
+  },
+  {
+   "fieldname": "column_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "solution_code",
+   "fieldtype": "Data",
+   "label": "Solution Code",
+   "description": "Short code for invoicing/reporting (e.g. SCR-REPL, BAT-REPL)"
+  },
+  {
+   "default": "1",
+   "fieldname": "is_active",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Is Active"
+  },
+  {
+   "fieldname": "section_break_details",
+   "fieldtype": "Section Break",
+   "label": "Details"
+  },
+  {
+   "fieldname": "description",
+   "fieldtype": "Small Text",
+   "label": "Description"
+  },
+  {
+   "fieldname": "column_break_2",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "30",
+   "fieldname": "estimated_minutes",
+   "fieldtype": "Int",
+   "label": "Estimated Minutes"
+  },
+  {
+   "default": "0",
+   "fieldname": "requires_spare",
+   "fieldtype": "Check",
+   "label": "Requires Spare Part",
+   "description": "If checked, spare part must be attached when this solution is used"
+  },
+  {
+   "fieldname": "section_break_skill",
+   "fieldtype": "Section Break",
+   "label": "Skill Requirement"
+  },
+  {
+   "fieldname": "minimum_grade",
+   "fieldtype": "Link",
+   "label": "Minimum Technician Grade",
+   "options": "Technician Grade",
+   "description": "Minimum grade required to perform this solution"
+  },
+  {
+   "default": "Basic",
+   "fieldname": "skill_level",
+   "fieldtype": "Select",
+   "label": "Skill Level",
+   "options": "Basic\nIntermediate\nAdvanced\nExpert"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-04-04 12:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "GoFix Services",
+ "name": "Repair Solution",
+ "naming_rule": "By fieldname",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Manufacturing Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "read": 1,
+   "role": "Manufacturing User"
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "solution_name",
+ "track_changes": 1
+}

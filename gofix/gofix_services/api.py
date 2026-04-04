@@ -621,3 +621,157 @@ def calculate_suggested_price(service_order):
 		"price_override": price_override,
 		"labor_details": labor_details,
 	}
+
+
+# ── Issue → Solution → Spare Cascade APIs ────────────────────────────
+
+@frappe.whitelist()
+def get_solutions_for_issues(issue_categories):
+	"""Return active Repair Solutions for the given issue categories.
+	Args:
+		issue_categories: JSON list of Issue Category names
+	"""
+	import json
+	if isinstance(issue_categories, str):
+		issue_categories = json.loads(issue_categories)
+
+	if not issue_categories:
+		return []
+
+	return frappe.get_all("Repair Solution",
+		filters={
+			"issue_category": ["in", issue_categories],
+			"is_active": 1
+		},
+		fields=["name", "solution_name", "issue_category", "solution_code",
+				"estimated_minutes", "requires_spare", "skill_level", "minimum_grade"],
+		order_by="issue_category, solution_name"
+	)
+
+
+@frappe.whitelist()
+def get_spares_for_solution(repair_solution):
+	"""Return active mapped spares for a given Repair Solution."""
+	if not repair_solution:
+		return []
+
+	return frappe.get_all("Solution Spare Mapping",
+		filters={
+			"repair_solution": repair_solution,
+			"is_active": 1
+		},
+		fields=["name", "spare_item", "item_name", "default_qty", "uom", "is_mandatory"],
+		order_by="is_mandatory desc, item_name"
+	)
+
+
+@frappe.whitelist()
+def get_spares_for_solutions(repair_solutions):
+	"""Return active mapped spares for multiple Repair Solutions.
+	Args:
+		repair_solutions: JSON list of Repair Solution names
+	"""
+	import json
+	if isinstance(repair_solutions, str):
+		repair_solutions = json.loads(repair_solutions)
+
+	if not repair_solutions:
+		return []
+
+	return frappe.get_all("Solution Spare Mapping",
+		filters={
+			"repair_solution": ["in", repair_solutions],
+			"is_active": 1
+		},
+		fields=["name", "repair_solution", "spare_item", "item_name",
+				"default_qty", "uom", "is_mandatory"],
+		order_by="repair_solution, is_mandatory desc, item_name"
+	)
+
+
+@frappe.whitelist()
+def get_eligible_technicians(issue_categories, warehouse=None):
+	"""Return technicians (Employees) whose Technician Grade covers all given issues.
+	Args:
+		issue_categories: JSON list of Issue Category names
+		warehouse: optional warehouse to filter by default_shift location
+	"""
+	import json
+	if isinstance(issue_categories, str):
+		issue_categories = json.loads(issue_categories)
+
+	if not issue_categories:
+		return []
+
+	# Get minimum skill requirements from Repair Solution masters
+	required_skills = {}
+	solutions = frappe.get_all("Repair Solution",
+		filters={"issue_category": ["in", issue_categories], "is_active": 1},
+		fields=["issue_category", "skill_level"],
+		group_by="issue_category"
+	)
+	skill_order = {"Basic": 1, "Intermediate": 2, "Advanced": 3, "Expert": 4}
+	for s in solutions:
+		cat = s.issue_category
+		level = skill_order.get(s.skill_level, 1)
+		if cat not in required_skills or level > required_skills[cat]:
+			required_skills[cat] = level
+
+	# Find all grades whose skills cover the required categories at the right level
+	grades = frappe.get_all("Technician Grade", filters={"is_active": 1}, fields=["name", "grade_level"])
+	eligible_grades = []
+	for grade in grades:
+		skills = frappe.get_all("Technician Skill",
+			filters={"parent": grade.name},
+			fields=["issue_category", "max_skill_level"]
+		)
+		skill_map = {s.issue_category: skill_order.get(s.max_skill_level, 1) for s in skills}
+		covers_all = True
+		for cat, req_level in required_skills.items():
+			if cat not in skill_map or skill_map[cat] < req_level:
+				covers_all = False
+				break
+		if covers_all:
+			eligible_grades.append(grade.name)
+
+	if not eligible_grades:
+		return []
+
+	# Find employees with these grades
+	filters = {"technician_grade": ["in", eligible_grades], "status": "Active"}
+	if warehouse:
+		filters["default_shift"] = warehouse  # or use a custom field for store assignment
+
+	return frappe.get_all("Employee",
+		filters=filters,
+		fields=["name", "employee_name", "technician_grade", "designation"],
+		order_by="employee_name"
+	)
+
+
+@frappe.whitelist()
+def get_mapped_spare_items(doctype, txt, searchfield, start, page_len, filters):
+	"""Server-side query for Link field: returns Items mapped to a Repair Solution.
+	Used as 'query' in spare_item get_query on SR Spare Line.
+	"""
+	repair_solution = filters.get("repair_solution")
+	if not repair_solution:
+		return []
+
+	mapped = frappe.get_all("Solution Spare Mapping",
+		filters={"repair_solution": repair_solution, "is_active": 1},
+		pluck="spare_item"
+	)
+	if not mapped:
+		return []
+
+	return frappe.get_all("Item",
+		filters=[
+			["name", "in", mapped],
+			["name", "like", f"%{txt}%"] if txt else ["name", "in", mapped]
+		],
+		fields=["name", "item_name"],
+		as_list=True,
+		limit_page_length=page_len,
+		limit_start=start
+	)

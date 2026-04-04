@@ -123,6 +123,9 @@ frappe.ui.form.on('Service Request', {
 				};
 			}
 		});
+
+		// ── Issue → Solution → Spare cascade filters ──────────────
+		setup_cascade_filters(frm);
 	},
 	
 	customer: function(frm) {
@@ -692,4 +695,106 @@ function show_workflow_status(frm) {
 	html += '</div>';
 	
 	frm.dashboard.add_section('<div class="workflow-status">' + html + '</div>', __('Workflow Progress'));
+}
+
+// ── Issue → Solution → Spare cascade support ──────────────────────────
+
+function setup_cascade_filters(frm) {
+	// Solution Lines: only allow solutions whose issue_category is in issue_lines
+	frm.fields_dict.solution_lines && (
+		frm.fields_dict.solution_lines.grid.get_field('repair_solution').get_query = function(doc, cdt, cdn) {
+			let issue_cats = (doc.issue_lines || []).map(r => r.issue_category).filter(Boolean);
+			return {
+				filters: {
+					'is_active': 1,
+					'issue_category': ['in', issue_cats.length ? issue_cats : ['__none__']]
+				}
+			};
+		}
+	);
+
+	// Spare Lines: only allow solutions that are already in solution_lines
+	frm.fields_dict.spare_lines && (
+		frm.fields_dict.spare_lines.grid.get_field('repair_solution').get_query = function(doc) {
+			let sol_names = (doc.solution_lines || []).map(r => r.repair_solution).filter(Boolean);
+			return {
+				filters: {
+					'name': ['in', sol_names.length ? sol_names : ['__none__']]
+				}
+			};
+		}
+	);
+
+	// Spare Lines: spare_item filtered by Solution Spare Mapping
+	frm.fields_dict.spare_lines && (
+		frm.fields_dict.spare_lines.grid.get_field('spare_item').get_query = function(doc, cdt, cdn) {
+			let row = locals[cdt][cdn];
+			if (!row.repair_solution) {
+				frappe.msgprint(__('Please select a Solution first'));
+				return { filters: { 'name': '__none__' } };
+			}
+			// Get mapped spare items for this solution
+			return {
+				query: 'gofix.gofix_services.api.get_mapped_spare_items',
+				filters: { 'repair_solution': row.repair_solution }
+			};
+		}
+	);
+}
+
+// Child table: SR Issue Line
+frappe.ui.form.on('SR Issue Line', {
+	issue_lines_add: function(frm, cdt, cdn) {
+		// Default reported_by to Customer for new rows
+		frappe.model.set_value(cdt, cdn, 'reported_by', 'Customer');
+		frappe.model.set_value(cdt, cdn, 'status', 'Open');
+	},
+	issue_lines_remove: function(frm) {
+		// Refresh solution filters since available issue categories changed
+		frm.refresh_fields();
+	}
+});
+
+// Child table: SR Solution Line
+frappe.ui.form.on('SR Solution Line', {
+	repair_solution: function(frm, cdt, cdn) {
+		let row = locals[cdt][cdn];
+		if (!row.repair_solution) return;
+		// Auto-populate default spares when a solution is selected
+		frappe.call({
+			method: 'gofix.gofix_services.api.get_spares_for_solution',
+			args: { repair_solution: row.repair_solution },
+			callback: function(r) {
+				if (r.message && r.message.length) {
+					r.message.forEach(function(spare) {
+						if (spare.is_mandatory) {
+							let child = frm.add_child('spare_lines');
+							frappe.model.set_value(child.doctype, child.name, 'repair_solution', row.repair_solution);
+							frappe.model.set_value(child.doctype, child.name, 'spare_item', spare.spare_item);
+							frappe.model.set_value(child.doctype, child.name, 'qty', spare.default_qty || 1);
+						}
+					});
+					frm.refresh_field('spare_lines');
+				}
+			}
+		});
+	},
+	solution_lines_add: function(frm, cdt, cdn) {
+		frappe.model.set_value(cdt, cdn, 'status', 'Planned');
+	}
+});
+
+// Child table: SR Spare Line
+frappe.ui.form.on('SR Spare Line', {
+	qty: function(frm, cdt, cdn) {
+		calculate_spare_line_amount(cdt, cdn);
+	},
+	rate: function(frm, cdt, cdn) {
+		calculate_spare_line_amount(cdt, cdn);
+	}
+});
+
+function calculate_spare_line_amount(cdt, cdn) {
+	let row = locals[cdt][cdn];
+	frappe.model.set_value(cdt, cdn, 'amount', flt(row.qty) * flt(row.rate));
 }

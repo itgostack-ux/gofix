@@ -108,6 +108,12 @@
   "repeat_complaint_count",
   "section_technician_findings",
   "technician_identified_issues",
+  "section_issue_tracking",
+  "issue_lines",
+  "section_solutions",
+  "solution_lines",
+  "section_spares_tracking",
+  "spare_lines",
   "section_advance_payment",
   "advance_amount",
   "advance_received_via",
@@ -654,6 +660,45 @@
    "label": "Issues Identified By Technician",
    "allow_on_submit": 1,
    "description": "Technician fills this during diagnosis. Compare with Issue Specified By Customer."
+  },
+  {
+   "fieldname": "section_issue_tracking",
+   "fieldtype": "Section Break",
+   "label": "Issue Tracking",
+   "description": "Customer-reported and technician-found issues. Each issue links to allowed solutions and spares."
+  },
+  {
+   "fieldname": "issue_lines",
+   "fieldtype": "Table",
+   "label": "Issue Lines",
+   "options": "SR Issue Line",
+   "allow_on_submit": 1
+  },
+  {
+   "fieldname": "section_solutions",
+   "fieldtype": "Section Break",
+   "label": "Solutions Applied",
+   "description": "Repair solutions chosen for the reported issues. Only solutions mapped to the above issues are allowed."
+  },
+  {
+   "fieldname": "solution_lines",
+   "fieldtype": "Table",
+   "label": "Solution Lines",
+   "options": "SR Solution Line",
+   "allow_on_submit": 1
+  },
+  {
+   "fieldname": "section_spares_tracking",
+   "fieldtype": "Section Break",
+   "label": "Spares for Solutions",
+   "description": "Spare parts required for the selected solutions. Only mapped spares are allowed."
+  },
+  {
+   "fieldname": "spare_lines",
+   "fieldtype": "Table",
+   "label": "Spare Lines",
+   "options": "SR Spare Line",
+   "allow_on_submit": 1
   },
   {
    "fieldname": "section_advance_payment",

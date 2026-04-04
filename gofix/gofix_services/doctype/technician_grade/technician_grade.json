@@ -1,0 +1,99 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "autoname": "field:grade_name",
+ "creation": "2026-04-04 12:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "grade_name",
+  "grade_level",
+  "column_break_1",
+  "is_active",
+  "description",
+  "section_break_skills",
+  "skills"
+ ],
+ "fields": [
+  {
+   "fieldname": "grade_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Grade Name",
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "fieldname": "grade_level",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "Grade Level",
+   "reqd": 1,
+   "description": "Numeric rank (1=Junior, 2=Mid, 3=Senior, 4=Expert). Higher grade can handle all lower-grade issues."
+  },
+  {
+   "fieldname": "column_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "1",
+   "fieldname": "is_active",
+   "fieldtype": "Check",
+   "label": "Is Active"
+  },
+  {
+   "fieldname": "description",
+   "fieldtype": "Small Text",
+   "label": "Description"
+  },
+  {
+   "fieldname": "section_break_skills",
+   "fieldtype": "Section Break",
+   "label": "Issue Categories This Grade Can Handle"
+  },
+  {
+   "fieldname": "skills",
+   "fieldtype": "Table",
+   "label": "Skills",
+   "options": "Technician Skill"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-04-04 12:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "GoFix Services",
+ "name": "Technician Grade",
+ "naming_rule": "By fieldname",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "read": 1,
+   "role": "Manufacturing Manager",
+   "write": 1
+  },
+  {
+   "read": 1,
+   "role": "Manufacturing User"
+  }
+ ],
+ "sort_field": "grade_level",
+ "sort_order": "ASC",
+ "states": [],
+ "title_field": "grade_name",
+ "track_changes": 1
+}

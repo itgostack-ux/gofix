@@ -26,6 +26,7 @@ class ServiceRequest(Document):
 		self.validate_referral_code()
 		self.validate_dates()
 		self.validate_mandatory_fields()
+		self.validate_issue_solution_cascade()
 		self.sync_decision_to_status()
 		self._validate_serial_substitution()
 		self._validate_service_discount()
@@ -807,6 +808,10 @@ class ServiceRequest(Document):
 		# Only enforce these validations on submit
 		if self.docstatus == 0:
 			return
+
+		# Skip mandatory checks for withdrawn/cancelled SRs — customer took device back
+		if self.walkin_status == "Withdrawn" or self.status == "Cancelled":
+			return
 		
 		# Product condition description is mandatory for submission
 		if not self.product_condition_desc:
@@ -859,6 +864,69 @@ class ServiceRequest(Document):
 			if getdate(self.expected_delivery_date) < getdate(self.service_date):
 				frappe.throw(_("Expected Delivery Date cannot be before Service Date"))
 	
+	def validate_issue_solution_cascade(self):
+		"""Validate the Issue → Solution → Spare cascade.
+		- Each solution must reference an issue_category present in issue_lines
+		- Each spare must reference a solution present in solution_lines
+		- Each spare must be a mapped spare for that solution (Solution Spare Mapping)
+		"""
+		issue_lines = self.get("issue_lines") or []
+		solution_lines = self.get("solution_lines") or []
+		spare_lines = self.get("spare_lines") or []
+
+		# Nothing to validate if no child rows
+		if not issue_lines and not solution_lines and not spare_lines:
+			return
+
+		# Collect valid issue categories from issue_lines
+		valid_issue_categories = set()
+		for row in issue_lines:
+			if row.issue_category:
+				valid_issue_categories.add(row.issue_category)
+
+		# Validate solution_lines: each must have issue_category in issue_lines
+		valid_solutions = set()
+		for row in solution_lines:
+			if not row.repair_solution:
+				continue
+			valid_solutions.add(row.repair_solution)
+			if not row.issue_category:
+				# fetch issue_category from the solution master
+				row.issue_category = frappe.db.get_value("Repair Solution", row.repair_solution, "issue_category")
+			if row.issue_category and row.issue_category not in valid_issue_categories:
+				frappe.throw(
+					_("Row {0}: Solution '{1}' belongs to issue category '{2}' which is not in the Issue Lines").format(
+						row.idx, row.repair_solution, row.issue_category
+					)
+				)
+
+		# Validate spare_lines: each must reference a solution in solution_lines
+		for row in spare_lines:
+			if not row.repair_solution:
+				continue
+			if row.repair_solution not in valid_solutions:
+				frappe.throw(
+					_("Row {0}: Spare '{1}' references solution '{2}' which is not in the Solution Lines").format(
+						row.idx, row.spare_item or "", row.repair_solution
+					)
+				)
+			# Validate spare is an allowed spare for this solution
+			if row.spare_item:
+				is_mapped = frappe.db.exists("Solution Spare Mapping", {
+					"repair_solution": row.repair_solution,
+					"spare_item": row.spare_item,
+					"is_active": 1
+				})
+				if not is_mapped:
+					frappe.throw(
+						_("Row {0}: Spare '{1}' is not a mapped spare for solution '{2}'. Configure it in Solution Spare Mapping.").format(
+							row.idx, row.spare_item, row.repair_solution
+						)
+					)
+
+			# Calculate amount = qty * rate
+			row.amount = flt(row.qty) * flt(row.rate)
+
 	def generate_barcode(self):
 		"""Auto-generate barcode/IMEI with prefix based on device category"""
 		# Only generate if barcode field is empty and not already generated

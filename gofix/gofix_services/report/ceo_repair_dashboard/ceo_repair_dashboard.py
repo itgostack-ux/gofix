@@ -64,7 +64,7 @@ def get_data(filters):
 			conditions += " AND so.company = %(company)s"
 			values["company"] = filters["company"]
 
-	data = frappe.db.sql(f"""
+	data = frappe.db.sql("""
 		SELECT
 			so.name as service_order,
 			so.customer,
@@ -88,7 +88,7 @@ def get_data(filters):
 		LEFT JOIN `tabService Request` sr ON sr.name = so.service_request
 		WHERE {conditions}
 		ORDER BY so.transaction_date DESC
-	""", values, as_dict=1)
+	""".format(conditions=conditions), values, as_dict=1)  # noqa: UP032
 
 	# Calculate QC to delivery hours
 	for row in data:

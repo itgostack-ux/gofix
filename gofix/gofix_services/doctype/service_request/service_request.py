@@ -455,15 +455,6 @@ class ServiceRequest(Document):
 			},
 			"parent")
 		
-		if not company_address:
-			# Fallback: Get any company address marked as preferred billing
-			company_address = frappe.db.get_value("Address",
-				{
-					"is_your_company_address": 1,
-					"disabled": 0
-				},
-				"name")
-		
 		if company_address:
 			so.company_address = company_address
 		
@@ -506,8 +497,14 @@ class ServiceRequest(Document):
 		so.warranty_deductible = self.warranty_deductible
 		so.estimated_delivery_date = frappe.utils.add_days(frappe.utils.today(), 7)  # Default 7 days
 		
-		# Copy Warehouse/Location
-		so.set_warehouse = self.source_warehouse
+		# Copy Warehouse/Location — ensure warehouse belongs to the SO company
+		_wh = self.source_warehouse
+		if _wh and not frappe.db.exists("Warehouse", {"name": _wh, "company": self.company}):
+			# Warehouse belongs to a different company — use first matching warehouse
+			_wh = frappe.db.get_value("Warehouse",
+				{"company": self.company, "is_group": 0, "disabled": 0},
+				"name") or None
+		so.set_warehouse = _wh
 		so.current_location = self.current_location
 		so.state_name = self.state_name
 		so.state_code = self.state_code
@@ -532,7 +529,7 @@ class ServiceRequest(Document):
 			'description': self.issue_description,
 			'qty': 1.0,
 			'rate': float(self.estimated_cost),
-			'warehouse': self.source_warehouse
+			'warehouse': _wh
 		})
 		
 		# Let ERPNext set missing values (company address, tax template, etc.)

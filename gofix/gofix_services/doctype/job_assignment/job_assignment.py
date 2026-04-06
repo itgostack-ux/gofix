@@ -251,16 +251,8 @@ def create_job_sheet_from_service_order(service_order, service_engineer=None, jo
 				alert=True,
 			)
 	else:
-		# GF-12 fix: Auto-suggest least-loaded technician when none specified
-		suggested = _get_least_loaded_technician(so.company if hasattr(so, 'company') else None)
-		if suggested:
-			frappe.msgprint(
-				_("Tip: {0} has the fewest open jobs ({1}). Consider assigning to them.").format(
-					suggested["engineer"], suggested["open_count"]
-				),
-				indicator="blue",
-				alert=True,
-			)
+		job_sheet.assignment_type = "User Assignment"
+		job_sheet.user = frappe.session.user
 	
 	job_sheet.insert(ignore_permissions=True)
 	

@@ -267,7 +267,7 @@ const daysOpen = frappe.datetime.get_day_diff(today, sr.service_date);
 
 this.parent.find('#jt-drawer-body').html(`
 <div class="jt-dw-actions">
-<a href="/app/service-request/${encodeURIComponent(sr.name)}" target="_blank"
+<a href="/desk/service-request/${encodeURIComponent(sr.name)}" target="_blank"
    class="btn btn-xs btn-default"><i class="fa fa-external-link"></i> ${__('Open Form')}</a>
 <button class="btn btn-xs btn-primary" id="jt-btn-assign">
 <i class="fa fa-user-plus"></i> ${__('Assign Technician')}</button>

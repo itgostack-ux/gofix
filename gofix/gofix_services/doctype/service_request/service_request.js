@@ -473,7 +473,7 @@ function show_open_requests(frm) {
 				r.message.forEach(function(req) {
 					let esc = frappe.utils.escape_html;
 					html += '<tr>';
-					html += '<td><a href="/app/service-request/' + encodeURIComponent(req.name) + '">' + esc(req.name) + '</a></td>';
+					html += '<td><a href="/desk/service-request/' + encodeURIComponent(req.name) + '">' + esc(req.name) + '</a></td>';
 					html += '<td>' + frappe.datetime.str_to_user(req.service_date) + '</td>';
 					html += '<td>' + esc(req.device_item_name || '') + '</td>';
 					html += '<td>' + esc(req.status) + '</td>';
@@ -651,7 +651,7 @@ function show_workflow_status(frm) {
 		html += '<div class="progress-step text-center">';
 		html += '<div class="step-icon" style="background: #2196F3; color: white; width: 50px; height: 50px; line-height: 50px; border-radius: 50%; margin: 0 auto; font-size: 20px;">✓</div>';
 		html += '<div class="step-title" style="margin-top: 8px; font-weight: bold;">Service Order</div>';
-		html += '<div class="step-status"><a href="/app/sales-order/' + frm.doc.service_order + '" style="color: #2196F3;">' + frm.doc.service_order + '</a></div>';
+		html += '<div class="step-status"><a href="/desk/sales-order/' + frm.doc.service_order + '" style="color: #2196F3;">' + frm.doc.service_order + '</a></div>';
 		html += '</div></div>';
 		
 		// Step 3: Job Sheets - check if any exist
@@ -669,7 +669,7 @@ function show_workflow_status(frm) {
 					job_html += '<div class="progress-step text-center">';
 					job_html += '<div class="step-icon" style="background: #FF9800; color: white; width: 50px; height: 50px; line-height: 50px; border-radius: 50%; margin: 0 auto; font-size: 20px;">' + r.message + '</div>';
 					job_html += '<div class="step-title" style="margin-top: 8px; font-weight: bold;">Job Sheets</div>';
-					job_html += '<div class="step-status"><a href="/app/job-assignment?service_order=' + encodeURIComponent(frm.doc.service_order) + '" style="color: #FF9800;">' + r.message + ' Active</a></div>';
+					job_html += '<div class="step-status"><a href="/desk/job-assignment?service_order=' + encodeURIComponent(frm.doc.service_order) + '" style="color: #FF9800;">' + r.message + ' Active</a></div>';
 					job_html += '</div></div>';
 					
 					$(frm.dashboard.wrapper).find('.workflow-status').append(job_html);

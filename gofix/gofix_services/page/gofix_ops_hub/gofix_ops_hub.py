@@ -769,6 +769,15 @@ def save_solution_assignment(sr_name, solutions_json):
 					"rate": spare_rate,
 					"amount": (sp.default_qty or 1) * spare_rate,
 				"status": "Pending",
+			})
+
+	sr.save()
+	frappe.db.commit()
+
+	_log_ops_stage(sr_name, "solutions", "assign")
+	frappe.db.commit()
+
+	return {"ok": True, "solution_count": len(sr.solution_lines), "stage": "assign"}
 
 
 # ── Step 4: Technician Assignment ─────────────────────────────────────────────

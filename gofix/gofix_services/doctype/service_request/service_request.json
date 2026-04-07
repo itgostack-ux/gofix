@@ -793,9 +793,10 @@
   },
   {
    "fieldname": "pickup_agent",
-   "fieldtype": "Data",
-   "label": "Pickup Agent",
-   "allow_on_submit": 1
+   "fieldtype": "Link",
+   "label": "Pickup Courier",
+   "allow_on_submit": 1,
+   "options": "Courier Partner"
   },
   {
    "fieldname": "column_break_pickup",
@@ -803,9 +804,10 @@
   },
   {
    "fieldname": "return_courier_name",
-   "fieldtype": "Data",
+   "fieldtype": "Link",
    "label": "Return Courier",
-   "allow_on_submit": 1
+   "allow_on_submit": 1,
+   "options": "Courier Partner"
   },
   {
    "fieldname": "return_tracking_number",

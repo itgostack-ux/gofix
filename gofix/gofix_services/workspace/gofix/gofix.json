@@ -1,6 +1,6 @@
 {
  "charts": [],
- "content": "[{\"type\": \"header\", \"data\": {\"text\": \"Job Tracker\", \"col\": 12}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Job Tracker\", \"col\": 4}}, {\"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"type\": \"header\", \"data\": {\"text\": \"Services\", \"col\": 12}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Service Request\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Job Assignment\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Spare Parts\", \"col\": 3}}, {\"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"type\": \"header\", \"data\": {\"text\": \"Masters\", \"col\": 12}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Walkin Source\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Issue Category\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Withdrawal Reason\", \"col\": 3}}, {\"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"type\": \"header\", \"data\": {\"text\": \"Quick Access\", \"col\": 12}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Service Requests\", \"col\": 4}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Job Management\", \"col\": 4}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Items\", \"col\": 4}}, {\"id\": \"card_qc\", \"type\": \"card\", \"data\": {\"card_name\": \"Quality Control\", \"col\": 4}}, {\"id\": \"card_sla\", \"type\": \"card\", \"data\": {\"card_name\": \"SLA & Monitoring\", \"col\": 4}}]",
+ "content": "[{\"type\": \"header\", \"data\": {\"text\": \"Operations\", \"col\": 12}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Ops Hub\", \"col\": 4}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Job Tracker\", \"col\": 4}}, {\"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"type\": \"header\", \"data\": {\"text\": \"Services\", \"col\": 12}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Service Request\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Job Assignment\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Spare Parts\", \"col\": 3}}, {\"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"type\": \"header\", \"data\": {\"text\": \"Masters\", \"col\": 12}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Walkin Source\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Issue Category\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Withdrawal Reason\", \"col\": 3}}, {\"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"type\": \"header\", \"data\": {\"text\": \"Quick Access\", \"col\": 12}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Operations\", \"col\": 4}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Services\", \"col\": 4}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Job Management\", \"col\": 4}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Items\", \"col\": 4}}, {\"id\": \"card_qc\", \"type\": \"card\", \"data\": {\"card_name\": \"Quality Control\", \"col\": 4}}, {\"id\": \"card_sla\", \"type\": \"card\", \"data\": {\"card_name\": \"SLA & Monitoring\", \"col\": 4}}]",
  "creation": "2025-12-05 07:30:00",
  "custom_blocks": [],
  "docstatus": 0,
@@ -12,6 +12,34 @@
  "is_hidden": 0,
  "label": "GoFix",
  "links": [
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Operations",
+   "link_count": 0,
+   "onboard": 0,
+   "type": "Card Break"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Ops Hub",
+   "link_count": 0,
+   "link_to": "gofix-ops-hub",
+   "link_type": "Page",
+   "onboard": 1,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Job Tracker",
+   "link_count": 0,
+   "link_to": "job-tracker",
+   "link_type": "Page",
+   "onboard": 1,
+   "type": "Link"
+  },
   {
    "hidden": 0,
    "is_query_report": 0,
@@ -181,6 +209,14 @@
  "sequence_id": 15.0,
  "shortcuts": [
   {
+   "color": "Orange",
+   "doc_view": "",
+   "icon": "fa fa-th-large",
+   "label": "Ops Hub",
+   "link_to": "gofix-ops-hub",
+   "type": "Page"
+  },
+  {
    "color": "Blue",
    "doc_view": "List",
    "format": "{} Open",
@@ -258,5 +294,6 @@
    "type": "DocType"
   }
  ],
- "title": "GoFix"
+ "title": "GoFix",
+ "app": "gofix"
 }

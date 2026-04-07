@@ -431,20 +431,13 @@ class ServiceRequest(Document):
 		if self.service_order:
 			frappe.throw(_("Service Order already exists: {0}").format(self.service_order))
 		
-		# Validate mandatory fields before creating Service Order
-		if not self.estimated_cost or self.estimated_cost <= 0:
-			frappe.throw(_("Estimated Cost is mandatory before accepting Service Request. Please enter the estimated repair cost."))
-		
-		if not self.expected_completion_date:
-			frappe.throw(_("Expected Completion Date is mandatory before accepting Service Request. Please set the expected delivery date."))
-		
 		# Create Sales Order as Service Order
 		so = frappe.new_doc("Sales Order")
 		so.customer = self.customer
 		so.company = self.company
 		so.transaction_date = frappe.utils.today()
-		# Use the expected completion date from Service Request
-		so.delivery_date = self.expected_completion_date
+		# Use the expected completion date from Service Request, default to 7 days
+		so.delivery_date = self.expected_completion_date or frappe.utils.add_days(frappe.utils.today(), 7)
 		
 		# Set company address for GST compliance (required for India GST)
 		company_address = frappe.db.get_value("Dynamic Link",
@@ -528,7 +521,7 @@ class ServiceRequest(Document):
 			'item_name': f'Service Repair - {self.device_item_name}',
 			'description': self.issue_description,
 			'qty': 1.0,
-			'rate': float(self.estimated_cost),
+			'rate': float(self.estimated_cost or 0),
 			'warehouse': _wh
 		})
 		
@@ -1299,6 +1292,14 @@ def accept_service_request(service_request):
 	# Update status
 	doc.db_set("status", "In Service", update_modified=False)
 	
+	# Log intake → analysis transition for ops timeline
+	try:
+		from gofix.gofix_services.page.gofix_ops_hub.gofix_ops_hub import _log_ops_stage
+		_log_ops_stage(service_request, "draft", "analysis")
+		frappe.db.commit()
+	except Exception:
+		pass  # timeline logging should never block acceptance
+	
 	return doc.service_order
 
 @frappe.whitelist()
@@ -1415,3 +1416,83 @@ def flag_unclaimed_devices(days_threshold=15):
 	if unclaimed:
 		frappe.db.commit()
 		frappe.logger("gofix").info(f"Flagged {len(unclaimed)} unclaimed devices")
+
+
+def ensure_service_order_on_accept(doc, method=None):
+	"""Hook: guarantee SO exists whenever an SR is accepted.
+
+	Catches cases where decision is set via db_set / direct SQL
+	and the class method on_update_after_submit didn't fire.
+	"""
+	if doc.decision == "Accepted" and not doc.service_order:
+		doc.create_service_order()
+		frappe.logger("gofix").info(
+			f"Auto-created SO for {doc.name} via hook"
+		)
+
+
+def auto_expire_stale_requests(days_threshold=30):
+	"""Daily scheduler: expire Draft Service Requests older than threshold.
+
+	SRs still in Draft (no acceptance, no SO) after 30 days are unlikely
+	to convert. Mark them Expired so they stop cluttering the queue.
+	"""
+	from frappe.utils import add_days, today
+
+	cutoff = add_days(today(), -days_threshold)
+
+	stale = frappe.db.get_all(
+		"Service Request",
+		filters={
+			"decision": "Draft",
+			"docstatus": ["<", 2],
+			"service_order": ["in", [None, ""]],
+			"creation": ["<=", cutoff],
+		},
+		pluck="name",
+	)
+
+	for name in stale:
+		frappe.db.set_value("Service Request", name, {
+			"decision": "Expired",
+			"status": "Expired",
+		}, update_modified=True)
+
+	if stale:
+		frappe.db.commit()
+		frappe.logger("gofix").info(
+			f"Auto-expired {len(stale)} stale Draft SRs older than {days_threshold} days"
+		)
+
+
+def bulk_create_so_for_orphans():
+	"""One-time utility: create SOs for Accepted SRs that have no service_order.
+
+	Run via: bench --site <site> execute gofix.gofix_services.doctype.service_request.service_request.bulk_create_so_for_orphans
+	"""
+	orphans = frappe.get_all(
+		"Service Request",
+		filters={
+			"decision": ["in", ["Accepted", "In Service"]],
+			"service_order": ["in", [None, ""]],
+			"docstatus": ["<", 2],
+		},
+		pluck="name",
+	)
+
+	created = 0
+	failed = []
+	for sr_name in orphans:
+		try:
+			doc = frappe.get_doc("Service Request", sr_name)
+			doc.create_service_order()
+			created += 1
+			frappe.logger("gofix").info(f"Created SO for orphan SR {sr_name}")
+		except Exception as e:
+			failed.append({"sr": sr_name, "error": str(e)})
+			frappe.log_error(f"Failed to create SO for {sr_name}: {e}")
+
+	frappe.db.commit()
+	print(f"Created {created} SOs, {len(failed)} failures")
+	for f in failed:
+		print(f"  FAILED: {f['sr']} — {f['error']}")

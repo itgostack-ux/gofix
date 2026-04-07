@@ -13,7 +13,8 @@
   "requires_spare",
   "section_break_2",
   "status",
-  "technician_remarks"
+  "technician_remarks",
+  "cancel_reason"
  ],
  "fields": [
   {
@@ -69,12 +70,19 @@
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "Status",
-   "options": "Planned\nIn Progress\nCompleted\nSkipped"
+   "options": "Planned\nIn Progress\nCompleted\nSkipped\nCancelled"
   },
   {
    "fieldname": "technician_remarks",
    "fieldtype": "Small Text",
    "label": "Technician Remarks"
+  },
+  {
+   "fieldname": "cancel_reason",
+   "fieldtype": "Small Text",
+   "label": "Cancel Reason",
+   "depends_on": "eval:doc.status=='Cancelled'",
+   "read_only": 1
   }
  ],
  "index_web_pages_for_search": 0,

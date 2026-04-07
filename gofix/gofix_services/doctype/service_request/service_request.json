@@ -529,7 +529,7 @@
    "in_list_view": 1,
    "in_standard_filter": 1,
    "label": "Decision",
-   "options": "Draft\nAccepted\nIn Service\nCompleted\nInvoiced\nDelivered\nWithdrawn\nRejected\nCancelled",
+   "options": "Draft\nAccepted\nIn Service\nCompleted\nInvoiced\nDelivered\nWithdrawn\nRejected\nExpired\nCancelled",
    "reqd": 1
   },
   {
@@ -609,7 +609,7 @@
    "in_list_view": 1,
    "in_standard_filter": 1,
    "label": "Status",
-   "options": "Draft\nAccepted\nIn Service\nCompleted\nInvoiced\nDelivered\nWithdrawn\nRejected\nCancelled",
+   "options": "Draft\nAccepted\nIn Service\nCompleted\nInvoiced\nDelivered\nWithdrawn\nRejected\nExpired\nCancelled",
    "reqd": 1,
    "description": "Overall status synced from Service Order"
   },

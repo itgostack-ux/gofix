@@ -157,6 +157,7 @@ class JobAssignment(Document):
 		if self.received_from_technician:
 			audit_entry["assignment_to_time"] = self.received_datetime or frappe.utils.now_datetime()
 		
+		self.flags.ignore_validate_update_after_submit = True
 		self.append("technician_audit", audit_entry)
 		self.save(ignore_permissions=True)
 	

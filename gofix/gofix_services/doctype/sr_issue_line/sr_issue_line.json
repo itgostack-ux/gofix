@@ -10,7 +10,11 @@
   "column_break_1",
   "description",
   "status",
-  "cancelled_reason"
+  "cancelled_reason",
+  "section_break_delete",
+  "deleted_reason",
+  "deleted_by",
+  "deleted_at"
  ],
  "fields": [
   {
@@ -46,7 +50,7 @@
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "Status",
-   "options": "Open\nIn Progress\nResolved\nCancelled\nNot Reproducible"
+   "options": "Open\nIn Progress\nResolved\nCancelled\nNot Reproducible\nDeleted"
   },
   {
    "depends_on": "eval:doc.status=='Cancelled' || doc.status=='Not Reproducible'",
@@ -54,6 +58,31 @@
    "fieldtype": "Small Text",
    "label": "Reason",
    "mandatory_depends_on": "eval:doc.status=='Cancelled'"
+  },
+  {
+   "fieldname": "section_break_delete",
+   "fieldtype": "Section Break",
+   "depends_on": "eval:doc.status=='Deleted'"
+  },
+  {
+   "fieldname": "deleted_reason",
+   "fieldtype": "Small Text",
+   "label": "Deletion Reason",
+   "depends_on": "eval:doc.status=='Deleted'"
+  },
+  {
+   "fieldname": "deleted_by",
+   "fieldtype": "Data",
+   "label": "Deleted By",
+   "read_only": 1,
+   "depends_on": "eval:doc.status=='Deleted'"
+  },
+  {
+   "fieldname": "deleted_at",
+   "fieldtype": "Datetime",
+   "label": "Deleted At",
+   "read_only": 1,
+   "depends_on": "eval:doc.status=='Deleted'"
   }
  ],
  "index_web_pages_for_search": 0,

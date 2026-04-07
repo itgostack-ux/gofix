@@ -268,7 +268,8 @@
    "fieldname": "technician_audit",
    "fieldtype": "Table",
    "label": "Technician Audit",
-   "options": "Technician Audit"
+   "options": "Technician Audit",
+   "allow_on_submit": 1
   }
  ],
  "index_web_pages_for_search": 1,

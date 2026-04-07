@@ -17,7 +17,8 @@
   "rate",
   "amount",
   "section_break_status",
-  "status"
+  "status",
+  "remarks"
  ],
  "fields": [
   {
@@ -26,7 +27,7 @@
    "in_list_view": 1,
    "label": "For Solution",
    "options": "Repair Solution",
-   "reqd": 1,
+   "reqd": 0,
    "read_only": 1
   },
   {
@@ -103,7 +104,12 @@
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "Status",
-   "options": "Pending\nReserved\nIssued\nConsumed\nReturned"
+   "options": "Pending\nReserved\nIssued\nConsumed\nReturned\nDamaged"
+  },
+  {
+   "fieldname": "remarks",
+   "fieldtype": "Small Text",
+   "label": "Remarks"
   }
  ],
  "index_web_pages_for_search": 0,

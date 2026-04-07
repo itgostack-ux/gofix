@@ -60,8 +60,8 @@ add_to_apps_screen = [
 # ------------------
 
 # include js, css files in header of desk.html
-app_include_css = "/assets/gofix/css/gofix.css"
-# app_include_js = "/assets/gofix/js/gofix.js"
+app_include_css = ["/assets/gofix/css/gofix.css", "/assets/gofix/css/gogizmo_app_switcher.css"]
+app_include_js = "/assets/gofix/js/gogizmo_app_switcher.js"
 
 # include js, css files in header of web template
 # web_include_css = "/assets/gofix/css/gofix.css"
@@ -130,6 +130,7 @@ after_migrate = [
     "gofix.setup.notifications.create_notifications",
     "gofix.setup.workflow.ensure_service_order_workflow",
     "gofix.setup.employee_custom_fields.create_employee_custom_fields",
+    "gofix.setup.service_request_ops_fields.create_service_request_ops_fields",
 ]
 
 # Uninstallation
@@ -201,6 +202,7 @@ doc_events = {
 	},
 	"Service Request": {
 		"on_update": "gofix.gofix_services.whatsapp_notifications.on_service_request_update",
+		"on_update_after_submit": "gofix.gofix_services.doctype.service_request.service_request.ensure_service_order_on_accept",
 	},
 }
 
@@ -210,6 +212,7 @@ doc_events = {
 scheduler_events = {
 	"daily": [
 		"gofix.gofix_services.doctype.service_request.service_request.flag_unclaimed_devices",
+		"gofix.gofix_services.doctype.service_request.service_request.auto_expire_stale_requests",
 		"gofix.gofix_services.api.expire_pending_estimates",
 	],
 	"cron": {

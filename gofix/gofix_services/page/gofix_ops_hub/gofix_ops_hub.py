@@ -545,9 +545,36 @@ def delete_issue_line(sr_name, issue_row_name, reason):
 	if not found:
 		frappe.throw(_("Issue line {0} not found.").format(issue_row_name))
 
+	# ── Cascade-cancel orphaned solutions & spares (Fix #2) ────────────
+	deleted_category = None
+	cancelled_solutions = []
+	for row in sr.get("issue_lines", []):
+		if row.name == issue_row_name:
+			deleted_category = row.issue_category
+			break
+
+	if deleted_category:
+		# Check if any OTHER active issue shares this category
+		other_active = any(
+			row.issue_category == deleted_category
+			and row.name != issue_row_name
+			and row.status not in ("Deleted", "Cancelled")
+			for row in sr.get("issue_lines", [])
+		)
+		if not other_active:
+			cancelled_solutions = []
+			for sol in sr.get("solution_lines", []):
+				if sol.issue_category == deleted_category and sol.status not in ("Cancelled", "Completed"):
+					sol.status = "Cancelled"
+					sol.cancel_reason = f"Issue deleted: {reason.strip()}"
+					cancelled_solutions.append(sol.repair_solution)
+			for sp in sr.get("spare_lines", []):
+				if sp.issue_category == deleted_category and sp.status == "Pending":
+					sp.status = "Returned"
+
 	sr.save()
 	frappe.db.commit()
-	return {"ok": True}
+	return {"ok": True, "cancelled_solutions": cancelled_solutions if deleted_category else []}
 
 
 @frappe.whitelist()
@@ -731,18 +758,70 @@ def quick_create_solution(solution_name, issue_category, estimated_minutes=30, r
 
 @frappe.whitelist()
 def save_solution_assignment(sr_name, solutions_json):
-	"""Save solution lines to the Service Request."""
+	"""Save solution lines to the Service Request.
+
+	Preserves solutions that are already In Progress / Completed / Skipped
+	(and their linked spares) so re-entering the Solutions step doesn't
+	destroy work already done.  Only replaces Planned rows.
+
+	Validates that every active (non-Deleted) issue category gets at
+	least one solution before proceeding.
+	"""
 	frappe.has_permission("Service Request", sr_name, "write", throw=True)
 
 	solutions = json.loads(solutions_json) if isinstance(solutions_json, str) else solutions_json
 
 	sr = frappe.get_doc("Service Request", sr_name)
 	sr.flags.ignore_validate_update_after_submit = True
-	sr.set("solution_lines", [])
-	sr.set("spare_lines", [])
 	sr.flags.ignore_mandatory = True
 
+	# ── Preserve non-Planned rows (Fix #4) ─────────────────────────────
+	preserve_statuses = ("In Progress", "Completed", "Skipped")
+	preserved_solutions = [
+		row.as_dict() for row in sr.get("solution_lines", [])
+		if row.status in preserve_statuses
+	]
+	preserved_solution_names = {
+		row.get("repair_solution") for row in preserved_solutions
+	}
+	preserved_spares = [
+		row.as_dict() for row in sr.get("spare_lines", [])
+		if row.repair_solution in preserved_solution_names
+	]
+
+	sr.set("solution_lines", [])
+	sr.set("spare_lines", [])
+
+	# Re-add preserved rows first
+	for prow in preserved_solutions:
+		sr.append("solution_lines", {
+			"repair_solution": prow.get("repair_solution"),
+			"issue_category": prow.get("issue_category"),
+			"solution_code": prow.get("solution_code", ""),
+			"estimated_minutes": cint(prow.get("estimated_minutes", 0)),
+			"requires_spare": cint(prow.get("requires_spare", 0)),
+			"technician": prow.get("technician", ""),
+			"technician_name": prow.get("technician_name", ""),
+			"technician_remarks": prow.get("technician_remarks", ""),
+			"status": prow.get("status"),
+		})
+	for prow in preserved_spares:
+		sr.append("spare_lines", {
+			"repair_solution": prow.get("repair_solution"),
+			"issue_category": prow.get("issue_category"),
+			"spare_item": prow.get("spare_item"),
+			"item_name": prow.get("item_name", ""),
+			"qty": prow.get("qty", 1),
+			"uom": prow.get("uom"),
+			"rate": flt(prow.get("rate")),
+			"amount": flt(prow.get("amount")),
+			"status": prow.get("status", "Pending"),
+		})
+
+	# Add new solutions (skip duplicates that are already preserved)
 	for sol in solutions:
+		if sol.get("repair_solution") in preserved_solution_names:
+			continue
 		sr.append("solution_lines", {
 			"repair_solution": sol.get("repair_solution"),
 			"issue_category": sol.get("issue_category"),
@@ -772,6 +851,25 @@ def save_solution_assignment(sr_name, solutions_json):
 					"amount": (sp.default_qty or 1) * spare_rate,
 				"status": "Pending",
 			})
+
+	# ── Validate: every active issue must have ≥1 solution (Fix #1) ────
+	active_categories = {
+		row.issue_category
+		for row in sr.get("issue_lines", [])
+		if row.status not in ("Deleted", "Cancelled", "Not Reproducible")
+	}
+	covered_categories = {
+		row.issue_category
+		for row in sr.get("solution_lines", [])
+		if row.status != "Cancelled"
+	}
+	missing = active_categories - covered_categories
+	if missing:
+		frappe.throw(
+			_("Every active issue must have at least one solution. Missing solutions for: {0}").format(
+				", ".join(sorted(missing))
+			)
+		)
 
 	sr.save()
 	frappe.db.commit()
@@ -1385,6 +1483,9 @@ def reassign_after_qc_fail(sr_name, technician, job_type="Repair", manager_notes
 	so = frappe.get_doc("Sales Order", sr.service_order)
 	so.db_set("qc_status", "Pending", update_modified=True)
 	so.db_set("workflow_state", "Work in Progress", update_modified=False)
+
+	# Clear QC checklist so it gets freshly populated on next QC (Fix #5)
+	frappe.db.delete("GoFix QC Checklist", {"parent": so.name, "parenttype": "Sales Order"})
 
 	# Reset solution lines that failed to Planned
 	sr.flags.ignore_validate_update_after_submit = True

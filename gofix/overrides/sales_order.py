@@ -534,52 +534,94 @@ def move_service_order_to_qc_if_ready(doc):
 	_populate_qc_checklist(doc)
 
 
-def _populate_qc_checklist(doc):
-	"""Auto-populate QC checklist from GoFix QC Template matching the issue category."""
+def _populate_qc_checklist(doc, force=False):
+	"""Auto-populate QC checklist from GoFix QC Templates matching ALL issue categories.
+
+	Merges checks from templates for each distinct active issue category on the
+	Service Request (Fix #3).  When force=True, clears existing checklist first
+	(used by rework flow — Fix #5).
+	"""
 	if not hasattr(doc, "qc_checklist"):
 		return
-	# Skip if already populated
-	if doc.qc_checklist:
+	# Skip if already populated (unless forced)
+	if doc.qc_checklist and not force:
 		return
 
-	issue_category = None
-	if doc.service_request:
-		issue_category = frappe.db.get_value("Service Request", doc.service_request, "issue_category")
+	if force:
+		doc.qc_checklist = []
 
-	# Find best-match template: exact category > catch-all (no category)
+	# ── Gather ALL active issue categories from issue_lines (Fix #3) ──
+	issue_categories = set()
+	if doc.service_request:
+		issue_lines = frappe.get_all(
+			"SR Issue Line",
+			filters={"parent": doc.service_request, "status": ["not in", ["Deleted", "Cancelled"]]},
+			fields=["issue_category"],
+		)
+		issue_categories = {row.issue_category for row in issue_lines if row.issue_category}
+
+	# Fallback to header-level field if no issue_lines
+	if not issue_categories and doc.service_request:
+		header_cat = frappe.db.get_value("Service Request", doc.service_request, "issue_category")
+		if header_cat:
+			issue_categories.add(header_cat)
+
+	if not issue_categories:
+		return
+
+	# ── Find matching templates ──────────────────────────────────────────
 	filters = {"is_active": 1}
 	if doc.company:
 		filters["company"] = ["in", [doc.company, "", None]]
 
-	templates = frappe.get_all(
+	all_templates = frappe.get_all(
 		"GoFix QC Template",
 		filters=filters,
 		fields=["name", "issue_category"],
 		order_by="issue_category desc",
 	)
 
-	template = None
-	for t in templates:
-		if t.issue_category == issue_category:
-			template = t
+	generic_template = None
+	for t in all_templates:
+		if not t.issue_category:
+			generic_template = t
 			break
-	if not template and templates:
-		# Fallback: template without issue_category (generic)
-		for t in templates:
-			if not t.issue_category:
-				template = t
-				break
 
-	if not template:
+	matched_templates = []
+	for cat in sorted(issue_categories):
+		found = False
+		for t in all_templates:
+			if t.issue_category == cat:
+				matched_templates.append(t)
+				found = True
+				break
+		if not found and generic_template:
+			matched_templates.append(generic_template)
+
+	# Deduplicate template names
+	seen_templates = set()
+	unique_templates = []
+	for t in matched_templates:
+		if t.name not in seen_templates:
+			seen_templates.add(t.name)
+			unique_templates.append(t)
+
+	if not unique_templates:
 		return
 
-	tmpl_doc = frappe.get_doc("GoFix QC Template", template.name)
-	for check in tmpl_doc.checks:
-		doc.append("qc_checklist", {
-			"check_name": check.check_name,
-			"is_mandatory": check.is_mandatory,
-			"is_critical": getattr(check, "is_critical", 0),
-			"check_type": check.get("check_type", "Pass-Fail"),
-			"result": "",
-		})
+	# ── Merge checks from all matched templates ─────────────────────────
+	seen_checks = set()
+	for tmpl in unique_templates:
+		tmpl_doc = frappe.get_doc("GoFix QC Template", tmpl.name)
+		for check in tmpl_doc.checks:
+			if check.check_name not in seen_checks:
+				seen_checks.add(check.check_name)
+				doc.append("qc_checklist", {
+					"check_name": check.check_name,
+					"is_mandatory": check.is_mandatory,
+					"is_critical": getattr(check, "is_critical", 0),
+					"check_type": check.get("check_type", "Pass-Fail"),
+					"result": "",
+				})
+
 	doc.save(ignore_permissions=True)

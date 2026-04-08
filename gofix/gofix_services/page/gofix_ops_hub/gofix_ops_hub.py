@@ -1096,17 +1096,25 @@ def submit_for_qc(sr_name):
 		"Job Assignment",
 		filters={
 			"service_request": sr_name,
-			"docstatus": 1,
-			"assignment_status": ["in", ["Open", "In Progress"]],
+			"docstatus": ["in", [0, 1]],
+			"assignment_status": ["in", ["Open", "In Progress", "Planned"]],
 		},
 		pluck="name",
 	)
 	for ja_name in open_jobs:
-		frappe.db.set_value("Job Assignment", ja_name, {
-			"assignment_status": "Completed",
-			"repair_outcome": "Repaired",
-			"work_performed": "Completed via Ops Hub QC submission",
-		}, update_modified=True)
+		ja = frappe.get_doc("Job Assignment", ja_name)
+		if ja.docstatus == 0:
+			ja.assignment_status = "Completed"
+			ja.repair_outcome = "Repaired"
+			ja.work_performed = "Completed via Ops Hub QC submission"
+			ja.flags.ignore_mandatory = True
+			ja.submit()
+		else:
+			frappe.db.set_value("Job Assignment", ja_name, {
+				"assignment_status": "Completed",
+				"repair_outcome": "Repaired",
+				"work_performed": "Completed via Ops Hub QC submission",
+			}, update_modified=True)
 
 	# Trigger QC on the Sales Order using the existing workflow helper
 	so = frappe.get_doc("Sales Order", sr.service_order)

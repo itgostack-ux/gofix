@@ -131,6 +131,7 @@ after_migrate = [
     "gofix.setup.workflow.ensure_service_order_workflow",
     "gofix.setup.employee_custom_fields.create_employee_custom_fields",
     "gofix.setup.service_request_ops_fields.create_service_request_ops_fields",
+    "gofix.setup.sales_invoice_custom_fields.create_sales_invoice_custom_fields",
 ]
 
 # Uninstallation
@@ -193,6 +194,7 @@ doc_events = {
 		"on_cancel": "gofix.overrides.sales_order.update_service_request_on_qc"
 	},
 	"Sales Invoice": {
+		"before_insert": "gofix.overrides.sales_invoice.resolve_gofix_links",
 		"on_submit": "gofix.overrides.sales_invoice.update_service_request_on_invoice",
 		"on_cancel": "gofix.overrides.sales_invoice.update_service_request_on_invoice"
 	},

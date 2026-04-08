@@ -1,0 +1,249 @@
+{%- set sr = frappe.get_doc("Service Request", doc.custom_gofix_service_request) if doc.custom_gofix_service_request else None -%}
+{%- set company = frappe.get_doc("Company", doc.company) -%}
+{%- set company_address = frappe.get_doc("Address", company.registered_office or frappe.db.get_value("Dynamic Link", {"link_doctype": "Company", "link_name": doc.company, "parenttype": "Address"}, "parent")) if frappe.db.get_value("Dynamic Link", {"link_doctype": "Company", "link_name": doc.company, "parenttype": "Address"}, "parent") else None -%}
+
+<style>
+  @page { size: A4; margin: 10mm; }
+  .gf-inv { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #1f2937; font-size: 12px; line-height: 1.5; }
+  .gf-inv * { box-sizing: border-box; }
+
+  /* Header */
+  .gf-header { display: flex; justify-content: space-between; align-items: flex-start; padding-bottom: 12px; border-bottom: 3px solid #1e40af; margin-bottom: 14px; }
+  .gf-brand { font-size: 22px; font-weight: 800; color: #1e40af; letter-spacing: 0.5px; }
+  .gf-brand-sub { font-size: 10px; color: #6b7280; margin-top: 2px; }
+  .gf-inv-title { text-align: right; }
+  .gf-inv-title h2 { font-size: 18px; font-weight: 700; margin: 0 0 2px 0; color: #1e40af; text-transform: uppercase; letter-spacing: 1px; }
+  .gf-inv-no { font-size: 13px; font-weight: 600; color: #374151; }
+  .gf-inv-date { font-size: 11px; color: #6b7280; }
+
+  /* Info grid */
+  .gf-info-grid { display: flex; gap: 14px; margin-bottom: 14px; }
+  .gf-info-box { flex: 1; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 10px 12px; }
+  .gf-info-box h5 { font-size: 9px; text-transform: uppercase; letter-spacing: 0.8px; color: #6b7280; margin: 0 0 6px 0; font-weight: 700; }
+  .gf-info-box .gf-name { font-size: 13px; font-weight: 700; color: #111827; margin-bottom: 2px; }
+  .gf-info-box .gf-detail { font-size: 11px; color: #4b5563; }
+
+  /* Service badge */
+  .gf-sr-badge { display: inline-block; background: #dbeafe; color: #1e40af; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 10px; }
+  .gf-warranty-badge { display: inline-block; background: #dcfce7; color: #15803d; font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 10px; margin-left: 6px; }
+
+  /* Table */
+  .gf-table { width: 100%; border-collapse: collapse; margin-bottom: 14px; }
+  .gf-table th { background: #1e40af; color: #fff; font-size: 10px; text-transform: uppercase; letter-spacing: 0.6px; padding: 8px 10px; text-align: left; font-weight: 600; }
+  .gf-table th.r { text-align: right; }
+  .gf-table td { padding: 8px 10px; border-bottom: 1px solid #e5e7eb; font-size: 12px; vertical-align: top; }
+  .gf-table td.r { text-align: right; }
+  .gf-table tr:last-child td { border-bottom: 2px solid #1e40af; }
+  .gf-table .gf-item-desc { font-size: 10px; color: #6b7280; margin-top: 2px; }
+
+  /* Totals */
+  .gf-totals { display: flex; justify-content: flex-end; margin-bottom: 14px; }
+  .gf-totals-box { width: 280px; }
+  .gf-totals-row { display: flex; justify-content: space-between; padding: 4px 0; font-size: 12px; }
+  .gf-totals-row.gf-grand { border-top: 2px solid #1e40af; padding-top: 8px; margin-top: 4px; font-size: 15px; font-weight: 800; color: #1e40af; }
+
+  /* Payment */
+  .gf-payment { background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 6px; padding: 10px 14px; margin-bottom: 14px; }
+  .gf-payment h5 { font-size: 10px; text-transform: uppercase; letter-spacing: 0.8px; color: #15803d; margin: 0 0 6px 0; font-weight: 700; }
+  .gf-pay-row { display: flex; justify-content: space-between; font-size: 12px; padding: 2px 0; }
+
+  /* Warranty box */
+  .gf-warranty-box { background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 6px; padding: 10px 14px; margin-bottom: 14px; }
+  .gf-warranty-box h5 { font-size: 10px; text-transform: uppercase; letter-spacing: 0.8px; color: #1e40af; margin: 0 0 6px 0; font-weight: 700; }
+
+  /* Footer */
+  .gf-footer { border-top: 1px solid #d1d5db; padding-top: 10px; margin-top: 10px; }
+  .gf-footer-grid { display: flex; justify-content: space-between; gap: 20px; }
+  .gf-terms { flex: 1; font-size: 9px; color: #6b7280; line-height: 1.6; }
+  .gf-terms h5 { font-size: 9px; text-transform: uppercase; letter-spacing: 0.8px; color: #374151; margin: 0 0 4px 0; font-weight: 700; }
+  .gf-sig-box { width: 200px; text-align: center; }
+  .gf-sig-line { border-top: 1px solid #9ca3af; margin-top: 50px; padding-top: 4px; font-size: 10px; color: #6b7280; }
+  .gf-powered { text-align: center; font-size: 8px; color: #9ca3af; margin-top: 8px; }
+</style>
+
+<div class="gf-inv">
+
+  <!-- ═══ HEADER ═══ -->
+  <div class="gf-header">
+    <div>
+      {%- if company.company_logo %}
+        <img src="{{ company.company_logo }}" style="height: 40px; margin-bottom: 4px;" alt="{{ company.name }}">
+      {%- else %}
+        <div class="gf-brand">{{ company.name }}</div>
+      {%- endif %}
+      <div class="gf-brand-sub">
+        {%- if company.phone_no %}{{ company.phone_no }}{%- endif %}
+        {%- if company.email %} · {{ company.email }}{%- endif %}
+        {%- if company.get("gstin") %}<br>GSTIN: {{ company.gstin }}{%- endif %}
+      </div>
+    </div>
+    <div class="gf-inv-title">
+      <h2>Service Invoice</h2>
+      <div class="gf-inv-no">{{ doc.name }}</div>
+      <div class="gf-inv-date">Date: {{ frappe.format(doc.posting_date, {"fieldtype": "Date"}) }}</div>
+      {%- if sr %}
+        <div style="margin-top: 4px;"><span class="gf-sr-badge">SR: {{ sr.name }}</span></div>
+      {%- endif %}
+    </div>
+  </div>
+
+  <!-- ═══ INFO GRID ═══ -->
+  <div class="gf-info-grid">
+    <!-- Customer -->
+    <div class="gf-info-box">
+      <h5>Bill To</h5>
+      <div class="gf-name">{{ doc.customer_name or doc.customer }}</div>
+      {%- if doc.customer_address %}
+        <div class="gf-detail">{{ doc.address_display or "" }}</div>
+      {%- endif %}
+      {%- if sr and sr.contact_phone %}
+        <div class="gf-detail">Ph: {{ sr.contact_phone }}</div>
+      {%- endif %}
+    </div>
+    <!-- Device Details -->
+    {%- if sr %}
+    <div class="gf-info-box">
+      <h5>Device Details</h5>
+      <div class="gf-name">{{ sr.device_item_name or sr.device_item or "-" }}</div>
+      {%- if sr.serial_no %}<div class="gf-detail">IMEI / Serial: {{ sr.serial_no }}</div>{%- endif %}
+      {%- if sr.brand %}<div class="gf-detail">Brand: {{ sr.brand }}</div>{%- endif %}
+      {%- if sr.issue_category %}<div class="gf-detail">Issue: {{ sr.issue_category }}</div>{%- endif %}
+    </div>
+    {%- endif %}
+    <!-- Service Info -->
+    <div class="gf-info-box">
+      <h5>Service Info</h5>
+      {%- if sr %}
+        <div class="gf-detail">Status: <strong>{{ sr.status }}</strong></div>
+        {%- if sr.warranty_status %}<div class="gf-detail">Warranty: {{ sr.warranty_status }}</div>{%- endif %}
+      {%- endif %}
+      {%- if doc.custom_gofix_service_order %}<div class="gf-detail">Service Order: {{ doc.custom_gofix_service_order }}</div>{%- endif %}
+      <div class="gf-detail">POS Profile: {{ doc.pos_profile or "-" }}</div>
+    </div>
+  </div>
+
+  <!-- ═══ LINE ITEMS ═══ -->
+  <table class="gf-table">
+    <thead>
+      <tr>
+        <th style="width:5%">#</th>
+        <th style="width:45%">Description</th>
+        <th class="r" style="width:10%">Qty</th>
+        <th class="r" style="width:18%">Rate</th>
+        <th class="r" style="width:22%">Amount</th>
+      </tr>
+    </thead>
+    <tbody>
+      {%- for item in doc.items %}
+      <tr>
+        <td>{{ loop.index }}</td>
+        <td>
+          <strong>{{ item.item_name }}</strong>
+          {%- if item.description and item.description != item.item_name %}
+            <div class="gf-item-desc">{{ item.description }}</div>
+          {%- endif %}
+          {%- set w_months = frappe.db.get_value("Item", item.item_code, "ch_default_warranty_months") if item.item_code else 0 %}
+          {%- if w_months %}<span class="gf-warranty-badge">{{ w_months }} mo warranty</span>{%- endif %}
+        </td>
+        <td class="r">{{ item.qty | int if item.qty == (item.qty | int) else item.qty }}</td>
+        <td class="r">{{ frappe.format(item.rate, {"fieldtype": "Currency"}) }}</td>
+        <td class="r">{{ frappe.format(item.amount, {"fieldtype": "Currency"}) }}</td>
+      </tr>
+      {%- endfor %}
+    </tbody>
+  </table>
+
+  <!-- ═══ TOTALS ═══ -->
+  <div class="gf-totals">
+    <div class="gf-totals-box">
+      {%- if doc.total_taxes_and_charges %}
+      <div class="gf-totals-row">
+        <span>Subtotal</span>
+        <span>{{ frappe.format(doc.net_total, {"fieldtype": "Currency"}) }}</span>
+      </div>
+      {%- for tax in doc.taxes %}
+      <div class="gf-totals-row">
+        <span>{{ tax.description }}</span>
+        <span>{{ frappe.format(tax.tax_amount, {"fieldtype": "Currency"}) }}</span>
+      </div>
+      {%- endfor %}
+      {%- endif %}
+      {%- if doc.discount_amount %}
+      <div class="gf-totals-row">
+        <span>Discount</span>
+        <span>- {{ frappe.format(doc.discount_amount, {"fieldtype": "Currency"}) }}</span>
+      </div>
+      {%- endif %}
+      <div class="gf-totals-row gf-grand">
+        <span>Grand Total</span>
+        <span>{{ frappe.format(doc.grand_total, {"fieldtype": "Currency"}) }}</span>
+      </div>
+      {%- if doc.in_words %}
+      <div style="font-size: 10px; color: #6b7280; text-align: right; margin-top: 2px; font-style: italic;">
+        {{ doc.in_words }}
+      </div>
+      {%- endif %}
+    </div>
+  </div>
+
+  <!-- ═══ PAYMENT ═══ -->
+  {%- if doc.payments %}
+  <div class="gf-payment">
+    <h5>Payment Received</h5>
+    {%- for p in doc.payments %}
+    <div class="gf-pay-row">
+      <span>{{ p.mode_of_payment }}
+        {%- if p.get("custom_upi_transaction_id") %} <span style="color:#6b7280">(Ref: {{ p.custom_upi_transaction_id }})</span>{%- endif %}
+      </span>
+      <span><strong>{{ frappe.format(p.amount, {"fieldtype": "Currency"}) }}</strong></span>
+    </div>
+    {%- endfor %}
+  </div>
+  {%- endif %}
+
+  <!-- ═══ WARRANTY TERMS ═══ -->
+  {%- set has_warranty = [] %}
+  {%- for item in doc.items %}
+    {%- set w = frappe.db.get_value("Item", item.item_code, "ch_default_warranty_months") if item.item_code else 0 %}
+    {%- if w %}{% if has_warranty.append({"item": item.item_name, "months": w}) %}{% endif %}{%- endif %}
+  {%- endfor %}
+  {%- if has_warranty or (sr and sr.repair_warranty_days) %}
+  <div class="gf-warranty-box">
+    <h5>Warranty Coverage</h5>
+    {%- if sr and sr.repair_warranty_days %}
+    <div style="font-size: 12px; margin-bottom: 4px;">
+      <strong>Repair Warranty:</strong> {{ sr.repair_warranty_days }} days from service completion
+      {%- if sr.repair_warranty_expiry %} (expires {{ frappe.format(sr.repair_warranty_expiry, {"fieldtype": "Date"}) }}){%- endif %}
+    </div>
+    {%- endif %}
+    {%- for w in has_warranty %}
+    <div style="font-size: 11px; color: #374151;">
+      • <strong>{{ w.item }}</strong> — {{ w.months }} month{{ "s" if w.months > 1 else "" }} manufacturer warranty
+    </div>
+    {%- endfor %}
+    <div style="font-size: 9px; color: #6b7280; margin-top: 6px;">
+      Warranty does not cover physical damage, water damage, or unauthorized modifications.
+      Original invoice must be presented for warranty claims.
+    </div>
+  </div>
+  {%- endif %}
+
+  <!-- ═══ FOOTER ═══ -->
+  <div class="gf-footer">
+    <div class="gf-footer-grid">
+      <div class="gf-terms">
+        <h5>Terms &amp; Conditions</h5>
+        1. This invoice is computer-generated and valid without signature.<br>
+        2. Warranty is void if device shows signs of physical or liquid damage post-repair.<br>
+        3. Customer must retain this invoice for warranty claims and future reference.<br>
+        4. Disputes, if any, are subject to jurisdiction of the service center location.<br>
+        5. Data backup is the customer's responsibility; we are not liable for data loss.
+      </div>
+      <div class="gf-sig-box">
+        <div class="gf-sig-line">Authorized Signatory</div>
+      </div>
+    </div>
+    <div class="gf-powered">{{ company.name }} · {{ company.phone_no or "" }} · {{ company.email or "" }}</div>
+  </div>
+
+</div>

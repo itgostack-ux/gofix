@@ -1362,8 +1362,33 @@ class GoFixOpsHub {
 							<h5 class="mt-1 text-muted">${__("Cost to Company")}: <span style="color:#dc2626">₹${format_number(s.company_total)}</span></h5>
 						` : ""}
 					</div>
-					${s.service_invoice ? `<div class="mt-2"><span class="goh-badge badge-green">${__("Invoiced")}</span> <a href="/app/sales-invoice/${encodeURIComponent(s.service_invoice)}" target="_blank">${esc(s.service_invoice)}</a></div>` : `<p class="text-muted mt-2">${__("Invoice will be created at POS during handover.")}</p>`}
+					${s.service_invoice
+						? `<div class="mt-2"><span class="goh-badge badge-green">${__("Invoiced")}</span> <a href="/app/sales-invoice/${encodeURIComponent(s.service_invoice)}" target="_blank">${esc(s.service_invoice)}</a></div>`
+						: `<div class="mt-3">
+							<button class="btn btn-sm btn-primary" id="goh-create-invoice"><i class="fa fa-file-text-o"></i> ${__("Create Invoice")}</button>
+							<span class="text-muted ml-2">${__("Or invoice at POS during handover.")}</span>
+						   </div>`
+					}
 				`);
+
+				// Bind create-invoice button
+				if (!s.service_invoice) {
+					this.parent.find("#goh-create-invoice").on("click", () => {
+						frappe.confirm(
+							__(`Create Sales Invoice for <b>${format_currency(s.customer_total)}</b>?`),
+							() => {
+								const btn = this.parent.find("#goh-create-invoice");
+								btn.prop("disabled", true).html('<i class="fa fa-spinner fa-spin"></i>');
+								frappe.xcall(`${API}.create_ops_hub_invoice`, { sr_name: d.name })
+									.then(r => {
+										frappe.show_alert({ message: __(`Invoice ${r.invoice} created — ₹${format_number(r.grand_total)}`), indicator: "green" });
+										self._refresh_all();
+									})
+									.catch(() => btn.prop("disabled", false).html('<i class="fa fa-file-text-o"></i> ' + __("Create Invoice")));
+							}
+						);
+					});
+				}
 			});
 		}
 

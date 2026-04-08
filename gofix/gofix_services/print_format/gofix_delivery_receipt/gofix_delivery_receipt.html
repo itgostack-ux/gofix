@@ -1,0 +1,244 @@
+{%- set sr = frappe.get_doc("Service Request", doc.custom_gofix_service_request) if doc.custom_gofix_service_request else None -%}
+{%- set company = frappe.get_doc("Company", doc.company) -%}
+
+<style>
+  @page { size: A4; margin: 10mm; }
+  .gf-dr { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #1f2937; font-size: 12px; line-height: 1.5; }
+  .gf-dr * { box-sizing: border-box; }
+
+  /* Header */
+  .gf-dr-header { display: flex; justify-content: space-between; align-items: flex-start; padding-bottom: 12px; border-bottom: 3px solid #059669; margin-bottom: 14px; }
+  .gf-dr-brand { font-size: 22px; font-weight: 800; color: #059669; letter-spacing: 0.5px; }
+  .gf-dr-brand-sub { font-size: 10px; color: #6b7280; margin-top: 2px; }
+  .gf-dr-title h2 { font-size: 18px; font-weight: 700; margin: 0 0 2px 0; color: #059669; text-transform: uppercase; letter-spacing: 1px; text-align: right; }
+  .gf-dr-no { font-size: 13px; font-weight: 600; color: #374151; text-align: right; }
+  .gf-dr-date { font-size: 11px; color: #6b7280; text-align: right; }
+
+  /* Badge */
+  .gf-dr-sr-badge { display: inline-block; background: #d1fae5; color: #065f46; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 10px; }
+
+  /* Info grid */
+  .gf-dr-grid { display: flex; gap: 14px; margin-bottom: 14px; }
+  .gf-dr-box { flex: 1; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 10px 12px; }
+  .gf-dr-box h5 { font-size: 9px; text-transform: uppercase; letter-spacing: 0.8px; color: #6b7280; margin: 0 0 6px 0; font-weight: 700; }
+  .gf-dr-box .gf-dr-name { font-size: 13px; font-weight: 700; color: #111827; margin-bottom: 2px; }
+  .gf-dr-box .gf-dr-detail { font-size: 11px; color: #4b5563; }
+
+  /* Repair summary table */
+  .gf-dr-table { width: 100%; border-collapse: collapse; margin-bottom: 14px; }
+  .gf-dr-table th { background: #059669; color: #fff; font-size: 10px; text-transform: uppercase; letter-spacing: 0.6px; padding: 7px 10px; text-align: left; font-weight: 600; }
+  .gf-dr-table td { padding: 7px 10px; border-bottom: 1px solid #e5e7eb; font-size: 12px; }
+  .gf-dr-table tr:last-child td { border-bottom: 2px solid #059669; }
+  .gf-dr-table td.r { text-align: right; }
+
+  /* Checklist */
+  .gf-dr-checklist { border: 1px solid #e2e8f0; border-radius: 6px; padding: 12px 14px; margin-bottom: 14px; }
+  .gf-dr-checklist h5 { font-size: 10px; text-transform: uppercase; letter-spacing: 0.8px; color: #374151; margin: 0 0 8px 0; font-weight: 700; }
+  .gf-dr-check-item { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 12px; }
+  .gf-dr-checkbox { width: 14px; height: 14px; border: 2px solid #9ca3af; border-radius: 3px; display: inline-block; flex-shrink: 0; }
+
+  /* Warranty card */
+  .gf-dr-warranty { background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 6px; padding: 12px 14px; margin-bottom: 14px; }
+  .gf-dr-warranty h5 { font-size: 10px; text-transform: uppercase; letter-spacing: 0.8px; color: #1e40af; margin: 0 0 6px 0; font-weight: 700; }
+
+  /* Billing summary */
+  .gf-dr-billing { background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 6px; padding: 12px 14px; margin-bottom: 14px; }
+  .gf-dr-billing h5 { font-size: 10px; text-transform: uppercase; letter-spacing: 0.8px; color: #15803d; margin: 0 0 6px 0; font-weight: 700; }
+  .gf-dr-bill-row { display: flex; justify-content: space-between; font-size: 12px; padding: 2px 0; }
+  .gf-dr-bill-total { display: flex; justify-content: space-between; font-size: 14px; font-weight: 800; color: #059669; border-top: 2px solid #059669; padding-top: 6px; margin-top: 4px; }
+
+  /* Signatures */
+  .gf-dr-sig { display: flex; justify-content: space-between; gap: 30px; margin-top: 16px; margin-bottom: 10px; }
+  .gf-dr-sig-box { flex: 1; text-align: center; }
+  .gf-dr-sig-line { border-top: 1px solid #9ca3af; margin-top: 60px; padding-top: 4px; font-size: 10px; color: #6b7280; }
+  .gf-dr-sig-label { font-size: 9px; color: #9ca3af; margin-top: 2px; }
+
+  /* Footer */
+  .gf-dr-footer { border-top: 1px solid #d1d5db; padding-top: 8px; font-size: 9px; color: #9ca3af; text-align: center; }
+  .gf-dr-footer-note { font-size: 10px; color: #6b7280; background: #fefce8; border: 1px solid #fde68a; border-radius: 6px; padding: 8px 12px; margin-bottom: 10px; text-align: center; }
+</style>
+
+<div class="gf-dr">
+
+  <!-- ═══ HEADER ═══ -->
+  <div class="gf-dr-header">
+    <div>
+      {%- if company.company_logo %}
+        <img src="{{ company.company_logo }}" style="height: 40px; margin-bottom: 4px;" alt="{{ company.name }}">
+      {%- else %}
+        <div class="gf-dr-brand">{{ company.name }}</div>
+      {%- endif %}
+      <div class="gf-dr-brand-sub">
+        {%- if company.phone_no %}{{ company.phone_no }}{%- endif %}
+        {%- if company.email %} · {{ company.email }}{%- endif %}
+      </div>
+    </div>
+    <div class="gf-dr-title">
+      <h2>Delivery Receipt</h2>
+      <div class="gf-dr-no">{{ doc.name }}</div>
+      <div class="gf-dr-date">Date: {{ frappe.format(doc.posting_date, {"fieldtype": "Date"}) }}</div>
+      {%- if sr %}
+        <div style="margin-top: 4px;"><span class="gf-dr-sr-badge">SR: {{ sr.name }}</span></div>
+      {%- endif %}
+    </div>
+  </div>
+
+  <!-- ═══ CUSTOMER + DEVICE ═══ -->
+  <div class="gf-dr-grid">
+    <div class="gf-dr-box">
+      <h5>Customer</h5>
+      <div class="gf-dr-name">{{ doc.customer_name or doc.customer }}</div>
+      {%- if sr and sr.contact_phone %}<div class="gf-dr-detail">Phone: {{ sr.contact_phone }}</div>{%- endif %}
+      {%- if doc.customer_address %}<div class="gf-dr-detail">{{ doc.address_display or "" }}</div>{%- endif %}
+    </div>
+    {%- if sr %}
+    <div class="gf-dr-box">
+      <h5>Device Returned</h5>
+      <div class="gf-dr-name">{{ sr.device_item_name or sr.device_item or "-" }}</div>
+      {%- if sr.serial_no %}<div class="gf-dr-detail">IMEI / Serial: <strong>{{ sr.serial_no }}</strong></div>{%- endif %}
+      {%- if sr.brand %}<div class="gf-dr-detail">Brand: {{ sr.brand }}</div>{%- endif %}
+    </div>
+    {%- endif %}
+    <div class="gf-dr-box">
+      <h5>Service Reference</h5>
+      {%- if sr %}<div class="gf-dr-detail">Service Request: <strong>{{ sr.name }}</strong></div>{%- endif %}
+      {%- if doc.custom_gofix_service_order %}<div class="gf-dr-detail">Service Order: {{ doc.custom_gofix_service_order }}</div>{%- endif %}
+      <div class="gf-dr-detail">Invoice: <strong>{{ doc.name }}</strong></div>
+      {%- if sr and sr.issue_category %}<div class="gf-dr-detail">Issue: {{ sr.issue_category }}</div>{%- endif %}
+    </div>
+  </div>
+
+  <!-- ═══ REPAIR SUMMARY ═══ -->
+  <table class="gf-dr-table">
+    <thead>
+      <tr>
+        <th style="width: 5%">#</th>
+        <th style="width: 55%">Work Performed / Parts Used</th>
+        <th style="width: 10%; text-align: center">Qty</th>
+        <th class="r" style="width: 30%">Amount</th>
+      </tr>
+    </thead>
+    <tbody>
+      {%- for item in doc.items %}
+      <tr>
+        <td>{{ loop.index }}</td>
+        <td>
+          <strong>{{ item.item_name }}</strong>
+          {%- set w_months = frappe.db.get_value("Item", item.item_code, "ch_default_warranty_months") if item.item_code else 0 %}
+          {%- if w_months %}
+            <span style="display:inline-block;background:#dbeafe;color:#1d4ed8;font-size:9px;font-weight:600;padding:1px 6px;border-radius:8px;margin-left:4px">{{ w_months }}mo warranty</span>
+          {%- endif %}
+        </td>
+        <td style="text-align: center">{{ item.qty | int if item.qty == (item.qty | int) else item.qty }}</td>
+        <td class="r">{{ frappe.format(item.amount, {"fieldtype": "Currency"}) }}</td>
+      </tr>
+      {%- endfor %}
+    </tbody>
+  </table>
+
+  <!-- ═══ BILLING SUMMARY ═══ -->
+  <div class="gf-dr-billing">
+    <h5>Billing Summary</h5>
+    {%- for item in doc.items %}
+    <div class="gf-dr-bill-row">
+      <span>{{ item.item_name }}</span>
+      <span>{{ frappe.format(item.amount, {"fieldtype": "Currency"}) }}</span>
+    </div>
+    {%- endfor %}
+    {%- if doc.total_taxes_and_charges %}
+    <div class="gf-dr-bill-row">
+      <span>Tax</span>
+      <span>{{ frappe.format(doc.total_taxes_and_charges, {"fieldtype": "Currency"}) }}</span>
+    </div>
+    {%- endif %}
+    <div class="gf-dr-bill-total">
+      <span>Total Paid</span>
+      <span>{{ frappe.format(doc.grand_total, {"fieldtype": "Currency"}) }}</span>
+    </div>
+    {%- if doc.payments %}
+    <div style="font-size: 11px; color: #4b5563; margin-top: 4px;">
+      Paid via:
+      {%- for p in doc.payments %}
+        {{ p.mode_of_payment }} ({{ frappe.format(p.amount, {"fieldtype": "Currency"}) }}){{ "," if not loop.last else "" }}
+      {%- endfor %}
+    </div>
+    {%- endif %}
+  </div>
+
+  <!-- ═══ WARRANTY TERMS ═══ -->
+  {%- set has_warranty = [] %}
+  {%- for item in doc.items %}
+    {%- set w = frappe.db.get_value("Item", item.item_code, "ch_default_warranty_months") if item.item_code else 0 %}
+    {%- if w %}{% if has_warranty.append({"item": item.item_name, "months": w}) %}{% endif %}{%- endif %}
+  {%- endfor %}
+  {%- if has_warranty or (sr and sr.repair_warranty_days) %}
+  <div class="gf-dr-warranty">
+    <h5>Warranty Information</h5>
+    {%- if sr and sr.repair_warranty_days %}
+    <div style="font-size: 12px; margin-bottom: 4px;">
+      <strong>Repair Warranty:</strong> {{ sr.repair_warranty_days }} days
+      {%- if sr.repair_warranty_expiry %} — valid until <strong>{{ frappe.format(sr.repair_warranty_expiry, {"fieldtype": "Date"}) }}</strong>{%- endif %}
+    </div>
+    {%- endif %}
+    {%- for w in has_warranty %}
+    <div style="font-size: 11px; color: #374151;">
+      • <strong>{{ w.item }}</strong> — {{ w.months }} month{{ "s" if w.months > 1 else "" }} warranty on replacement part
+    </div>
+    {%- endfor %}
+    <div style="font-size: 9px; color: #6b7280; margin-top: 6px;">
+      Present this receipt for any warranty claims. Warranty excludes physical damage, water damage, and unauthorized modifications.
+    </div>
+  </div>
+  {%- endif %}
+
+  <!-- ═══ DEVICE CONDITION CHECKLIST ═══ -->
+  <div class="gf-dr-checklist">
+    <h5>Device Handover Checklist</h5>
+    <div style="display: flex; gap: 20px; flex-wrap: wrap;">
+      <div style="flex: 1; min-width: 200px;">
+        <div class="gf-dr-check-item"><span class="gf-dr-checkbox"></span> Device powers on correctly</div>
+        <div class="gf-dr-check-item"><span class="gf-dr-checkbox"></span> Screen / display functioning</div>
+        <div class="gf-dr-check-item"><span class="gf-dr-checkbox"></span> Touch response normal</div>
+        <div class="gf-dr-check-item"><span class="gf-dr-checkbox"></span> Speaker &amp; microphone working</div>
+      </div>
+      <div style="flex: 1; min-width: 200px;">
+        <div class="gf-dr-check-item"><span class="gf-dr-checkbox"></span> Charging port functional</div>
+        <div class="gf-dr-check-item"><span class="gf-dr-checkbox"></span> Camera(s) working</div>
+        <div class="gf-dr-check-item"><span class="gf-dr-checkbox"></span> No new physical damage</div>
+        <div class="gf-dr-check-item"><span class="gf-dr-checkbox"></span> Customer data intact</div>
+      </div>
+    </div>
+    <div style="margin-top: 10px; font-size: 11px;">
+      <strong>Remarks:</strong> ___________________________________________________________________________
+    </div>
+  </div>
+
+  <!-- ═══ IMPORTANT NOTICE ═══ -->
+  <div class="gf-dr-footer-note">
+    <strong>Important:</strong> Please inspect your device thoroughly before leaving the service center.
+    Issues reported after leaving the premises may not be covered under the service warranty.
+  </div>
+
+  <!-- ═══ SIGNATURES ═══ -->
+  <div class="gf-dr-sig">
+    <div class="gf-dr-sig-box">
+      <div class="gf-dr-sig-line">Customer Signature</div>
+      <div class="gf-dr-sig-label">I acknowledge receipt of my device in satisfactory condition</div>
+    </div>
+    <div class="gf-dr-sig-box">
+      <div class="gf-dr-sig-line">Date &amp; Time</div>
+      <div class="gf-dr-sig-label">&nbsp;</div>
+    </div>
+    <div class="gf-dr-sig-box">
+      <div class="gf-dr-sig-line">Service Center Staff</div>
+      <div class="gf-dr-sig-label">{{ doc.owner or "" }}</div>
+    </div>
+  </div>
+
+  <!-- ═══ FOOTER ═══ -->
+  <div class="gf-dr-footer">
+    {{ company.name }} · {{ company.phone_no or "" }} · {{ company.email or "" }}<br>
+    Thank you for choosing our service. We value your trust!
+  </div>
+
+</div>

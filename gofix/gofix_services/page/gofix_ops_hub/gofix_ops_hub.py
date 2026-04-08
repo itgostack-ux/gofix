@@ -1179,6 +1179,103 @@ def get_invoice_summary(sr_name):
 
 
 @frappe.whitelist()
+def create_ops_hub_invoice(sr_name):
+	"""Create a Sales Invoice directly from the Ops Hub invoice stage.
+
+	Falls back to Sales Order items when SR has no service_items / spare_parts.
+	"""
+	frappe.only_for(["Service Manager", "System Manager"])
+
+	sr = frappe.get_doc("Service Request", sr_name)
+
+	if sr.service_invoice:
+		frappe.throw(_("Invoice {0} already exists for {1}.").format(sr.service_invoice, sr_name))
+
+	if not sr.is_completed_status():
+		frappe.throw(_("Service Request must be in Completed status to create an invoice."))
+
+	# ── Gather line items ──────────────────────────────────────────────────
+	items = []
+
+	# 1) Service items on SR
+	for row in sr.get("service_items", []):
+		items.append({
+			"item_code": row.service_item,
+			"item_name": row.service_item_name or row.item_name or "",
+			"qty": 1,
+			"rate": flt(row.rate or row.actual_cost or row.estimated_cost or 0),
+			"uom": "Nos",
+		})
+
+	# 2) Consumed spare lines (exclude damaged – company cost)
+	for row in sr.get("spare_lines", []):
+		if row.status == "Damaged":
+			continue
+		rate = flt(row.rate)
+		if not rate:
+			continue
+		items.append({
+			"item_code": row.spare_item,
+			"item_name": row.item_name or "",
+			"qty": flt(row.qty) or 1,
+			"rate": rate,
+			"uom": row.get("uom") or "Nos",
+		})
+
+	# 3) Fallback: pull from linked Sales Order
+	if not items and sr.service_order:
+		try:
+			so = frappe.get_doc("Sales Order", sr.service_order)
+			for row in so.items:
+				item_row = {
+					"item_code": row.item_code,
+					"item_name": row.item_name,
+					"qty": row.qty or 1,
+					"rate": flt(row.rate),
+					"uom": row.uom,
+				}
+				if so.docstatus == 1:
+					item_row["sales_order"] = so.name
+					item_row["so_detail"] = row.name
+				items.append(item_row)
+		except Exception:
+			pass
+
+	if not items:
+		frappe.throw(_("No billable items found on {0} or its Sales Order.").format(sr_name))
+
+	# ── Create Sales Invoice ──────────────────────────────────────────────
+	posting_date = sr.get("actual_completion_date") or nowdate()
+
+	inv = frappe.get_doc({
+		"doctype": "Sales Invoice",
+		"customer": sr.customer,
+		"company": sr.company,
+		"posting_date": posting_date,
+		"due_date": posting_date,
+		"items": items,
+		"remarks": f"Service Invoice for {sr_name} (via Ops Hub)",
+		"custom_gofix_service_request": sr_name,
+		"custom_gofix_service_order": sr.service_order or "",
+	})
+
+	inv.flags.ignore_permissions = True
+	inv.insert()
+	inv.submit()
+
+	# Link back to SR
+	frappe.db.set_value("Service Request", sr_name, {
+		"service_invoice": inv.name,
+		"status": "Invoiced",
+		"decision": "Invoiced",
+	}, update_modified=True)
+
+	frappe.db.commit()
+
+	return {"ok": True, "invoice": inv.name, "grand_total": inv.grand_total}
+
+
+@frappe.whitelist()
 def reassign_after_qc_fail(sr_name, technician, job_type="Repair", manager_notes=""):
 	"""Floor manager assigns ticket back to technician after QC failure."""
 	frappe.only_for(["Service Manager", "System Manager"])

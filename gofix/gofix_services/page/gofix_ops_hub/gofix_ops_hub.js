@@ -722,52 +722,113 @@ class GoFixOpsHub {
 	/* ═══════════════════════════════════════════════════════════════════════ */
 	_html_assign(d) {
 		const esc = frappe.utils.escape_html;
-		const solSummary = (d.solution_lines || []).map(s => `
-			<span class="goh-badge badge-muted">${esc(s.repair_solution)}</span>
-		`).join(" ");
+		const sols = (d.solution_lines || []).filter(s => s.status !== "Cancelled");
+		const assigned = sols.filter(s => s.technician);
+		const unassigned = sols.filter(s => !s.technician);
+		const allDone = sols.length > 0 && unassigned.length === 0;
 
-		const existingAssign = (d.assignments || []).map(a => `
-			<div class="goh-assign-chip">
-				<i class="fa fa-user"></i>
-				<b>${esc(a.engineer_display)}</b>
-				<span class="goh-badge badge-muted ml-1">${esc(a.job_type)}</span>
-				<span class="goh-badge ${a.assignment_status === "Completed" ? "badge-green" : "badge-blue"} ml-1">${esc(a.assignment_status)}</span>
+		// Group assigned by technician
+		const techMap = {};
+		assigned.forEach(s => {
+			const key = s.technician;
+			if (!techMap[key]) techMap[key] = { name: s.technician_name || s.technician, solutions: [] };
+			techMap[key].solutions.push(s);
+		});
+
+		const assignedHtml = Object.entries(techMap).map(([tech, info]) => `
+			<div class="goh-tech-group" style="background:var(--fg-color);border:1px solid var(--border-color);border-radius:8px;padding:10px 14px;margin-bottom:8px">
+				<div style="font-weight:600;font-size:13px;margin-bottom:6px">
+					<i class="fa fa-user-check text-success" style="margin-right:4px"></i>${esc(info.name)}
+					<span class="goh-badge badge-green" style="margin-left:6px">${info.solutions.length} solution${info.solutions.length > 1 ? "s" : ""}</span>
+				</div>
+				${info.solutions.map(s => `
+					<div style="display:flex;align-items:center;gap:8px;padding:3px 0 3px 20px;font-size:12px">
+						<span class="goh-badge badge-muted" style="font-size:11px">${esc(s.issue_category || "")}</span>
+						<span style="font-weight:500">${esc(s.repair_solution)}</span>
+						<span class="text-muted">${s.estimated_minutes || 0}min</span>
+						${s.requires_spare ? '<span class="goh-badge badge-orange" style="font-size:10px">Spare</span>' : ""}
+						<button class="btn btn-xs btn-link text-danger goh-unassign-sol" data-row="${esc(s.name)}" style="padding:0;margin-left:auto;font-size:11px"><i class="fa fa-times"></i></button>
+					</div>
+				`).join("")}
 			</div>
 		`).join("");
 
+		// Group unassigned by issue category
+		const issueMap = {};
+		unassigned.forEach(s => {
+			const cat = s.issue_category || __("General");
+			if (!issueMap[cat]) issueMap[cat] = [];
+			issueMap[cat].push(s);
+		});
+
+		const unassignedHtml = Object.entries(issueMap).map(([issue, items]) => `
+			<div style="margin-bottom:8px">
+				<div style="font-weight:600;font-size:12px;color:var(--text-muted);margin-bottom:4px">
+					<i class="fa fa-tag" style="margin-right:4px"></i>${esc(issue)}
+				</div>
+				${items.map(s => `
+					<label style="display:flex;align-items:center;gap:8px;padding:4px 8px 4px 20px;cursor:pointer;border-radius:4px;margin:0" class="goh-sol-assign-row" onmouseover="this.style.background='var(--bg-light-gray)'" onmouseout="this.style.background=''">
+						<input type="checkbox" class="goh-assign-check" data-row="${esc(s.name)}" checked>
+						<span style="font-weight:500;font-size:13px">${esc(s.repair_solution)}</span>
+						<span class="text-muted" style="font-size:12px">${s.estimated_minutes || 0}min</span>
+						${s.requires_spare ? '<span class="goh-badge badge-orange" style="font-size:10px">Spare</span>' : ""}
+					</label>
+				`).join("")}
+			</div>
+		`).join("");
+
+		const progressPct = sols.length ? Math.round((assigned.length / sols.length) * 100) : 0;
+
 		return `
 			<div class="goh-section">
-				<div class="goh-section-title"><i class="fa fa-user-plus"></i> ${__("Assign Technician")}</div>
-				<p class="text-muted">${__("Solutions to work on:")} ${solSummary}</p>
+				<div class="goh-section-title"><i class="fa fa-user-plus"></i> ${__("Assign Technicians to Solutions")}</div>
 
-				${existingAssign ? `<div class="goh-existing-assigns mb-3">${existingAssign}</div>` : ""}
-
-				<div class="row">
-					<div class="col-sm-5">
-						<label class="goh-field-label">${__("Technician")}</label>
-						<div id="goh-tech-field"></div>
+				<!-- Progress bar -->
+				<div style="margin-bottom:12px">
+					<div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px">
+						<span>${assigned.length}/${sols.length} ${__("solutions assigned")}</span>
+						<span>${progressPct}%</span>
 					</div>
-					<div class="col-sm-3">
-						<label class="goh-field-label">${__("Job Type")}</label>
-						<select class="form-control input-sm" id="goh-job-type">
-							<option value="Repair">${__("Repair")}</option>
-							<option value="Diagnosis">${__("Diagnosis")}</option>
-							<option value="Spare Parts Replacement">${__("Spare Parts")}</option>
-							<option value="Software Update">${__("Software Update")}</option>
-							<option value="Testing">${__("Testing")}</option>
-						</select>
-					</div>
-					<div class="col-sm-2">
-						<label class="goh-field-label">${__("Est. Hours")}</label>
-						<input class="form-control input-sm" id="goh-est-hours" type="number" value="2" min="0.5" step="0.5">
-					</div>
-					<div class="col-sm-2 d-flex align-items-end">
-						<button class="btn btn-sm btn-primary w-100" id="goh-do-assign"><i class="fa fa-check"></i> ${__("Assign")}</button>
+					<div style="height:6px;background:var(--border-color);border-radius:3px;overflow:hidden">
+						<div style="height:100%;width:${progressPct}%;background:var(--green-500);border-radius:3px;transition:width 0.3s"></div>
 					</div>
 				</div>
 
-				<div class="goh-section-actions mt-2">
+				${assigned.length ? `
+					<div style="margin-bottom:14px">
+						<div style="font-size:11px;text-transform:uppercase;letter-spacing:0.5px;font-weight:600;color:var(--green-600);margin-bottom:6px">
+							<i class="fa fa-check-circle"></i> ${__("Assigned")}
+						</div>
+						${assignedHtml}
+					</div>
+				` : ""}
+
+				${unassigned.length ? `
+					<div style="background:var(--bg-color);border:1px solid var(--border-color);border-radius:8px;padding:12px 14px;margin-bottom:14px">
+						<div style="font-size:11px;text-transform:uppercase;letter-spacing:0.5px;font-weight:600;color:var(--orange-600);margin-bottom:8px">
+							<i class="fa fa-clock-o"></i> ${__("Unassigned")} (${unassigned.length})
+							<span style="font-weight:400;font-size:11px;color:var(--text-muted);margin-left:8px">${__("Select solutions & assign a technician")}</span>
+						</div>
+						${unassignedHtml}
+						<div style="display:flex;gap:10px;align-items:flex-end;margin-top:12px;padding-top:10px;border-top:1px solid var(--border-color)">
+							<div style="flex:2">
+								<label class="goh-field-label" style="font-size:11px">${__("Technician")}</label>
+								<div id="goh-tech-field"></div>
+							</div>
+							<div style="flex:0 0 90px">
+								<label class="goh-field-label" style="font-size:11px">${__("Est. Hours")}</label>
+								<input class="form-control input-sm" id="goh-est-hours" type="number" value="2" min="0.5" step="0.5">
+							</div>
+							<div style="flex:0 0 auto">
+								<button class="btn btn-sm btn-primary" id="goh-do-assign"><i class="fa fa-check"></i> ${__("Assign")}</button>
+							</div>
+						</div>
+					</div>
+				` : ""}
+
+				<div class="goh-section-actions" style="display:flex;justify-content:space-between;align-items:center;margin-top:8px">
 					<button class="btn btn-xs btn-default" id="goh-back-to-solutions"><i class="fa fa-arrow-left"></i> ${__("Back to Solutions")}</button>
+					${allDone ? `<button class="btn btn-sm btn-success" id="goh-proceed-repair"><i class="fa fa-arrow-right"></i> ${__("Proceed to Repair")}</button>` : ""}
 				</div>
 			</div>
 		`;
@@ -1183,14 +1244,40 @@ class GoFixOpsHub {
 					.then(() => self._refresh_all());
 			});
 
+			// Assign selected solutions to technician
 			content.find("#goh-do-assign").on("click", () => {
 				const tech = this._tech_field && this._tech_field.get_value();
 				if (!tech) return frappe.show_alert({ message: __("Select a technician."), indicator: "orange" });
-				frappe.xcall(`${API}.assign_technician`, {
-					sr_name: d.name, technician: tech,
-					job_type: content.find("#goh-job-type").val() || "Repair",
+
+				const selectedRows = [];
+				content.find(".goh-assign-check:checked").each(function () {
+					selectedRows.push($(this).data("row"));
+				});
+				if (!selectedRows.length) return frappe.show_alert({ message: __("Select at least one solution."), indicator: "orange" });
+
+				frappe.xcall(`${API}.assign_solutions_to_technician`, {
+					sr_name: d.name,
+					solution_rows_json: JSON.stringify(selectedRows),
+					technician: tech,
 					estimated_hours: parseFloat(content.find("#goh-est-hours").val() || 2),
-				}).then(() => { frappe.show_alert({ message: __("Technician assigned!"), indicator: "green" }); self._refresh_all(); });
+				}).then((r) => {
+					frappe.show_alert({ message: __("Technician assigned to {0} solution(s)!", [selectedRows.length]), indicator: "green" });
+					self._refresh_all();
+				});
+			});
+
+			// Remove assignment
+			content.on("click", ".goh-unassign-sol", function (e) {
+				e.preventDefault();
+				const rowName = $(this).data("row");
+				frappe.xcall(`${API}.unassign_solution`, { sr_name: d.name, solution_row_name: rowName })
+					.then(() => { frappe.show_alert({ message: __("Assignment removed."), indicator: "blue" }); self._load_detail(d.name); });
+			});
+
+			// Proceed to repair (only when all assigned)
+			content.find("#goh-proceed-repair").on("click", () => {
+				frappe.xcall(`${API}.advance_to_repair`, { sr_name: d.name })
+					.then(() => { frappe.show_alert({ message: __("Moving to Repair stage."), indicator: "green" }); self._refresh_all(); });
 			});
 		}
 

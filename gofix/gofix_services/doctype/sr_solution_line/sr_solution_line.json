@@ -11,6 +11,9 @@
   "solution_code",
   "estimated_minutes",
   "requires_spare",
+  "section_break_assign",
+  "technician",
+  "technician_name",
   "section_break_2",
   "status",
   "technician_remarks",
@@ -58,6 +61,24 @@
    "fieldname": "requires_spare",
    "fieldtype": "Check",
    "label": "Requires Spare",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_assign",
+   "fieldtype": "Section Break",
+   "label": "Assignment"
+  },
+  {
+   "fieldname": "technician",
+   "fieldtype": "Link",
+   "label": "Technician",
+   "options": "Employee"
+  },
+  {
+   "fetch_from": "technician.employee_name",
+   "fieldname": "technician_name",
+   "fieldtype": "Data",
+   "label": "Technician Name",
    "read_only": 1
   },
   {

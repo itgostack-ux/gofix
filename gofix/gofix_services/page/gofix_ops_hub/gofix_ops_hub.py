@@ -320,6 +320,8 @@ def get_ticket_detail(sr_name):
 			"estimated_minutes": row.estimated_minutes,
 			"requires_spare": cint(row.requires_spare),
 			"status": row.status,
+			"technician": row.technician or "",
+			"technician_name": row.technician_name or "",
 			"technician_remarks": row.technician_remarks or "",
 			"cancel_reason": row.get("cancel_reason") or "",
 		}
@@ -855,6 +857,93 @@ def assign_technician(sr_name, technician, job_type="Repair", estimated_hours=No
 	frappe.db.commit()
 
 	return {"ok": True, "job_assignment": ja.name, "stage": "repair"}
+
+
+@frappe.whitelist()
+def assign_solutions_to_technician(sr_name, solution_rows_json, technician, estimated_hours=None):
+	"""Assign specific solutions to a technician and create a Job Assignment.
+
+	solution_rows_json: JSON array of SR Solution Line row names.
+	"""
+	frappe.has_permission("Job Assignment", "create", throw=True)
+
+	solution_rows = json.loads(solution_rows_json) if isinstance(solution_rows_json, str) else solution_rows_json
+	if not solution_rows:
+		frappe.throw(_("Select at least one solution to assign."))
+
+	sr = frappe.get_doc("Service Request", sr_name)
+	if not sr.service_order:
+		frappe.throw(_("No Service Order found for {0}.").format(sr_name))
+
+	# Resolve technician name
+	tech_name = frappe.db.get_value("Employee", technician, "employee_name") or technician
+
+	# Stamp technician on each selected solution line
+	for row_name in solution_rows:
+		frappe.db.set_value("SR Solution Line", row_name, {
+			"technician": technician,
+			"technician_name": tech_name,
+		}, update_modified=True)
+
+	# Create Job Assignment for tracking
+	ja = frappe.new_doc("Job Assignment")
+	ja.service_order = sr.service_order
+	ja.service_request = sr_name
+	ja.service_engineer = technician
+	ja.job_type = "Repair"
+	ja.assignment_type = "Technician Assignment"
+	ja.assigned_by = frappe.session.user
+	ja.priority = sr.priority
+	if estimated_hours:
+		ja.estimated_hours = flt(estimated_hours)
+	ja.insert()
+	ja.submit()
+
+	# Check if ALL solutions are now assigned
+	sr.reload()
+	all_assigned = all(row.technician for row in sr.get("solution_lines", []))
+
+	if all_assigned:
+		_log_ops_stage(sr_name, "assign", "repair")
+
+	frappe.db.commit()
+
+	return {
+		"ok": True,
+		"job_assignment": ja.name,
+		"all_assigned": all_assigned,
+		"stage": "repair" if all_assigned else "assign",
+	}
+
+
+@frappe.whitelist()
+def unassign_solution(sr_name, solution_row_name):
+	"""Remove technician assignment from a solution line."""
+	frappe.has_permission("Service Request", sr_name, "write", throw=True)
+
+	frappe.db.set_value("SR Solution Line", solution_row_name, {
+		"technician": "",
+		"technician_name": "",
+	}, update_modified=True)
+	frappe.db.commit()
+
+	return {"ok": True}
+
+
+@frappe.whitelist()
+def advance_to_repair(sr_name):
+	"""Manually advance from assign to repair stage (when all solutions assigned)."""
+	frappe.has_permission("Service Request", sr_name, "write", throw=True)
+
+	sr = frappe.get_doc("Service Request", sr_name)
+	unassigned = [row for row in sr.get("solution_lines", []) if not row.technician and row.status != "Cancelled"]
+	if unassigned:
+		frappe.throw(_("All solutions must be assigned before proceeding to repair."))
+
+	_log_ops_stage(sr_name, "assign", "repair")
+	frappe.db.commit()
+
+	return {"ok": True, "stage": "repair"}
 
 
 # ── Step 5: Repair Execution ──────────────────────────────────────────────────

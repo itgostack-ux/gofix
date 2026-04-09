@@ -417,14 +417,14 @@ def _update_service_costing(doc):
 		return
 
 	# Sum spare parts costs
-	parts = frappe.get_all("Spare Parts Usage",
-		filters={
-			"service_request": doc.service_request,
-			"status": "Active",
-			"part_status": ["in", ["Consumed", "Issued"]],
-		},
-		fields=["sum(purchase_cost * qty_used) as total_cost",
-				"sum(sales_price * qty_used) as total_revenue"])
+	parts = frappe.db.sql("""
+		SELECT SUM(purchase_cost * qty_used) as total_cost,
+			   SUM(sales_price * qty_used) as total_revenue
+		FROM `tabSpare Parts Usage`
+		WHERE service_request = %s
+		  AND status = 'Active'
+		  AND part_status IN ('Consumed', 'Issued')
+	""", (doc.service_request,), as_dict=True)
 
 	parts_cost = flt(parts[0].total_cost) if parts else 0
 	parts_revenue = flt(parts[0].total_revenue) if parts else 0
@@ -472,13 +472,13 @@ def _update_service_costing(doc):
 		doc.db_set("labor_cost", suggested_labor, update_modified=False)
 
 	# ── Technician Damage Cost ──
-	damage = frappe.get_all("Spare Parts Usage",
-		filters={
-			"service_request": doc.service_request,
-			"is_defective": 1,
-			"defect_type": "Installation Damage",
-		},
-		fields=["sum(purchase_cost * qty_used) as damage_cost"])
+	damage = frappe.db.sql("""
+		SELECT COALESCE(SUM(purchase_cost * qty_used), 0) as damage_cost
+		FROM `tabSpare Parts Usage`
+		WHERE service_request = %s
+		  AND is_defective = 1
+		  AND defect_type = 'Installation Damage'
+	""", (doc.service_request,), as_dict=True)
 	damage_cost = flt(damage[0].damage_cost) if damage else 0
 	doc.db_set("technician_damage_cost", damage_cost, update_modified=False)
 
@@ -524,14 +524,13 @@ def move_service_order_to_qc_if_ready(doc):
 			doc.db_set("workflow_state", repair_outcome, update_modified=False)
 		return
 
-	if getattr(doc, 'qc_status', None) not in ["Pass", "Fail"]:
-		doc.db_set("qc_status", "Awaiting", update_modified=False)
+	# Always reset to Awaiting (handles first QC and re-QC after rework)
+	doc.db_set("qc_status", "Awaiting", update_modified=False)
+	doc.db_set("workflow_state", "QC Awaiting", update_modified=False)
 
-	if getattr(doc, 'workflow_state', None) != "QC Awaiting":
-		doc.db_set("workflow_state", "QC Awaiting", update_modified=False)
-
-	# Auto-populate QC checklist from matching template
-	_populate_qc_checklist(doc)
+	# Auto-populate QC checklist from matching template (force repopulate on rework)
+	is_rework = (getattr(doc, "rework_count", 0) or 0) > 0
+	_populate_qc_checklist(doc, force=is_rework)
 
 
 def _populate_qc_checklist(doc, force=False):
@@ -624,4 +623,5 @@ def _populate_qc_checklist(doc, force=False):
 					"result": "",
 				})
 
+	doc.flags.ignore_validate = True
 	doc.save(ignore_permissions=True)

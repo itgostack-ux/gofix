@@ -31,6 +31,17 @@ STAGE_LABELS = {
 }
 
 
+def _mark_sr_in_service(sr_name):
+	"""Advance SR decision & workflow_state to 'In Service' if still Accepted."""
+	current = frappe.db.get_value("Service Request", sr_name, "decision")
+	if current in ("Draft", "Accepted"):
+		frappe.db.set_value("Service Request", sr_name, {
+			"decision": "In Service",
+			"status": "In Service",
+			"workflow_state": "In Service",
+		}, update_modified=True)
+
+
 def _log_ops_stage(sr_name, from_stage, to_stage):
 	"""Append a GoFix Status Log row for ops-hub stage transitions."""
 	from frappe.utils import time_diff_in_hours
@@ -109,7 +120,7 @@ def get_ticket_queue(warehouse=None, search=None, date_from=None, date_to=None, 
 	]
 
 	if stage_filter == "active":
-		filters.append(["decision", "in", ["Accepted", "In Service", "Completed"]])
+		filters.append(["decision", "in", ["Accepted", "In Service", "Completed", "Invoiced"]])
 	elif stage_filter != "all":
 		filters.append(["decision", "not in", ["Cancelled", "Rejected", "Expired"]])
 
@@ -366,6 +377,7 @@ def get_ticket_detail(sr_name):
 	qc_datetime = ""
 	qc_checklist = []
 	so_workflow_state = ""
+	rework_count = 0
 	if sr.service_order:
 		so_data = frappe.db.get_value(
 			"Sales Order", sr.service_order,
@@ -376,12 +388,14 @@ def get_ticket_detail(sr_name):
 		qc_checked_by = so_data.get("qc_checked_by") or ""
 		qc_datetime = str(so_data.get("qc_datetime") or "")
 		so_workflow_state = so_data.get("workflow_state") or ""
+		rework_count = cint(frappe.db.get_value("Sales Order", sr.service_order, "rework_count"))
 
 		# Fetch QC checklist from SO
 		qc_rows = frappe.get_all(
 			"GoFix QC Checklist",
 			filters={"parent": sr.service_order},
-			fields=["name", "check_name", "result", "remarks"],
+			fields=["name", "check_name", "result", "remarks",
+				"linked_solution", "fail_reason", "rework_required", "rework_iteration"],
 			order_by="idx asc",
 		)
 		qc_checklist = qc_rows
@@ -414,6 +428,7 @@ def get_ticket_detail(sr_name):
 		"assignment_count": len([a for a in assignments if a.assignment_status != "Cancelled"]),
 		"qc_status": qc_status,
 		"all_solutions_done": all_solutions_done,
+		"rework_count": rework_count if sr.service_order else 0,
 	}
 
 	return {
@@ -471,6 +486,7 @@ def get_ticket_detail(sr_name):
 		"qc_checklist": qc_checklist,
 		"so_workflow_state": so_workflow_state,
 		"all_solutions_done": all_solutions_done,
+		"rework_count": rework_count if sr.service_order else 0,
 		"ops_stage": _derive_stage(sr_dict),
 	}
 
@@ -865,10 +881,12 @@ def save_solution_assignment(sr_name, solutions_json):
 	}
 	missing = active_categories - covered_categories
 	if missing:
-		frappe.throw(
-			_("Every active issue must have at least one solution. Missing solutions for: {0}").format(
+		frappe.msgprint(
+			_("Warning: No solution assigned for: {0}. These issues will remain unresolved.").format(
 				", ".join(sorted(missing))
-			)
+			),
+			indicator="orange",
+			alert=True,
 		)
 
 	sr.save()
@@ -952,6 +970,7 @@ def assign_technician(sr_name, technician, job_type="Repair", estimated_hours=No
 	frappe.db.commit()
 
 	_log_ops_stage(sr_name, "assign", "repair")
+	_mark_sr_in_service(sr_name)
 	frappe.db.commit()
 
 	return {"ok": True, "job_assignment": ja.name, "stage": "repair"}
@@ -1003,6 +1022,7 @@ def assign_solutions_to_technician(sr_name, solution_rows_json, technician, esti
 
 	if all_assigned:
 		_log_ops_stage(sr_name, "assign", "repair")
+		_mark_sr_in_service(sr_name)
 
 	frappe.db.commit()
 
@@ -1039,6 +1059,7 @@ def advance_to_repair(sr_name):
 		frappe.throw(_("All solutions must be assigned before proceeding to repair."))
 
 	_log_ops_stage(sr_name, "assign", "repair")
+	_mark_sr_in_service(sr_name)
 	frappe.db.commit()
 
 	return {"ok": True, "stage": "repair"}
@@ -1065,6 +1086,30 @@ def update_solution_status(sr_name, solution_row_name, status, remarks=""):
 		update_fields,
 		update_modified=True,
 	)
+	frappe.db.commit()
+	return {"ok": True}
+
+
+@frappe.whitelist()
+def restart_solution_line(sr_name, solution_row_name, remarks=""):
+	"""Restart a completed/skipped solution back to In Progress (used in rework).
+
+	Allows technicians to re-open a previously completed repair item
+	when QC has identified the fix was insufficient.
+	"""
+	frappe.has_permission("Service Request", sr_name, "write", throw=True)
+
+	current = frappe.db.get_value("SR Solution Line", solution_row_name, "status")
+	if current not in ("Completed", "Skipped"):
+		frappe.throw(_("Only Completed or Skipped solutions can be restarted."))
+
+	remark = f"[Restarted] {remarks}".strip() if remarks else "[Restarted]"
+	prev_remarks = frappe.db.get_value("SR Solution Line", solution_row_name, "technician_remarks") or ""
+	frappe.db.set_value("SR Solution Line", solution_row_name, {
+		"status": "In Progress",
+		"technician_remarks": (prev_remarks + "\n" + remark).strip(),
+	}, update_modified=True)
+
 	frappe.db.commit()
 	return {"ok": True}
 
@@ -1286,8 +1331,10 @@ def complete_qc(sr_name, qc_result):
 		if sr.decision != "Completed":
 			frappe.db.set_value("Service Request", sr_name, "decision", "Completed", update_modified=True)
 			frappe.db.set_value("Service Request", sr_name, "status", "Completed", update_modified=False)
+		frappe.db.set_value("Service Request", sr_name, "workflow_state", "Completed", update_modified=False)
 	else:
 		so.db_set("workflow_state", "QC Fail", update_modified=False)
+		frappe.db.set_value("Service Request", sr_name, "workflow_state", "In Service", update_modified=False)
 
 	frappe.db.commit()
 
@@ -1463,6 +1510,7 @@ def create_ops_hub_invoice(sr_name):
 		"service_invoice": inv.name,
 		"status": "Invoiced",
 		"decision": "Invoiced",
+		"workflow_state": "Invoiced",
 	}, update_modified=True)
 
 	frappe.db.commit()
@@ -1472,48 +1520,86 @@ def create_ops_hub_invoice(sr_name):
 
 @frappe.whitelist()
 def reassign_after_qc_fail(sr_name, technician, job_type="Repair", manager_notes=""):
-	"""Floor manager assigns ticket back to technician after QC failure."""
+	"""Floor manager assigns ticket back to technician after QC failure.
+
+	Only failed QC items are sent for rework — passed solutions stay intact.
+	"""
 	frappe.only_for(["Service Manager", "System Manager"])
 
 	sr = frappe.get_doc("Service Request", sr_name)
 	if not sr.service_order:
 		frappe.throw(_("No Service Order linked to {0}.").format(sr_name))
 
-	# Reset QC status so ticket re-enters repair flow
 	so = frappe.get_doc("Sales Order", sr.service_order)
+
+	# Identify which solutions are linked to failed QC checks
+	failed_solutions = set()
+	failed_check_names = set()
+	for check in (so.get("qc_checklist") or []):
+		if check.result == "Fail":
+			failed_check_names.add(check.check_name)
+			if check.get("linked_solution"):
+				failed_solutions.add(check.linked_solution)
+
+	# Update failed QC checklist rows — increment rework_iteration
+	# Use db_set per row to avoid triggering SO workflow validation
+	for check in (so.get("qc_checklist") or []):
+		if check.result == "Fail":
+			frappe.db.set_value("GoFix QC Checklist", check.name, {
+				"rework_required": 1,
+				"rework_iteration": (check.rework_iteration or 0) + 1,
+			}, update_modified=False)
+
+	# Reset QC status and workflow state via db_set (bypasses workflow validation)
 	so.db_set("qc_status", "Pending", update_modified=True)
 	so.db_set("workflow_state", "Work in Progress", update_modified=False)
 
-	# Clear QC checklist so it gets freshly populated on next QC (Fix #5)
-	frappe.db.delete("GoFix QC Checklist", {"parent": so.name, "parenttype": "Sales Order"})
-
-	# Reset solution lines that failed to Planned
-	sr.flags.ignore_validate_update_after_submit = True
-	sr.flags.ignore_mandatory = True
+	# Reset ONLY the failed solution lines back to "In Progress" for rework
+	# Use db_set per row to avoid triggering validate_issue_solution_cascade
+	reworked = []
 	for row in sr.get("solution_lines", []):
-		if row.status in ("Completed", "Skipped"):
-			row.status = "Planned"
-	sr.save()
+		updates = {}
+		# Reset if: explicitly linked to a failed check, OR no linking and was Completed
+		if row.repair_solution in failed_solutions:
+			remark = f"\n[Rework] QC fail — reassigned. {manager_notes}".strip()
+			updates["status"] = "In Progress"
+			updates["technician_remarks"] = (row.technician_remarks or "") + remark
+			reworked.append(row.repair_solution)
+		# If no solutions were linked to checks (legacy), fall back to failing only Completed
+		elif not failed_solutions and row.status == "Completed":
+			remark = f"\n[Rework] QC fail — reassigned. {manager_notes}".strip()
+			updates["status"] = "In Progress"
+			updates["technician_remarks"] = (row.technician_remarks or "") + remark
+			reworked.append(row.repair_solution)
+		if updates:
+			frappe.db.set_value("SR Solution Line", row.name, updates, update_modified=False)
 
-	# Create new Job Assignment
+	# Create new Job Assignment for rework only
 	ja = frappe.new_doc("Job Assignment")
 	ja.service_order = sr.service_order
 	ja.service_request = sr_name
 	ja.service_engineer = technician
 	ja.job_type = job_type
-	ja.assignment_type = "Technician Changed"
+	ja.assignment_type = "Rework"
 	ja.assigned_by = frappe.session.user
 	ja.priority = sr.priority
-	ja.comments = f"QC Fail Rework — {manager_notes}" if manager_notes else "QC Fail Rework"
+	rework_summary = ", ".join(reworked[:5]) if reworked else "all failed items"
+	ja.comments = f"QC Fail Rework ({rework_summary}){(' — ' + manager_notes) if manager_notes else ''}"
 
 	ja.insert()
 	ja.submit()
 	frappe.db.commit()
 
 	_log_ops_stage(sr_name, "rework", "repair")
+	_mark_sr_in_service(sr_name)
 	frappe.db.commit()
 
-	return {"ok": True, "job_assignment": ja.name, "stage": "repair"}
+	return {
+		"ok": True,
+		"job_assignment": ja.name,
+		"stage": "repair",
+		"reworked_solutions": reworked,
+	}
 
 
 # ── Navigation: Go back to a previous stage ────────────────────────────────────

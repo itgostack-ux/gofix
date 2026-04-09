@@ -132,6 +132,7 @@ after_migrate = [
     "gofix.setup.employee_custom_fields.create_employee_custom_fields",
     "gofix.setup.service_request_ops_fields.create_service_request_ops_fields",
     "gofix.setup.sales_invoice_custom_fields.create_sales_invoice_custom_fields",
+    "gofix.setup.competitive_ops_fields.create_competitive_ops_fields",
 ]
 
 # Uninstallation

@@ -1,0 +1,229 @@
+{% extends "templates/web.html" %}
+
+{% block page_content %}
+<div class="container" style="max-width:640px;margin:auto;padding:24px 16px;">
+
+	{% if not tracking_data %}
+	<!-- Search Form -->
+	<div class="text-center mb-5">
+		<h2 style="font-weight:700;">🔧 Track My Repair</h2>
+		<p class="text-muted">Enter your Service Request number and phone to check status</p>
+	</div>
+	<form id="track-form" class="card p-4 shadow-sm">
+		<div class="form-group">
+			<label>Service Request Number</label>
+			<input type="text" class="form-control" id="sr-input"
+				placeholder="e.g. SR-260401-0001" value="{{ sr_name or '' }}" required>
+		</div>
+		<div class="form-group mt-3">
+			<label>Last 4 digits of Phone</label>
+			<input type="text" class="form-control" id="phone-input"
+				placeholder="e.g. 1234" maxlength="4" pattern="\d{4}" required>
+		</div>
+		<button type="submit" class="btn btn-primary btn-block mt-3" style="width:100%;">
+			Track My Repair
+		</button>
+		<div id="track-error" class="text-danger mt-2" style="display:none;"></div>
+	</form>
+
+	{% else %}
+	<!-- Tracking Result -->
+	<div class="text-center mb-4">
+		<h3 style="font-weight:700;">🔧 {{ tracking_data.name }}</h3>
+		<p class="text-muted mb-0">{{ tracking_data.customer_name }}</p>
+	</div>
+
+	<!-- Progress Bar -->
+	<div class="card p-3 shadow-sm mb-4">
+		<div style="display:flex;justify-content:space-between;position:relative;">
+			<div style="position:absolute;top:12px;left:5%;right:5%;height:3px;background:#eee;z-index:0;"></div>
+			{% for step in tracking_data.progress_steps %}
+			<div style="text-align:center;z-index:1;flex:1;">
+				<div style="width:24px;height:24px;border-radius:50%;margin:0 auto;
+					background:{{ '#28a745' if step.done else '#dee2e6' }};
+					border:2px solid {{ '#28a745' if step.done else '#dee2e6' }};
+					display:flex;align-items:center;justify-content:center;">
+					{% if step.done %}
+					<span style="color:#fff;font-size:12px;">✓</span>
+					{% endif %}
+				</div>
+				<small style="font-size:10px;color:{{ '#333' if step.done else '#999' }};">
+					{{ step.label }}
+				</small>
+			</div>
+			{% endfor %}
+		</div>
+	</div>
+
+	<!-- Current Status -->
+	<div class="card p-3 shadow-sm mb-4" style="border-left:4px solid #007bff;">
+		<div class="row">
+			<div class="col-6">
+				<small class="text-muted">Current Status</small>
+				<h5 style="margin:0;font-weight:600;">{{ tracking_data.current_status }}</h5>
+			</div>
+			<div class="col-6 text-right">
+				<small class="text-muted">Device</small>
+				<p style="margin:0;font-weight:500;">{{ tracking_data.device }} {{ '(' + tracking_data.brand + ')' if tracking_data.brand else '' }}</p>
+			</div>
+		</div>
+		{% if tracking_data.serial_no %}
+		<small class="text-muted">Serial: {{ tracking_data.serial_no }}</small>
+		{% endif %}
+	</div>
+
+	<!-- Pending Actions -->
+	{% if tracking_data.pending_actions %}
+	<div class="card p-3 shadow-sm mb-4" style="border-left:4px solid #ffc107;background:#fff8e1;">
+		<h6 style="color:#856404;">⚠ Action Required</h6>
+		{% for action in tracking_data.pending_actions %}
+		<p style="margin:4px 0;">{{ action.message }}</p>
+		{% if action.type == "estimate_approval" %}
+		<div style="margin-top:12px;">
+			<div id="estimate-action-{{ action.version }}" class="estimate-action-group">
+				<div class="form-group" style="margin-bottom:8px;">
+					<label style="font-size:12px;color:#666;">Remarks (optional)</label>
+					<textarea id="approval-remarks-{{ action.version }}" class="form-control" rows="2"
+						placeholder="Any comments…" style="font-size:13px;"></textarea>
+				</div>
+				<button class="btn btn-success btn-sm mr-2 estimate-approve-btn"
+					data-sr="{{ tracking_data.name }}" data-version="{{ action.version }}"
+					style="min-width:120px;">
+					✓ Approve Estimate
+				</button>
+				<button class="btn btn-outline-danger btn-sm estimate-reject-btn"
+					data-sr="{{ tracking_data.name }}" data-version="{{ action.version }}"
+					style="min-width:120px;">
+					✕ Reject
+				</button>
+			</div>
+			<div id="estimate-result-{{ action.version }}" style="display:none;" class="mt-2"></div>
+		</div>
+		{% endif %}
+		{% endfor %}
+	</div>
+	{% endif %}
+
+	<!-- Details -->
+	<div class="card p-3 shadow-sm mb-4">
+		<h6>Details</h6>
+		<table style="width:100%;font-size:13px;">
+			<tr><td class="text-muted" style="width:40%;">Service Date</td><td>{{ tracking_data.service_date }}</td></tr>
+			<tr><td class="text-muted">Expected Completion</td><td>{{ tracking_data.expected_completion or 'TBD' }}</td></tr>
+			<tr><td class="text-muted">Warranty</td><td>{{ tracking_data.warranty_status }}</td></tr>
+			{% if tracking_data.estimated_cost %}
+			<tr><td class="text-muted">Estimated Cost</td><td>₹{{ '{:,.0f}'.format(tracking_data.estimated_cost) }}</td></tr>
+			{% endif %}
+			<tr><td class="text-muted">Store</td><td>{{ tracking_data.source_store }}</td></tr>
+		</table>
+	</div>
+
+	<!-- Timeline -->
+	{% if tracking_data.timeline %}
+	<div class="card p-3 shadow-sm mb-4">
+		<h6>Timeline</h6>
+		{% for entry in tracking_data.timeline|reverse %}
+		<div style="display:flex;gap:8px;padding:6px 0;border-bottom:1px solid #f0f0f0;">
+			<div style="width:8px;height:8px;border-radius:50%;background:#007bff;margin-top:6px;flex-shrink:0;"></div>
+			<div>
+				<strong style="font-size:13px;">{{ entry.status }}</strong>
+				<br><small class="text-muted">{{ frappe.utils.pretty_date(entry.datetime) if entry.datetime else '' }}</small>
+			</div>
+		</div>
+		{% endfor %}
+	</div>
+	{% endif %}
+
+	<div class="text-center mt-4">
+		<a href="/track-repair" class="btn btn-outline-secondary btn-sm">← Track Another</a>
+	</div>
+	{% endif %}
+</div>
+
+<script>
+document.addEventListener("DOMContentLoaded", function() {
+	const form = document.getElementById("track-form");
+	if (form) {
+		form.addEventListener("submit", function(e) {
+			e.preventDefault();
+			const sr = document.getElementById("sr-input").value.trim();
+			const phone = document.getElementById("phone-input").value.trim();
+			if (sr && phone) {
+				window.location.href = "/track-repair?sr=" + encodeURIComponent(sr) + "&phone=" + encodeURIComponent(phone);
+			}
+		});
+	}
+
+	// Estimate Approve buttons
+	document.querySelectorAll(".estimate-approve-btn").forEach(function(btn) {
+		btn.addEventListener("click", function() {
+			var sr = this.getAttribute("data-sr");
+			var version = this.getAttribute("data-version");
+			var remarks = document.getElementById("approval-remarks-" + version).value.trim();
+			_handle_estimate_action(sr, version, "approve", remarks, this);
+		});
+	});
+
+	// Estimate Reject buttons
+	document.querySelectorAll(".estimate-reject-btn").forEach(function(btn) {
+		btn.addEventListener("click", function() {
+			var sr = this.getAttribute("data-sr");
+			var version = this.getAttribute("data-version");
+			var remarks = document.getElementById("approval-remarks-" + version).value.trim();
+			if (!remarks) {
+				alert("Please provide a reason for rejecting the estimate.");
+				document.getElementById("approval-remarks-" + version).focus();
+				return;
+			}
+			_handle_estimate_action(sr, version, "reject", remarks, this);
+		});
+	});
+
+	function _handle_estimate_action(sr, version, action, remarks, btn) {
+		// Get auth params from URL
+		var params = new URLSearchParams(window.location.search);
+		var token = params.get("token") || "";
+		var phone = params.get("phone") || "";
+
+		btn.disabled = true;
+		btn.textContent = action === "approve" ? "Approving…" : "Rejecting…";
+
+		fetch("/api/method/gofix.www.track_repair.index.customer_estimate_action", {
+			method: "POST",
+			headers: {"Content-Type": "application/json", "X-Frappe-CSRF-Token": "{{ frappe.session.csrf_token }}"},
+			body: JSON.stringify({
+				sr_name: sr,
+				version_number: version,
+				action: action,
+				remarks: remarks,
+				token: token,
+				phone_last4: phone
+			})
+		})
+		.then(function(resp) { return resp.json(); })
+		.then(function(data) {
+			var resultEl = document.getElementById("estimate-result-" + version);
+			var actionEl = document.getElementById("estimate-action-" + version);
+			if (data.message && data.message.ok) {
+				actionEl.style.display = "none";
+				resultEl.innerHTML = action === "approve"
+					? '<div class="alert alert-success">✓ Estimate approved. Repair will proceed.</div>'
+					: '<div class="alert alert-warning">Estimate rejected. Our team will contact you.</div>';
+				resultEl.style.display = "block";
+			} else {
+				btn.disabled = false;
+				btn.textContent = action === "approve" ? "✓ Approve Estimate" : "✕ Reject";
+				var msg = (data._server_messages || data.exc || "Something went wrong");
+				resultEl.innerHTML = '<div class="alert alert-danger">' + msg + '</div>';
+				resultEl.style.display = "block";
+			}
+		})
+		.catch(function(err) {
+			btn.disabled = false;
+			btn.textContent = action === "approve" ? "✓ Approve Estimate" : "✕ Reject";
+			alert("Network error. Please try again.");
+		});
+	}
+});
+</script>
+{% endblock %}

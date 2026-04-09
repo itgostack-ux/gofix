@@ -1,0 +1,240 @@
+{
+ "actions": [],
+ "autoname": "format:GPR-{####}",
+ "creation": "2026-04-08 10:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "rule_name",
+  "is_active",
+  "company",
+  "section_break_match",
+  "issue_category",
+  "repair_solution",
+  "device_brand",
+  "col_break_match",
+  "device_item_group",
+  "warranty_status",
+  "section_break_pricing",
+  "labor_rate",
+  "labor_rate_type",
+  "col_break_pricing",
+  "min_charge",
+  "max_charge",
+  "section_break_spare",
+  "spare_markup_percent",
+  "include_spare_cost",
+  "section_break_warranty",
+  "warranty_labor_rate",
+  "warranty_deductible_override",
+  "col_break_warranty",
+  "warranty_spare_covered",
+  "section_break_priority",
+  "priority_order"
+ ],
+ "fields": [
+  {
+   "fieldname": "rule_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Rule Name",
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "default": "1",
+   "fieldname": "is_active",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Active"
+  },
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "label": "Company",
+   "options": "Company"
+  },
+  {
+   "fieldname": "section_break_match",
+   "fieldtype": "Section Break",
+   "label": "Matching Criteria"
+  },
+  {
+   "fieldname": "issue_category",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Issue Category",
+   "options": "Issue Category",
+   "description": "Leave blank to match all categories"
+  },
+  {
+   "fieldname": "repair_solution",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Repair Solution",
+   "options": "Repair Solution",
+   "description": "Leave blank to match all solutions"
+  },
+  {
+   "fieldname": "device_brand",
+   "fieldtype": "Data",
+   "label": "Device Brand",
+   "description": "Leave blank to match all brands"
+  },
+  {
+   "fieldname": "col_break_match",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "device_item_group",
+   "fieldtype": "Link",
+   "label": "Device Item Group",
+   "options": "Item Group",
+   "description": "Leave blank to match all item groups"
+  },
+  {
+   "fieldname": "warranty_status",
+   "fieldtype": "Select",
+   "label": "Warranty Status",
+   "options": "\nUnder Warranty\nOut of Warranty\nNo Warranty",
+   "description": "Leave blank to match all warranty statuses"
+  },
+  {
+   "fieldname": "section_break_pricing",
+   "fieldtype": "Section Break",
+   "label": "Pricing"
+  },
+  {
+   "fieldname": "labor_rate",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "label": "Labor Rate",
+   "description": "Fixed labor charge for this issue+solution combination"
+  },
+  {
+   "fieldname": "labor_rate_type",
+   "fieldtype": "Select",
+   "label": "Rate Type",
+   "options": "Fixed\nPer Hour\nPercentage of Spare Cost",
+   "default": "Fixed"
+  },
+  {
+   "fieldname": "col_break_pricing",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "min_charge",
+   "fieldtype": "Currency",
+   "label": "Minimum Charge",
+   "description": "Floor price — customer will not be charged less than this"
+  },
+  {
+   "fieldname": "max_charge",
+   "fieldtype": "Currency",
+   "label": "Maximum Charge",
+   "description": "Ceiling price — technician cannot override above this without approval"
+  },
+  {
+   "fieldname": "section_break_spare",
+   "fieldtype": "Section Break",
+   "label": "Spare Part Pricing"
+  },
+  {
+   "default": "0",
+   "fieldname": "spare_markup_percent",
+   "fieldtype": "Percent",
+   "label": "Spare Markup %",
+   "description": "Markup over purchase cost for spare parts"
+  },
+  {
+   "default": "1",
+   "fieldname": "include_spare_cost",
+   "fieldtype": "Check",
+   "label": "Include Spare Cost in Estimate",
+   "description": "If unchecked, spare cost is absorbed (e.g. warranty)"
+  },
+  {
+   "fieldname": "section_break_warranty",
+   "fieldtype": "Section Break",
+   "label": "Warranty Pricing Override"
+  },
+  {
+   "fieldname": "warranty_labor_rate",
+   "fieldtype": "Currency",
+   "label": "Warranty Labor Rate",
+   "description": "Labor rate when device is under warranty (usually 0)"
+  },
+  {
+   "fieldname": "warranty_deductible_override",
+   "fieldtype": "Currency",
+   "label": "Warranty Deductible Override",
+   "description": "Override the plan-level deductible for this specific repair"
+  },
+  {
+   "fieldname": "col_break_warranty",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "1",
+   "fieldname": "warranty_spare_covered",
+   "fieldtype": "Check",
+   "label": "Spare Covered Under Warranty",
+   "description": "If checked, spare cost is absorbed when under warranty"
+  },
+  {
+   "fieldname": "section_break_priority",
+   "fieldtype": "Section Break",
+   "label": "Rule Priority"
+  },
+  {
+   "default": "10",
+   "fieldname": "priority_order",
+   "fieldtype": "Int",
+   "label": "Priority Order",
+   "description": "Lower = higher priority. Most specific rules should have lower numbers."
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-04-08 10:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "GoFix Services",
+ "name": "GoFix Pricing Rule",
+ "naming_rule": "Expression (old style)",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Service Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "read": 1,
+   "role": "Service Engineer"
+  }
+ ],
+ "sort_field": "priority_order",
+ "sort_order": "ASC",
+ "states": [],
+ "track_changes": 1
+}

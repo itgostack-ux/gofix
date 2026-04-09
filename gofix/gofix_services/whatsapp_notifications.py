@@ -25,6 +25,11 @@ def on_service_request_update(doc, method):
 
     if new_decision == "Accepted":
         _notify_device_received(doc, phone, customer_name)
+        # Also send tracking link
+        try:
+            notify_tracking_link(doc.name)
+        except Exception:
+            pass
     elif new_decision == "Completed":
         _notify_repair_completed(doc, phone, customer_name)
     elif new_decision == "Delivered":
@@ -130,3 +135,141 @@ def _notify_ready_for_delivery(doc, phone, customer_name):
         ref_doctype="Service Request",
         ref_name=doc.name,
     )
+
+
+# ── Estimate Approval Notifications ─────────────────────────────────
+
+def send_whatsapp_template(template_name, to_number, params, ref_doctype="Service Request", ref_name=None):
+    """Generic wrapper to send any GoFix WhatsApp template.
+
+    Called from orchestration.py and other modules.
+    Falls back to SMS if WhatsApp is not configured.
+    """
+    settings = _get_settings()
+    if not settings:
+        _fallback_sms(to_number, template_name, params)
+        return
+
+    # Resolve template name from settings if it's a GoFix key
+    actual_template = getattr(settings, template_name, None) or template_name
+
+    try:
+        from ch_item_master.ch_core.whatsapp import send_template_message
+
+        # Build body_values from params
+        body_values = {}
+        i = 1
+        for key in ("customer_name", "sr_name", "device_name", "estimate_amount", "version", "tracking_url"):
+            if key in params:
+                body_values[str(i)] = str(params[key])
+                i += 1
+
+        send_template_message(
+            phone=to_number,
+            template_name=actual_template,
+            body_values=body_values,
+            customer_name=params.get("customer_name", ""),
+            ref_doctype=ref_doctype,
+            ref_name=ref_name or params.get("sr_name", ""),
+        )
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), f"WhatsApp send failed: {template_name}")
+        _fallback_sms(to_number, template_name, params)
+
+
+def notify_estimate_for_approval(service_request_name, version_number, estimate_amount):
+    """Send estimate approval request to customer via WhatsApp with tracking link."""
+    doc = frappe.get_doc("Service Request", service_request_name)
+    phone = doc.contact_number
+    if not phone:
+        return
+
+    settings = _get_settings()
+    if not settings:
+        return
+
+    # Generate tracking URL for the customer
+    from gofix.www.track_repair.index import generate_tracking_url
+    tracking_url = generate_tracking_url(service_request_name)
+
+    template_key = "gofix_estimate_approval" if int(version_number) == 1 else "gofix_revised_estimate"
+    actual_template = getattr(settings, template_key, None)
+
+    if not actual_template:
+        frappe.log_error(f"WhatsApp template '{template_key}' not configured in CH WhatsApp Settings")
+        return
+
+    try:
+        from ch_item_master.ch_core.whatsapp import send_template_message
+
+        send_template_message(
+            phone=phone,
+            template_name=actual_template,
+            body_values={
+                "1": doc.customer_name or "Customer",
+                "2": doc.name,
+                "3": doc.device_item_name or "",
+                "4": frappe.format_value(estimate_amount, {"fieldtype": "Currency"}),
+                "5": str(version_number),
+                "6": tracking_url,
+            },
+            customer_name=doc.customer_name,
+            ref_doctype="Service Request",
+            ref_name=doc.name,
+        )
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), f"Estimate WhatsApp failed for {service_request_name}")
+
+
+def notify_tracking_link(service_request_name):
+    """Send the tracking link to customer on acceptance."""
+    doc = frappe.get_doc("Service Request", service_request_name)
+    phone = doc.contact_number
+    if not phone:
+        return
+
+    settings = _get_settings()
+    if not settings:
+        return
+
+    actual_template = getattr(settings, "gofix_tracking_link", None)
+    if not actual_template:
+        return
+
+    from gofix.www.track_repair.index import generate_tracking_url
+    tracking_url = generate_tracking_url(service_request_name)
+
+    try:
+        from ch_item_master.ch_core.whatsapp import send_template_message
+
+        send_template_message(
+            phone=phone,
+            template_name=actual_template,
+            body_values={
+                "1": doc.customer_name or "Customer",
+                "2": doc.name,
+                "3": doc.device_item_name or "",
+                "4": tracking_url,
+            },
+            customer_name=doc.customer_name,
+            ref_doctype="Service Request",
+            ref_name=doc.name,
+        )
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), f"Tracking link WhatsApp failed for {service_request_name}")
+
+
+def _fallback_sms(phone, template_name, params):
+    """Send a plain SMS if WhatsApp is not available."""
+    try:
+        from frappe.core.doctype.sms_settings.sms_settings import send_sms
+
+        sr = params.get("sr_name", "")
+        amount = params.get("estimate_amount", "")
+        msg = f"GoFix: Your repair request {sr} has an update."
+        if "estimate" in template_name.lower():
+            msg = f"GoFix: Estimate of {amount} for {sr}. Please approve at {params.get('tracking_url', 'our store')}."
+
+        send_sms([phone], msg)
+    except Exception:
+        pass

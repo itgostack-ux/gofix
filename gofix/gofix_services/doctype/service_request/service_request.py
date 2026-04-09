@@ -12,6 +12,7 @@ class ServiceRequest(Document):
 		"""Set defaults before first insert"""
 		self.set_warehouse_defaults()
 		self.set_received_by()
+		self._init_competitive_ops_fields()
 	
 	def validate(self):
 		self.detect_customer_type()
@@ -93,6 +94,16 @@ class ServiceRequest(Document):
 		# Set current location same as source initially
 		if self.source_warehouse and not self.current_location:
 			self.current_location = self.source_warehouse
+
+	def _init_competitive_ops_fields(self):
+		"""Initialize competitive ops fields on new Service Request."""
+		if self.source_warehouse:
+			if self.meta.has_field("billing_location") and not self.get("billing_location"):
+				self.billing_location = self.source_warehouse
+			if self.meta.has_field("current_processing_location") and not self.get("current_processing_location"):
+				self.current_processing_location = self.source_warehouse
+		if self.meta.has_field("repairability_status") and not self.get("repairability_status"):
+			self.repairability_status = "Pending Analysis"
 	
 	def fetch_warehouse_details(self):
 		"""Fetch warehouse address and state details"""
@@ -430,6 +441,13 @@ class ServiceRequest(Document):
 		"""Create Service Order (Sales Order) from accepted Service Request"""
 		if self.service_order:
 			frappe.throw(_("Service Order already exists: {0}").format(self.service_order))
+
+		# Enforce: diagnosis → repairability → estimate approval → SO
+		try:
+			from gofix.gofix_services.orchestration import validate_so_creation_prerequisites
+			validate_so_creation_prerequisites(self)
+		except ImportError:
+			pass  # orchestration module not yet available
 		
 		# Create Sales Order as Service Order
 		so = frappe.new_doc("Sales Order")
@@ -1284,6 +1302,7 @@ def accept_service_request(service_request):
 	doc.db_set("accepted_by", frappe.session.user, update_modified=False)
 	doc.db_set("accepted_datetime", frappe.utils.now(), update_modified=False)
 	doc.db_set("walkin_status", "Accepted", update_modified=False)  # Customer left device
+	doc.db_set("workflow_state", "Accepted", update_modified=False)
 	
 	# Create Service Order
 	doc.reload()
@@ -1291,6 +1310,7 @@ def accept_service_request(service_request):
 	
 	# Update status
 	doc.db_set("status", "In Service", update_modified=False)
+	doc.db_set("workflow_state", "In Service", update_modified=False)
 	
 	# Log intake → analysis transition for ops timeline
 	try:
@@ -1317,6 +1337,7 @@ def reject_service_request(service_request, rejection_reason):
 	doc.db_set("rejection_reason", rejection_reason, update_modified=False)
 	doc.db_set("status", "Rejected", update_modified=False)
 	doc.db_set("walkin_status", None, update_modified=False)  # Clear walk-in status
+	doc.db_set("workflow_state", "Rejected", update_modified=False)
 	
 	return True
 

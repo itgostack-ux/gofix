@@ -572,13 +572,13 @@ def calculate_suggested_price(service_order):
 	sr_name = so.service_request
 
 	# Spare parts revenue
-	parts = frappe.get_all("Spare Parts Usage",
-		filters={
-			"service_request": sr_name,
-			"status": "Active",
-			"part_status": ["in", ["Consumed", "Issued"]],
-		},
-		fields=["sum(sales_price * qty_used) as total_revenue"])
+	parts = frappe.db.sql("""
+		SELECT COALESCE(SUM(sales_price * qty_used), 0) as total_revenue
+		FROM `tabSpare Parts Usage`
+		WHERE service_request = %s
+		  AND status = 'Active'
+		  AND part_status IN ('Consumed', 'Issued')
+	""", (sr_name,), as_dict=True)
 	parts_revenue = flt(parts[0].total_revenue) if parts else 0
 
 	# Labor from job sheets

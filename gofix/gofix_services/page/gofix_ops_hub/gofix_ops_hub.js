@@ -96,6 +96,8 @@ class GoFixOpsHub {
 		this.page.set_secondary_action(__("Refresh"), () => this._refresh_all(), "refresh");
 
 		// Custom toolbar fields
+		const today = frappe.datetime.get_today();
+		const d60ago = frappe.datetime.add_days(today, -60);
 		this.page.add_inner_message(`
 			<div class="goh-toolbar">
 				<select class="form-control input-xs goh-tb-warehouse">${wh_options.join("")}</select>
@@ -114,11 +116,14 @@ class GoFixOpsHub {
 					<option value="Medium">${__("Medium")}</option>
 					<option value="Low">${__("Low")}</option>
 				</select>
+				<input type="date" class="form-control input-xs goh-tb-date-from" value="${d60ago}" title="${__("From Date")}">
+				<input type="date" class="form-control input-xs goh-tb-date-to" value="${today}" title="${__("To Date")}">
 			</div>
 		`);
 
 		// Bind toolbar events
 		this.page.wrapper.find(".goh-tb-warehouse, .goh-tb-stage, .goh-tb-priority").on("change", () => this._load_queue());
+		this.page.wrapper.find(".goh-tb-date-from, .goh-tb-date-to").on("change", () => this._load_queue());
 	}
 
 	/* ── Layout ─────────────────────────────────────────────────────────── */
@@ -157,10 +162,12 @@ class GoFixOpsHub {
 		const stage = toolbar.find(".goh-tb-stage").val() || "active";
 		const priority = toolbar.find(".goh-tb-priority").val() || "";
 		const search = this.parent.find(".goh-search-input").val() || "";
+		const date_from = toolbar.find(".goh-tb-date-from").val() || "";
+		const date_to = toolbar.find(".goh-tb-date-to").val() || "";
 
 		try {
 			let data = await frappe.xcall(`${API}.get_ticket_queue`, {
-				warehouse, search, stage_filter: stage,
+				warehouse, search, stage_filter: stage, date_from, date_to,
 			});
 
 			// Client-side priority filter
@@ -662,12 +669,12 @@ class GoFixOpsHub {
 					${issueList || `<p class="text-muted">${__("No issues logged")}</p>`}
 				</div>
 
-				${d.estimated_cost ? `
-					<div class="goh-confirm-cost">
-						<span class="goh-kv-label">${__("Estimated Cost")}</span>
-						<span class="goh-cost-value">₹${format_number(d.estimated_cost)}</span>
-					</div>
-				` : ""}
+				<div class="goh-confirm-cost" style="display:flex;align-items:center;gap:10px">
+					<span class="goh-kv-label">${__("Estimated Cost")}</span>
+					<span style="font-size:18px;font-weight:600">₹</span>
+					<input type="number" class="form-control" id="goh-est-cost" value="${flt(d.estimated_cost)}" min="0" step="100" style="max-width:180px;font-size:18px;font-weight:700">
+					<button class="btn btn-xs btn-default" id="goh-save-est-cost" style="white-space:nowrap"><i class="fa fa-save"></i> ${__("Save")}</button>
+				</div>
 
 				${sentAt ? `<div class="goh-sent-indicator"><i class="fa fa-whatsapp text-success"></i> ${__("WhatsApp sent")} ${sentAt}</div>` : ""}
 
@@ -845,27 +852,60 @@ class GoFixOpsHub {
 		const allDone = activeSols.length > 0 && activeSols.every(s => s.status === "Completed" || s.status === "Skipped");
 		const doneCount = activeSols.filter(s => s.status === "Completed" || s.status === "Skipped").length;
 
+		// Rework detection
+		const isRework = (d.rework_count || 0) > 0;
+		const reworkIteration = d.rework_count || 0;
+
+		// Build QC fail reason index: solution → fail reasons
+		const qcFailMap = {};
+		if (isRework && d.qc_checklist) {
+			for (const check of d.qc_checklist) {
+				if (check.result === "Fail") {
+					const key = check.linked_solution || "__general__";
+					if (!qcFailMap[key]) qcFailMap[key] = [];
+					qcFailMap[key].push({
+						check: check.check_name,
+						reason: check.fail_reason || check.remarks || "",
+					});
+				}
+			}
+		}
+
 		const STATUS_CLS = { Planned: "badge-muted", "In Progress": "badge-blue", Completed: "badge-green", Skipped: "badge-yellow", Cancelled: "badge-red" };
 
-		const solCards = activeSols.map(sol => `
-			<div class="goh-repair-card" data-row="${esc(sol.name)}">
+		const solCards = activeSols.map(sol => {
+			const isReworkItem = sol.technician_remarks && sol.technician_remarks.includes("[Rework]");
+			const failReasons = qcFailMap[sol.repair_solution] || qcFailMap["__general__"] || [];
+
+			return `
+			<div class="goh-repair-card ${isReworkItem ? "goh-rework-card" : ""}" data-row="${esc(sol.name)}">
 				<div class="goh-repair-card-head">
 					<span class="goh-repair-sol-name">${esc(sol.repair_solution || "—")}</span>
 					<span class="goh-badge ${STATUS_CLS[sol.status] || "badge-muted"}">${esc(sol.status)}</span>
+					${isReworkItem ? `<span class="goh-badge badge-orange" title="${__("This item failed QC and needs rework")}"><i class="fa fa-refresh"></i> ${__("Rework")}</span>` : ""}
 				</div>
 				<div class="goh-repair-card-meta text-muted small">
 					<span><i class="fa fa-tag"></i> ${esc(sol.issue_category || "")}</span>
 					${sol.estimated_minutes ? `<span class="ml-2"><i class="fa fa-clock-o"></i> ${sol.estimated_minutes}min</span>` : ""}
 				</div>
+				${isReworkItem && failReasons.length ? `
+					<div class="goh-qc-fail-context">
+						<div class="small text-danger"><strong><i class="fa fa-exclamation-triangle"></i> ${__("QC Failed")}:</strong></div>
+						${failReasons.map(f => `
+							<div class="small text-danger ml-2">• ${esc(f.check)}${f.reason ? ": " + esc(f.reason) : ""}</div>
+						`).join("")}
+					</div>
+				` : ""}
 				${sol.technician_remarks ? `<div class="goh-repair-remarks">${esc(sol.technician_remarks)}</div>` : ""}
 				<div class="goh-repair-card-actions">
-					${sol.status !== "In Progress" && sol.status !== "Completed" ? `<button class="btn btn-xs btn-default goh-sol-start" data-row="${esc(sol.name)}"><i class="fa fa-play"></i> ${__("Start")}</button>` : ""}
+					${sol.status === "Planned" ? `<button class="btn btn-xs btn-default goh-sol-start" data-row="${esc(sol.name)}"><i class="fa fa-play"></i> ${__("Start")}</button>` : ""}
 					${sol.status === "In Progress" ? `<button class="btn btn-xs btn-success goh-sol-complete" data-row="${esc(sol.name)}"><i class="fa fa-check"></i> ${__("Done")}</button>` : ""}
+					${sol.status === "Completed" || sol.status === "Skipped" ? `<button class="btn btn-xs btn-info goh-sol-restart" data-row="${esc(sol.name)}"><i class="fa fa-undo"></i> ${__("Restart")}</button>` : ""}
 					${sol.status !== "Completed" && sol.status !== "Skipped" ? `<button class="btn btn-xs btn-warning goh-sol-skip" data-row="${esc(sol.name)}">${__("Skip")}</button>` : ""}
 					${sol.status !== "Completed" ? `<button class="btn btn-xs btn-danger goh-sol-cancel" data-row="${esc(sol.name)}"><i class="fa fa-times"></i> ${__("Cancel")}</button>` : ""}
 				</div>
 			</div>
-		`).join("");
+		`}).join("");
 
 		const cancelledCards = cancelledSols.length ? `
 			<div class="goh-cancelled-section mt-3">
@@ -918,6 +958,17 @@ class GoFixOpsHub {
 				</div>
 				<div class="goh-tech-chips">${techInfo || `<span class="text-muted">${__("None assigned")}</span>`}</div>
 			</div>
+
+			${isRework ? `
+			<div class="goh-section">
+				<div class="goh-rework-banner">
+					<div class="goh-rework-banner-title">
+						<i class="fa fa-refresh"></i> <strong>${__("Rework Round")} #${reworkIteration}</strong>
+					</div>
+					<div class="small">${__("QC failed on previous repair. Only failed items need rework — completed items can be restarted if needed.")}</div>
+				</div>
+			</div>
+			` : ""}
 
 			<div class="goh-section">
 				<div class="goh-section-title">
@@ -1040,29 +1091,54 @@ class GoFixOpsHub {
 	_html_rework(d) {
 		const esc = frappe.utils.escape_html;
 		const failed = (d.qc_checklist || []).filter(c => c.result === "Fail");
+		const passed = (d.qc_checklist || []).filter(c => c.result === "Pass");
 		const allChecks = (d.qc_checklist || []).map(row => `
 			<tr>
 				<td>${esc(row.check_name)}</td>
 				<td><span class="goh-badge ${row.result === "Pass" ? "badge-green" : row.result === "Fail" ? "badge-red" : "badge-muted"}">${esc(row.result || "—")}</span></td>
 				<td class="text-muted small">${esc(row.remarks || "")}</td>
+				<td class="text-muted small">${esc(row.fail_reason || "")}</td>
 			</tr>
 		`).join("");
 
 		const failItems = failed.map(r => `
-			<div class="goh-fail-item"><i class="fa fa-times-circle text-danger"></i> ${esc(r.check_name)} ${r.remarks ? `— <span class="text-muted">${esc(r.remarks)}</span>` : ""}</div>
+			<div class="goh-fail-item"><i class="fa fa-times-circle text-danger"></i> ${esc(r.check_name)} ${r.fail_reason ? `— <span class="text-muted">${esc(r.fail_reason)}</span>` : ""} ${r.linked_solution ? `<small class="text-primary">[${esc(r.linked_solution)}]</small>` : ""}</div>
 		`).join("");
+
+		// Show which solutions will be reworked vs kept
+		const solutions = d.solution_lines || [];
+		const failedSolutions = new Set(failed.filter(c => c.linked_solution).map(c => c.linked_solution));
+		const solRows = solutions.map(s => {
+			const willRework = failedSolutions.has(s.repair_solution) || (failedSolutions.size === 0 && s.status === "Completed");
+			return `<tr>
+				<td>${esc(s.repair_solution || "")}</td>
+				<td>${esc(s.issue_category || "")}</td>
+				<td><span class="goh-badge ${willRework ? "badge-red" : s.status === "Completed" ? "badge-green" : "badge-muted"}">${willRework ? __("Will Rework") : esc(s.status)}</span></td>
+				<td>${esc(s.technician_name || "")}</td>
+			</tr>`;
+		}).join("");
 
 		return `
 			<div class="goh-section goh-rework-alert">
-				<div class="goh-section-title"><i class="fa fa-exclamation-triangle text-danger"></i> ${__("QC Failed — Rework Required")}</div>
+				<div class="goh-section-title"><i class="fa fa-exclamation-triangle text-danger"></i> ${__("QC Failed — Rework Only Failed Items")}</div>
+				<p class="text-muted small">${__("Only the failed solutions will go back to repair. Passed items are kept intact.")}</p>
 				${failItems ? `<div class="goh-fail-list">${failItems}</div>` : `<p class="text-muted">${__("QC result: Fail")}</p>`}
+				${passed.length ? `<div class="mt-2"><small class="text-success"><i class="fa fa-check-circle"></i> ${passed.length} ${__("check(s) passed — these will not be affected")}</small></div>` : ""}
+			</div>
+
+			<div class="goh-section">
+				<div class="goh-section-title"><i class="fa fa-bolt"></i> ${__("Solution Impact")}</div>
+				<table class="goh-table">
+					<thead><tr><th>${__("Solution")}</th><th>${__("Issue")}</th><th>${__("Status")}</th><th>${__("Technician")}</th></tr></thead>
+					<tbody>${solRows || `<tr><td colspan="4" class="text-muted text-center">${__("No solutions")}</td></tr>`}</tbody>
+				</table>
 			</div>
 
 			<div class="goh-section">
 				<div class="goh-section-title"><i class="fa fa-list"></i> ${__("Full QC Checklist")}</div>
 				<table class="goh-table">
-					<thead><tr><th>${__("Check")}</th><th>${__("Result")}</th><th>${__("Remarks")}</th></tr></thead>
-					<tbody>${allChecks || `<tr><td colspan="3" class="text-muted text-center">${__("No checklist")}</td></tr>`}</tbody>
+					<thead><tr><th>${__("Check")}</th><th>${__("Result")}</th><th>${__("Remarks")}</th><th>${__("Fail Reason")}</th></tr></thead>
+					<tbody>${allChecks || `<tr><td colspan="4" class="text-muted text-center">${__("No checklist")}</td></tr>`}</tbody>
 				</table>
 			</div>
 
@@ -1098,12 +1174,23 @@ class GoFixOpsHub {
 	/* ═══════════════════════════════════════════════════════════════════════ */
 	_html_done(d) {
 		const esc = frappe.utils.escape_html;
+		const hasInvoice = !!d.service_invoice;
 		return `
 			<div class="goh-done-state">
 				<i class="fa fa-check-circle fa-3x" style="color:#10b981"></i>
 				<h4 class="mt-2">${__("Repair Complete")}</h4>
 				<p class="text-muted">${__("Status")}: <b>${esc(d.decision)}</b></p>
-				<a href="/app/service-request/${encodeURIComponent(d.name)}" target="_blank" class="btn btn-default btn-sm mt-2"><i class="fa fa-external-link"></i> ${__("View Service Request")}</a>
+				${hasInvoice ? `
+					<div class="goh-section mt-3" id="goh-done-invoice-summary">
+						<div class="text-center p-2"><i class="fa fa-spinner fa-spin"></i> ${__("Loading invoice…")}</div>
+					</div>
+				` : ""}
+				<div class="mt-3">
+					${hasInvoice
+						? `<a href="/app/sales-invoice/${encodeURIComponent(d.service_invoice)}" target="_blank" class="btn btn-primary btn-sm"><i class="fa fa-file-text-o"></i> ${__("View Invoice")} — ${esc(d.service_invoice)}</a>`
+						: ""}
+					<a href="/app/service-request/${encodeURIComponent(d.name)}" target="_blank" class="btn btn-default btn-sm ${hasInvoice ? 'ml-2' : ''}"><i class="fa fa-external-link"></i> ${__("View Service Request")}</a>
+				</div>
 			</div>
 		`;
 	}
@@ -1202,6 +1289,16 @@ class GoFixOpsHub {
 			content.find("#goh-back-to-analysis").on("click", () => {
 				frappe.xcall(`${API}.go_back_to_stage`, { sr_name: d.name, target_stage: "analysis" })
 					.then(() => self._refresh_all());
+			});
+
+			content.find("#goh-save-est-cost").on("click", () => {
+				const cost = parseFloat(content.find("#goh-est-cost").val()) || 0;
+				frappe.xcall("frappe.client.set_value", {
+					doctype: "Service Request", name: d.name,
+					fieldname: "estimated_cost", value: cost,
+				}).then(() => {
+					frappe.show_alert({ message: __("Estimated cost updated."), indicator: "green" });
+				});
 			});
 		}
 
@@ -1319,6 +1416,20 @@ class GoFixOpsHub {
 					primary_action_label: __("Cancel Solution"),
 					primary_action: v => {
 						frappe.xcall(`${API}.update_solution_status`, { sr_name: d.name, solution_row_name: rowName, status: "Cancelled", remarks: v.reason })
+							.then(() => { dlg.hide(); self._load_detail(d.name); });
+					},
+				});
+				dlg.show();
+			});
+
+			content.on("click", ".goh-sol-restart", function () {
+				const rowName = $(this).data("row");
+				const dlg = new frappe.ui.Dialog({
+					title: __("Restart Solution"),
+					fields: [{ fieldname: "remarks", label: __("Reason for restart"), fieldtype: "Small Text", description: __("Why does this need to be redone?") }],
+					primary_action_label: __("Restart"),
+					primary_action: v => {
+						frappe.xcall(`${API}.restart_solution_line`, { sr_name: d.name, solution_row_name: rowName, remarks: v.remarks || "" })
 							.then(() => { dlg.hide(); self._load_detail(d.name); });
 					},
 				});
@@ -1493,6 +1604,33 @@ class GoFixOpsHub {
 					job_type: content.find("#goh-rework-job-type").val() || "Repair",
 					manager_notes: content.find("#goh-rework-notes").val() || "",
 				}).then(() => { frappe.show_alert({ message: __("Reassigned. Ticket back in Repair."), indicator: "green" }); self._refresh_all(); });
+			});
+		}
+
+		/* ── Done (load invoice summary if applicable) ───────────────── */
+		if (activeStage === "done" && d.service_invoice) {
+			frappe.xcall(`${API}.get_invoice_summary`, { sr_name: d.name }).then(s => {
+				const esc = frappe.utils.escape_html;
+				const makeRows = items => items.map(i => `
+					<tr><td>${esc(i.item_name || i.item_code)}</td><td class="text-right">${i.qty}</td><td class="text-right">₹${format_number(i.rate)}</td><td class="text-right">₹${format_number(i.amount)}</td></tr>
+				`).join("");
+				this.parent.find("#goh-done-invoice-summary").html(`
+					${s.service_items.length ? `
+						<h6>${__("Service Charges")}</h6>
+						<table class="goh-table"><thead><tr><th>${__("Item")}</th><th class="text-right">${__("Qty")}</th><th class="text-right">${__("Rate")}</th><th class="text-right">${__("Amount")}</th></tr></thead>
+						<tbody>${makeRows(s.service_items)}</tbody></table>
+					` : ""}
+					${s.spare_items.length ? `
+						<h6 class="mt-2">${__("Spare Parts")}</h6>
+						<table class="goh-table"><thead><tr><th>${__("Item")}</th><th class="text-right">${__("Qty")}</th><th class="text-right">${__("Rate")}</th><th class="text-right">${__("Amount")}</th></tr></thead>
+						<tbody>${makeRows(s.spare_items)}</tbody></table>
+					` : ""}
+					<div class="goh-grand-total mt-2">
+						<h5>${__("Total")}: <span style="color:#059669">₹${format_number(s.customer_total)}</span></h5>
+					</div>
+				`);
+			}).catch(() => {
+				this.parent.find("#goh-done-invoice-summary").html("");
 			});
 		}
 

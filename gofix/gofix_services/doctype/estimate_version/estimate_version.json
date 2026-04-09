@@ -1,0 +1,133 @@
+{
+ "actions": [],
+ "creation": "2026-04-08 10:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "version_number",
+  "estimate_amount",
+  "labor_cost",
+  "spare_cost",
+  "col_break_ev1",
+  "status",
+  "created_by",
+  "created_at",
+  "section_break_ev_detail",
+  "reason_for_revision",
+  "issues_snapshot",
+  "col_break_ev2",
+  "approved_by",
+  "approved_at",
+  "customer_remarks"
+ ],
+ "fields": [
+  {
+   "fieldname": "version_number",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "Version #",
+   "read_only": 1
+  },
+  {
+   "fieldname": "estimate_amount",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "label": "Estimate Amount",
+   "read_only": 1
+  },
+  {
+   "fieldname": "labor_cost",
+   "fieldtype": "Currency",
+   "label": "Labor Cost",
+   "read_only": 1
+  },
+  {
+   "fieldname": "spare_cost",
+   "fieldtype": "Currency",
+   "label": "Spare Cost",
+   "read_only": 1
+  },
+  {
+   "fieldname": "col_break_ev1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Status",
+   "options": "\nPending\nSent to Customer\nCustomer Approved\nCustomer Rejected\nExpired\nSuperseded",
+   "default": "Pending",
+   "read_only": 1
+  },
+  {
+   "fieldname": "created_by",
+   "fieldtype": "Link",
+   "label": "Created By",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "created_at",
+   "fieldtype": "Datetime",
+   "in_list_view": 1,
+   "label": "Created At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_ev_detail",
+   "fieldtype": "Section Break",
+   "label": "Revision Details"
+  },
+  {
+   "fieldname": "reason_for_revision",
+   "fieldtype": "Small Text",
+   "label": "Reason for Revision",
+   "read_only": 1
+  },
+  {
+   "fieldname": "issues_snapshot",
+   "fieldtype": "Small Text",
+   "label": "Issues Snapshot",
+   "description": "JSON snapshot of issue+solution lines at the time of this estimate",
+   "read_only": 1,
+   "hidden": 1
+  },
+  {
+   "fieldname": "col_break_ev2",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "approved_by",
+   "fieldtype": "Link",
+   "label": "Approved/Rejected By",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "approved_at",
+   "fieldtype": "Datetime",
+   "label": "Approved/Rejected At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "customer_remarks",
+   "fieldtype": "Small Text",
+   "label": "Customer Remarks",
+   "read_only": 1
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-04-08 10:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "GoFix Services",
+ "name": "Estimate Version",
+ "naming_rule": "Random",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": []
+}

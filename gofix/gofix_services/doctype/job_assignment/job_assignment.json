@@ -140,7 +140,7 @@
    "fieldname": "assignment_type",
    "fieldtype": "Select",
    "label": "Assignment Type",
-   "options": "Team Assignment\nUser Assignment\nTechnician Assignment\nTechnician Changed"
+   "options": "Team Assignment\nUser Assignment\nTechnician Assignment\nTechnician Changed\nRework"
   },
   {
    "fieldname": "job_type",

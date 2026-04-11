@@ -48,6 +48,9 @@ def _log_ops_stage(sr_name, from_stage, to_stage):
 
 	sr = frappe.get_doc("Service Request", sr_name)
 	sr.flags.ignore_validate_update_after_submit = True
+	# Prevent sr.save() from triggering ensure_completion_artifacts / invoice
+	# creation cascade — the Ops Hub controls stage progression explicitly.
+	sr.flags.skip_completion_artifacts = True
 
 	prev_at = None
 	if sr.get("status_log"):
@@ -881,12 +884,11 @@ def save_solution_assignment(sr_name, solutions_json):
 	}
 	missing = active_categories - covered_categories
 	if missing:
-		frappe.msgprint(
-			_("Warning: No solution assigned for: {0}. These issues will remain unresolved.").format(
+		frappe.throw(
+			_("Every active issue must have at least one solution. Missing: {0}").format(
 				", ".join(sorted(missing))
 			),
-			indicator="orange",
-			alert=True,
+			title=_("Incomplete Solution Coverage"),
 		)
 
 	sr.save()
@@ -1553,6 +1555,10 @@ def reassign_after_qc_fail(sr_name, technician, job_type="Repair", manager_notes
 	# Reset QC status and workflow state via db_set (bypasses workflow validation)
 	so.db_set("qc_status", "Pending", update_modified=True)
 	so.db_set("workflow_state", "Work in Progress", update_modified=False)
+
+	# Clear QC checklist so it is freshly populated on next QC submission (Fix #5)
+	for check in list(so.get("qc_checklist") or []):
+		frappe.delete_doc("GoFix QC Checklist", check.name, force=True, ignore_permissions=True)
 
 	# Reset ONLY the failed solution lines back to "In Progress" for rework
 	# Use db_set per row to avoid triggering validate_issue_solution_cascade

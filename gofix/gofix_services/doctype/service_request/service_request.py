@@ -362,7 +362,7 @@ class ServiceRequest(Document):
 		if self.decision == "Accepted" and not self.service_order:
 			self.create_service_order()
 
-		if self.is_completed_status():
+		if self.is_completed_status() and not self.flags.get("skip_completion_artifacts"):
 			self.ensure_completion_artifacts()
 			# INT-1 fix: Sync completion back to linked Warranty Claim
 			self._sync_warranty_claim_completion()

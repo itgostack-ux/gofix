@@ -194,6 +194,7 @@ def send_estimate_to_customer(service_order, send_via="Email") -> dict:
 def customer_approve_estimate(service_order, remarks=None) -> dict:
 	"""Customer approves the repair estimate."""
 	so = frappe.get_doc("Sales Order", service_order)
+	so.check_permission("write")
 
 	if not so.is_service_order:
 		frappe.throw(_("Not a Service Order"), title=_("API Error"))
@@ -220,6 +221,7 @@ def customer_approve_estimate(service_order, remarks=None) -> dict:
 def customer_reject_estimate(service_order, remarks=None) -> dict:
 	"""Customer rejects the repair estimate."""
 	so = frappe.get_doc("Sales Order", service_order)
+	so.check_permission("write")
 
 	if not so.is_service_order:
 		frappe.throw(_("Not a Service Order"), title=_("API Error"))

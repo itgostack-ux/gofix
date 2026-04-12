@@ -15,7 +15,7 @@ from frappe.utils import flt, cint, nowdate, add_days, getdate
 
 
 @frappe.whitelist()
-def get_recommended_technicians(service_request=None, issue_category=None, minimum_grade=None, limit=5):
+def get_recommended_technicians(service_request=None, issue_category=None, minimum_grade=None, limit=5) -> list:
 	"""Return ranked technicians with scores for a given SR or issue category.
 
 	Each technician gets a composite score (0–100) based on:

@@ -10,13 +10,13 @@ import secrets
 # ── Delivery Control ─────────────────────────────────────────────────
 
 @frappe.whitelist()
-def generate_delivery_otp(service_order):
+def generate_delivery_otp(service_order) -> dict:
 	"""Generate and send OTP for device handover verification."""
 	frappe.only_for(["Sales Manager", "System Manager", "Service Manager", "Sales User"])
 	so = frappe.get_doc("Sales Order", service_order)
 
 	if not so.is_service_order:
-		frappe.throw(_("Not a Service Order"))
+		frappe.throw(_("Not a Service Order"), title=_("API Error"))
 
 	# Generate 6-digit OTP
 	otp = str(secrets.randbelow(900000) + 100000)
@@ -31,17 +31,17 @@ def generate_delivery_otp(service_order):
 
 
 @frappe.whitelist()
-def verify_delivery_otp(service_order, otp_input):
+def verify_delivery_otp(service_order, otp_input) -> dict:
 	"""Verify the delivery OTP entered by customer."""
 	frappe.only_for(["Sales Manager", "System Manager", "Service Manager", "Sales User"])
 	so = frappe.get_doc("Sales Order", service_order)
 
 	if not so.is_service_order:
-		frappe.throw(_("Not a Service Order"))
+		frappe.throw(_("Not a Service Order"), title=_("API Error"))
 
 	stored_otp = so.delivery_otp
 	if not stored_otp:
-		frappe.throw(_("No OTP generated. Please generate OTP first."))
+		frappe.throw(_("No OTP generated. Please generate OTP first."), title=_("API Error"))
 
 	try:
 		decrypted = frappe.utils.password.decrypt(stored_otp)
@@ -49,19 +49,19 @@ def verify_delivery_otp(service_order, otp_input):
 		decrypted = stored_otp
 
 	if str(otp_input).strip() != str(decrypted).strip():
-		frappe.throw(_("Invalid OTP. Please try again."))
+		frappe.throw(_("Invalid OTP. Please try again."), title=_("API Error"))
 
 	so.db_set("delivery_otp_verified", 1, update_modified=False)
 	return {"message": _("OTP verified successfully"), "verified": True}
 
 
 @frappe.whitelist()
-def validate_delivery_readiness(service_order):
+def validate_delivery_readiness(service_order) -> dict:
 	"""Check all delivery gates before allowing device handover."""
 	so = frappe.get_doc("Sales Order", service_order)
 
 	if not so.is_service_order:
-		frappe.throw(_("Not a Service Order"))
+		frappe.throw(_("Not a Service Order"), title=_("API Error"))
 
 	blockers = []
 
@@ -95,7 +95,7 @@ def validate_delivery_readiness(service_order):
 
 
 @frappe.whitelist()
-def complete_delivery(service_order, remarks=None):
+def complete_delivery(service_order, remarks=None) -> dict:
 	"""Mark device as delivered after all gates pass."""
 	frappe.only_for(["Sales Manager", "System Manager", "Service Manager", "Sales User"])
 	so = frappe.get_doc("Sales Order", service_order)
@@ -169,13 +169,13 @@ def _send_delivery_otp(so, otp):
 # ── Estimate Approval Flow ───────────────────────────────────────────
 
 @frappe.whitelist()
-def send_estimate_to_customer(service_order, send_via="Email"):
+def send_estimate_to_customer(service_order, send_via="Email") -> dict:
 	"""Send repair estimate to customer for approval."""
 	frappe.only_for(["Sales Manager", "System Manager", "Service Manager", "Sales User"])
 	so = frappe.get_doc("Sales Order", service_order)
 
 	if not so.is_service_order:
-		frappe.throw(_("Not a Service Order"))
+		frappe.throw(_("Not a Service Order"), title=_("API Error"))
 
 	so.db_set("estimate_sent", 1, update_modified=False)
 	so.db_set("estimate_sent_datetime", now(), update_modified=False)
@@ -191,12 +191,12 @@ def send_estimate_to_customer(service_order, send_via="Email"):
 
 
 @frappe.whitelist()
-def customer_approve_estimate(service_order, remarks=None):
+def customer_approve_estimate(service_order, remarks=None) -> dict:
 	"""Customer approves the repair estimate."""
 	so = frappe.get_doc("Sales Order", service_order)
 
 	if not so.is_service_order:
-		frappe.throw(_("Not a Service Order"))
+		frappe.throw(_("Not a Service Order"), title=_("API Error"))
 
 	if getattr(so, "estimate_approval_status", None) not in ("Pending", None, ""):
 		frappe.throw(_("Estimate is not pending approval (current: {0})").format(
@@ -205,7 +205,7 @@ def customer_approve_estimate(service_order, remarks=None):
 	# Check expiry
 	if so.estimate_expiry_date and getdate(so.estimate_expiry_date) < getdate(today()):
 		so.db_set("estimate_approval_status", "Expired", update_modified=False)
-		frappe.throw(_("This estimate has expired. Please request a new estimate."))
+		frappe.throw(_("This estimate has expired. Please request a new estimate."), title=_("API Error"))
 
 	so.db_set("estimate_approval_status", "Customer Approved", update_modified=False)
 	so.db_set("estimate_approved_datetime", now(), update_modified=False)
@@ -217,12 +217,12 @@ def customer_approve_estimate(service_order, remarks=None):
 
 
 @frappe.whitelist()
-def customer_reject_estimate(service_order, remarks=None):
+def customer_reject_estimate(service_order, remarks=None) -> dict:
 	"""Customer rejects the repair estimate."""
 	so = frappe.get_doc("Sales Order", service_order)
 
 	if not so.is_service_order:
-		frappe.throw(_("Not a Service Order"))
+		frappe.throw(_("Not a Service Order"), title=_("API Error"))
 
 	so.db_set("estimate_approval_status", "Customer Rejected", update_modified=False)
 	so.db_set("estimate_approved_datetime", now(), update_modified=False)
@@ -302,13 +302,13 @@ def expire_pending_estimates():
 # ── Decision Approval (maker-checker) ────────────────────────────────
 
 @frappe.whitelist()
-def approve_decision(service_order, remarks=None):
+def approve_decision(service_order, remarks=None) -> dict:
 	"""Manager approves a repair decision that requires approval."""
 	frappe.only_for(["Sales Manager", "System Manager", "Service Manager", "Store Manager"])
 	so = frappe.get_doc("Sales Order", service_order)
 
 	if not so.is_service_order:
-		frappe.throw(_("Not a Service Order"))
+		frappe.throw(_("Not a Service Order"), title=_("API Error"))
 
 	so.db_set("decision_approval_status", "Approved", update_modified=False)
 	so.db_set("decision_approved_by", frappe.session.user, update_modified=False)
@@ -321,13 +321,13 @@ def approve_decision(service_order, remarks=None):
 
 
 @frappe.whitelist()
-def reject_decision(service_order, remarks=None):
+def reject_decision(service_order, remarks=None) -> dict:
 	"""Manager rejects a repair decision."""
 	frappe.only_for(["Sales Manager", "System Manager", "Service Manager", "Store Manager"])
 	so = frappe.get_doc("Sales Order", service_order)
 
 	if not so.is_service_order:
-		frappe.throw(_("Not a Service Order"))
+		frappe.throw(_("Not a Service Order"), title=_("API Error"))
 
 	so.db_set("decision_approval_status", "Rejected", update_modified=False)
 	so.db_set("decision_approved_by", frappe.session.user, update_modified=False)
@@ -342,7 +342,7 @@ def reject_decision(service_order, remarks=None):
 # ── Advance Refund Flow ──────────────────────────────────────────────
 
 @frappe.whitelist()
-def process_advance_refund(service_request, amount=None, reason=None):
+def process_advance_refund(service_request, amount=None, reason=None) -> dict:
 	"""Refund advance payment when device is not repairable.
 
 	Creates a Payment Entry (refund) and updates the Service Request.
@@ -353,7 +353,7 @@ def process_advance_refund(service_request, amount=None, reason=None):
 
 	advance = flt(sr.advance_amount)
 	if not advance:
-		frappe.throw(_("No advance payment recorded on this Service Request"))
+		frappe.throw(_("No advance payment recorded on this Service Request"), title=_("API Error"))
 
 	refund_amount = flt(amount) or advance
 	if refund_amount > advance:
@@ -372,7 +372,7 @@ def process_advance_refund(service_request, amount=None, reason=None):
 		frappe.db.get_value("Company", company, "default_bank_account")
 
 	if not company_account:
-		frappe.throw(_("Please set default Cash or Bank account for company {0}").format(company))
+		frappe.throw(_("Please set default Cash or Bank account for company {0}").format(company), title=_("API Error"))
 
 	pe = frappe.new_doc("Payment Entry")
 	pe.payment_type = "Pay"
@@ -405,7 +405,7 @@ def process_advance_refund(service_request, amount=None, reason=None):
 # ── Inter-Store Service Transfer ─────────────────────────────────────
 
 @frappe.whitelist()
-def create_service_transfer(service_request, to_store, reason=None):
+def create_service_transfer(service_request, to_store, reason=None) -> dict:
 	"""Transfer a device from source store to a zone service center for repair.
 
 	Updates Service Request transfer tracking fields. The device physically
@@ -415,10 +415,10 @@ def create_service_transfer(service_request, to_store, reason=None):
 	sr = frappe.get_doc("Service Request", service_request)
 
 	if sr.transfer_status in ("In Transit", "Received at Service Center"):
-		frappe.throw(_("Device is already in transfer (status: {0})").format(sr.transfer_status))
+		frappe.throw(_("Device is already in transfer (status: {0})").format(sr.transfer_status), title=_("API Error"))
 
 	if not to_store:
-		frappe.throw(_("Destination store/service center is required"))
+		frappe.throw(_("Destination store/service center is required"), title=_("API Error"))
 
 	sr.db_set("transferred_to_store", to_store, update_modified=True)
 	sr.db_set("transfer_status", "In Transit", update_modified=False)
@@ -441,13 +441,13 @@ def create_service_transfer(service_request, to_store, reason=None):
 
 
 @frappe.whitelist()
-def receive_service_transfer(service_request):
+def receive_service_transfer(service_request) -> dict:
 	"""Mark device as received at the destination service center."""
 	frappe.only_for(["Sales Manager", "System Manager", "Service Manager", "Store Manager"])
 	sr = frappe.get_doc("Service Request", service_request)
 
 	if sr.transfer_status != "In Transit":
-		frappe.throw(_("Device is not in transit (status: {0})").format(sr.transfer_status))
+		frappe.throw(_("Device is not in transit (status: {0})").format(sr.transfer_status), title=_("API Error"))
 
 	sr.db_set("transfer_status", "Received at Service Center", update_modified=True)
 	sr.db_set("transfer_received_date", today(), update_modified=False)
@@ -462,7 +462,7 @@ def receive_service_transfer(service_request):
 
 
 @frappe.whitelist()
-def return_service_transfer(service_request):
+def return_service_transfer(service_request) -> dict:
 	"""Initiate return of device from service center back to origin store."""
 	frappe.only_for(["Sales Manager", "System Manager", "Service Manager", "Store Manager"])
 	sr = frappe.get_doc("Service Request", service_request)
@@ -479,13 +479,13 @@ def return_service_transfer(service_request):
 
 
 @frappe.whitelist()
-def complete_service_transfer_return(service_request):
+def complete_service_transfer_return(service_request) -> dict:
 	"""Mark device as returned to the origin store."""
 	frappe.only_for(["Sales Manager", "System Manager", "Service Manager", "Store Manager"])
 	sr = frappe.get_doc("Service Request", service_request)
 
 	if sr.transfer_status != "Return In Transit":
-		frappe.throw(_("Device is not in return transit (status: {0})").format(sr.transfer_status))
+		frappe.throw(_("Device is not in return transit (status: {0})").format(sr.transfer_status), title=_("API Error"))
 
 	sr.db_set("transfer_status", "Returned to Store", update_modified=True)
 	sr.db_set("transfer_return_date", today(), update_modified=False)
@@ -502,7 +502,7 @@ def complete_service_transfer_return(service_request):
 # ── Pickup & Outstation Tracking ─────────────────────────────────────
 
 @frappe.whitelist()
-def schedule_pickup(service_request, address, scheduled_datetime, agent=None):
+def schedule_pickup(service_request, address, scheduled_datetime, agent=None) -> dict:
 	"""Schedule a device pickup for outstation/courier mode service requests."""
 	frappe.only_for(["Sales Manager", "System Manager", "Service Manager", "Sales User"])
 	sr = frappe.get_doc("Service Request", service_request)
@@ -517,7 +517,7 @@ def schedule_pickup(service_request, address, scheduled_datetime, agent=None):
 
 
 @frappe.whitelist()
-def complete_pickup(service_request):
+def complete_pickup(service_request) -> dict:
 	"""Mark device pickup as completed."""
 	frappe.only_for(["Sales Manager", "System Manager", "Service Manager", "Sales User"])
 	sr = frappe.get_doc("Service Request", service_request)
@@ -528,7 +528,7 @@ def complete_pickup(service_request):
 
 
 @frappe.whitelist()
-def dispatch_return(service_request, courier_name=None, tracking_number=None):
+def dispatch_return(service_request, courier_name=None, tracking_number=None) -> dict:
 	"""Dispatch repaired device back to customer via courier."""
 	frappe.only_for(["Sales Manager", "System Manager", "Service Manager", "Sales User"])
 	sr = frappe.get_doc("Service Request", service_request)
@@ -542,7 +542,7 @@ def dispatch_return(service_request, courier_name=None, tracking_number=None):
 
 
 @frappe.whitelist()
-def confirm_return_delivery(service_request):
+def confirm_return_delivery(service_request) -> dict:
 	"""Confirm customer received the returned device."""
 	frappe.only_for(["Sales Manager", "System Manager", "Service Manager", "Sales User"])
 	sr = frappe.get_doc("Service Request", service_request)
@@ -558,7 +558,7 @@ def confirm_return_delivery(service_request):
 # ── Suggested Price Calculation ──────────────────────────────────────
 
 @frappe.whitelist()
-def calculate_suggested_price(service_order):
+def calculate_suggested_price(service_order) -> dict:
 	"""Calculate suggested repair price from technician hours and spare parts.
 
 	Returns breakdown:
@@ -567,7 +567,7 @@ def calculate_suggested_price(service_order):
 	"""
 	so = frappe.get_doc("Sales Order", service_order)
 	if not so.is_service_order:
-		frappe.throw(_("Not a Service Order"))
+		frappe.throw(_("Not a Service Order"), title=_("API Error"))
 
 	sr_name = so.service_request
 
@@ -626,7 +626,7 @@ def calculate_suggested_price(service_order):
 # ── Issue → Solution → Spare Cascade APIs ────────────────────────────
 
 @frappe.whitelist()
-def get_solutions_for_issues(issue_categories):
+def get_solutions_for_issues(issue_categories) -> list:
 	"""Return active Repair Solutions for the given issue categories.
 	Args:
 		issue_categories: JSON list of Issue Category names
@@ -650,7 +650,7 @@ def get_solutions_for_issues(issue_categories):
 
 
 @frappe.whitelist()
-def get_spares_for_solution(repair_solution):
+def get_spares_for_solution(repair_solution) -> list:
 	"""Return active mapped spares for a given Repair Solution."""
 	if not repair_solution:
 		return []
@@ -666,7 +666,7 @@ def get_spares_for_solution(repair_solution):
 
 
 @frappe.whitelist()
-def get_spares_for_solutions(repair_solutions):
+def get_spares_for_solutions(repair_solutions) -> list:
 	"""Return active mapped spares for multiple Repair Solutions.
 	Args:
 		repair_solutions: JSON list of Repair Solution names
@@ -690,7 +690,7 @@ def get_spares_for_solutions(repair_solutions):
 
 
 @frappe.whitelist()
-def get_eligible_technicians(issue_categories, warehouse=None):
+def get_eligible_technicians(issue_categories, warehouse=None) -> list:
 	"""Return technicians (Employees) whose Technician Grade covers all given issues.
 	Args:
 		issue_categories: JSON list of Issue Category names
@@ -750,7 +750,7 @@ def get_eligible_technicians(issue_categories, warehouse=None):
 
 
 @frappe.whitelist()
-def get_mapped_spare_items(doctype, txt, searchfield, start, page_len, filters):
+def get_mapped_spare_items(doctype, txt, searchfield, start, page_len, filters) -> list:
 	"""Server-side query for Link field: returns Items mapped to a Repair Solution.
 	Used as 'query' in spare_item get_query on SR Spare Line.
 	"""

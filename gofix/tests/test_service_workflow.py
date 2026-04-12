@@ -116,13 +116,13 @@ def setup_test_data():
 		as_dict=True,
 	)
 	if not device_item:
-		frappe.throw("Required test item PH000001 was not found")
+		frappe.throw("Required test item PH000001 was not found", title=_("Validation Error"))
 	print(f"✅ Device item exists: {device_item.name}")
 	
 	# 6. Reuse an existing repair service item
 	service_item = frappe.db.get_value("Item", "SVC-SCREEN-REPAIR", "name")
 	if not service_item:
-		frappe.throw("Required test item SVC-SCREEN-REPAIR was not found")
+		frappe.throw("Required test item SVC-SCREEN-REPAIR was not found", title=_("Validation Error"))
 	print(f"✅ Service item exists: {service_item}")
 	
 	print(f"\n✅ Test data setup complete!")

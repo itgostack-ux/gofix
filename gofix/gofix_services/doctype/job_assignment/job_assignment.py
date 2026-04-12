@@ -30,13 +30,13 @@ class JobAssignment(Document):
 	def validate_assignment(self):
 		"""Validate assignment type and related fields"""
 		if self.assignment_type == "Team Assignment" and not self.team:
-			frappe.throw(_("Team is mandatory for Team Assignment"))
+			frappe.throw(_("Team is mandatory for Team Assignment"), title=_("Job Assignment Error"))
 		
 		if self.assignment_type == "User Assignment" and not self.user:
-			frappe.throw(_("User is mandatory for User Assignment"))
+			frappe.throw(_("User is mandatory for User Assignment"), title=_("Job Assignment Error"))
 		
 		if self.assignment_type in ["Technician Assignment", "Technician Changed"] and not self.service_engineer:
-			frappe.throw(_("Service Engineer is mandatory for Technician Assignment"))
+			frappe.throw(_("Service Engineer is mandatory for Technician Assignment"), title=_("Job Assignment Error"))
 	
 	def set_assignment_datetime(self):
 		"""Set assignment datetime if not set"""
@@ -51,7 +51,7 @@ class JobAssignment(Document):
 			end = get_datetime(self.end_datetime)
 			
 			if end < start:
-				frappe.throw(_("End Date & Time cannot be before Start Date & Time"))
+				frappe.throw(_("End Date & Time cannot be before Start Date & Time"), title=_("Job Assignment Error"))
 			
 			self.actual_hours = time_diff_in_hours(end, start)
 	
@@ -164,10 +164,10 @@ class JobAssignment(Document):
 	def mark_received_from_technician(self):
 		"""Mark job as received from technician"""
 		if self.received_from_technician:
-			frappe.throw(_("Already marked as received from technician"))
+			frappe.throw(_("Already marked as received from technician"), title=_("Job Assignment Error"))
 		
 		if not self.service_engineer:
-			frappe.throw(_("No technician assigned to receive from"))
+			frappe.throw(_("No technician assigned to receive from"), title=_("Job Assignment Error"))
 		
 		self.received_from_technician = 1
 		self.received_date = frappe.utils.today()
@@ -188,7 +188,7 @@ class JobAssignment(Document):
 
 # API Methods
 @frappe.whitelist()
-def get_technician_workload(engineer):
+def get_technician_workload(engineer) -> dict:
 	"""Get count of open/in-progress jobs for a technician.
 	Returns dict with open_count and list of active job names.
 	"""
@@ -206,7 +206,7 @@ def get_technician_workload(engineer):
 
 
 @frappe.whitelist()
-def create_job_sheet_from_service_order(service_order, service_engineer=None, job_type="Repair", estimated_hours=None):
+def create_job_sheet_from_service_order(service_order, service_engineer=None, job_type="Repair", estimated_hours=None) -> dict:
 	"""Create Job Sheet (Job Assignment) from Service Order
 	
 	Args:
@@ -219,7 +219,7 @@ def create_job_sheet_from_service_order(service_order, service_engineer=None, jo
 	
 	# Check if Service Order is marked as service order
 	if not hasattr(so, 'is_service_order') or not so.is_service_order:
-		frappe.throw(_("This is not a Service Order"))
+		frappe.throw(_("This is not a Service Order"), title=_("Job Assignment Error"))
 	
 	# Create Job Sheet
 	job_sheet = frappe.new_doc("Job Assignment")

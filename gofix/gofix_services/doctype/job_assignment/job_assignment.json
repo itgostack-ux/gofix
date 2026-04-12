@@ -50,7 +50,8 @@
    "in_standard_filter": 1,
    "label": "Service Order",
    "options": "Sales Order",
-   "description": "Link to Service Order (Sales Order)"
+   "description": "Link to Service Order (Sales Order)",
+   "search_index": 1
   },
   {
    "fieldname": "service_request",
@@ -59,7 +60,8 @@
    "in_standard_filter": 1,
    "label": "Service Request",
    "options": "Service Request",
-   "fetch_from": "service_order.service_request"
+   "fetch_from": "service_order.service_request",
+   "search_index": 1
   },
   {
    "fetch_from": "service_request.customer_name",
@@ -113,7 +115,8 @@
    "fieldtype": "Link",
    "in_standard_filter": 1,
    "label": "Team",
-   "options": "Employee Group"
+   "options": "Employee Group",
+   "search_index": 1
   },
   {
    "depends_on": "eval:doc.team",
@@ -128,7 +131,8 @@
    "in_list_view": 1,
    "in_standard_filter": 1,
    "label": "Service Engineer",
-   "options": "Employee"
+   "options": "Employee",
+   "search_index": 1
   },
   {
    "fieldname": "section_break_11",
@@ -156,7 +160,8 @@
    "in_list_view": 1,
    "in_standard_filter": 1,
    "label": "Job Status",
-   "options": "Open\nIn Progress\nOn Hold\nCompleted\nCancelled"
+   "options": "Open\nIn Progress\nOn Hold\nCompleted\nCancelled",
+   "search_index": 1
   },
   {
    "fieldname": "repair_outcome",
@@ -362,6 +367,25 @@
  ],
  "sort_field": "modified",
  "sort_order": "DESC",
- "states": [],
- "track_changes": 1
+ "states": [
+  {
+   "color": "Blue",
+   "title": "Assigned"
+  },
+  {
+   "color": "Yellow",
+   "title": "In Progress"
+  },
+  {
+   "color": "Green",
+   "title": "Completed"
+  },
+  {
+   "color": "Red",
+   "title": "Cancelled"
+  }
+ ],
+ "track_changes": 1,
+ "search_fields": "service_request,technician,assignment_status",
+ "title_field": "service_request"
 }

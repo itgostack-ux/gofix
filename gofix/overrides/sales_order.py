@@ -355,12 +355,12 @@ def validate_service_order_before_submit(doc, method=None):
 		fields=["name", "assignment_status"])
 
 	if not job_sheets:
-		frappe.throw(_("Cannot submit Service Order. Please create and complete Job Sheet first."))
+		frappe.throw(_("Cannot submit Service Order. Please create and complete Job Sheet first."), title=_("Validation Error"))
 
 	incomplete = [js for js in job_sheets if js.assignment_status not in ["Completed", "Closed"]]
 	if incomplete:
 		names = ", ".join([js.name for js in incomplete])
-		frappe.throw(_("Cannot submit. Job Sheet(s) {0} must be completed first.").format(names))
+		frappe.throw(_("Cannot submit. Job Sheet(s) {0} must be completed first.").format(names), title=_("Validation Error"))
 
 def update_service_request_on_qc(doc, method=None):
 	"""Hook: Update SR when QC status changes"""

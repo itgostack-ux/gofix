@@ -14,7 +14,7 @@ def create_warehouse_structure(company):
 	"""Create warehouse hierarchy for GoFix stores"""
 	
 	if not company:
-		frappe.throw(_("Company is required"))
+		frappe.throw(_("Company is required"), title=_("Validation Error"))
 	
 	company_abbr = frappe.get_cached_value("Company", company, "abbr")
 	
@@ -90,7 +90,7 @@ def create_warehouse(warehouse_name, company, parent_warehouse=None, is_group=0)
 
 
 @frappe.whitelist()
-def setup_warehouses_for_company(company):
+def setup_warehouses_for_company(company) -> dict:
 	"""Public API to setup warehouses"""
 	frappe.only_for("System Manager")
 	return create_warehouse_structure(company)
@@ -100,10 +100,10 @@ def link_address_to_warehouse(warehouse, address):
 	"""Link an address to a warehouse"""
 	
 	if not frappe.db.exists("Warehouse", warehouse):
-		frappe.throw(_("Warehouse {0} does not exist").format(warehouse))
+		frappe.throw(_("Warehouse {0} does not exist").format(warehouse), title=_("Validation Error"))
 	
 	if not frappe.db.exists("Address", address):
-		frappe.throw(_("Address {0} does not exist").format(address))
+		frappe.throw(_("Address {0} does not exist").format(address), title=_("Validation Error"))
 	
 	# Update warehouse with address
 	frappe.db.set_value("Warehouse", warehouse, "address", address)
@@ -115,13 +115,13 @@ def link_address_to_warehouse(warehouse, address):
 
 
 @frappe.whitelist()
-def create_store_address(warehouse, address_line1, city, state, pincode, country="India"):
+def create_store_address(warehouse, address_line1, city, state, pincode, country="India") -> dict:
 	"""Create and link address for a store warehouse"""
 	
 	frappe.only_for("System Manager")
 	
 	if not frappe.db.exists("Warehouse", warehouse):
-		frappe.throw(_("Warehouse {0} does not exist").format(warehouse))
+		frappe.throw(_("Warehouse {0} does not exist").format(warehouse), title=_("Validation Error"))
 	
 	# Get company from warehouse
 	company = frappe.get_cached_value("Warehouse", warehouse, "company")
@@ -157,16 +157,16 @@ def create_store_address(warehouse, address_line1, city, state, pincode, country
 
 
 @frappe.whitelist()
-def set_user_default_warehouse(user, warehouse):
+def set_user_default_warehouse(user, warehouse) -> None:
 	"""Set default warehouse for a user"""
 	
 	frappe.only_for("System Manager")
 	
 	if not frappe.db.exists("User", user):
-		frappe.throw(_("User {0} does not exist").format(user))
+		frappe.throw(_("User {0} does not exist").format(user), title=_("Validation Error"))
 	
 	if not frappe.db.exists("Warehouse", warehouse):
-		frappe.throw(_("Warehouse {0} does not exist").format(warehouse))
+		frappe.throw(_("Warehouse {0} does not exist").format(warehouse), title=_("Validation Error"))
 	
 	# Set user default
 	frappe.defaults.set_user_default("warehouse", warehouse, user)
@@ -183,11 +183,11 @@ def set_user_default_warehouse(user, warehouse):
 
 
 @frappe.whitelist()
-def get_warehouse_details(warehouse):
+def get_warehouse_details(warehouse) -> dict:
 	"""Get warehouse details including address and state"""
 	
 	if not frappe.db.exists("Warehouse", warehouse):
-		frappe.throw(_("Warehouse {0} does not exist").format(warehouse))
+		frappe.throw(_("Warehouse {0} does not exist").format(warehouse), title=_("Validation Error"))
 	
 	wh = frappe.get_doc("Warehouse", warehouse)
 	

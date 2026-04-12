@@ -4,9 +4,13 @@ app_publisher = "GoStack"
 app_description = "Repairs & Services"
 app_email = "contact@gostack.in"
 app_license = "custom"
+
+boot_session = "gofix.boot.boot_session"
 required_apps = ["frappe/erpnext"]
 
 # Fixtures
+# NOTE: Consider migrating fixtures to programmatic setup (after_migrate hook)
+# Reference: India Compliance pattern — toggle_custom_fields(), setup_roles()
 fixtures = [
     {
         "dt": "Role",

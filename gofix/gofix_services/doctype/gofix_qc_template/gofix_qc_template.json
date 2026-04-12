@@ -84,5 +84,7 @@
  "sort_field": "creation",
  "sort_order": "DESC",
  "states": [],
- "track_changes": 1
+ "track_changes": 1,
+ "search_fields": "template_name",
+ "title_field": "template_name"
 }

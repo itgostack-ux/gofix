@@ -303,36 +303,36 @@ class ServiceRequest(Document):
 		"""Validate service and completion dates"""
 		# Prevent future dates for service request
 		if getdate(self.service_date) > getdate(today()):
-			frappe.throw(_("Service Request Date cannot be in the future"))
+			frappe.throw(_("Service Request Date cannot be in the future"), title=_("Service Request Error"))
 		
 		# Validate expected completion date
 		if self.expected_completion_date and self.service_date:
 			if getdate(self.expected_completion_date) < getdate(self.service_date):
-				frappe.throw(_("Expected Completion Date cannot be before Service Request Date"))
+				frappe.throw(_("Expected Completion Date cannot be before Service Request Date"), title=_("Service Request Error"))
 		
 		# Validate received datetime
 		if self.received_datetime:
 			from frappe.utils import get_datetime, now_datetime
 			if get_datetime(self.received_datetime) > now_datetime():
-				frappe.throw(_("Received Date & Time cannot be in the future"))
+				frappe.throw(_("Received Date & Time cannot be in the future"), title=_("Service Request Error"))
 			
 			# Validate expected completion datetime >= received datetime
 			expected_completion_time = self.get("expected_completion_time")
 			if self.expected_completion_date and expected_completion_time:
 				expected_dt = get_datetime(f"{self.expected_completion_date} {expected_completion_time}")
 				if expected_dt < get_datetime(self.received_datetime):
-					frappe.throw(_("Expected Completion Date & Time must be after Received Date & Time"))
+					frappe.throw(_("Expected Completion Date & Time must be after Received Date & Time"), title=_("Service Request Error"))
 		
 		# Validate actual completion date
 		if self.get("actual_completion_date") and self.service_date:
 			if getdate(self.get("actual_completion_date")) < getdate(self.service_date):
-				frappe.throw(_("Actual Completion Date cannot be before Service Request Date"))
+				frappe.throw(_("Actual Completion Date cannot be before Service Request Date"), title=_("Service Request Error"))
 
 	def validate_withdrawal(self):
 		"""Validate withdrawal reason is provided if status is withdrawn"""
 		if self.walkin_status == "Withdrawn":
 			if not self.withdrawal_reason:
-				frappe.throw(_("Withdrawal Reason is mandatory when Walk-in Status is Withdrawn"))
+				frappe.throw(_("Withdrawal Reason is mandatory when Walk-in Status is Withdrawn"), title=_("Service Request Error"))
 			
 			# Auto-cancel if withdrawn
 			if self.status not in ["Cancelled"]:
@@ -440,7 +440,7 @@ class ServiceRequest(Document):
 	def create_service_order(self):
 		"""Create Service Order (Sales Order) from accepted Service Request"""
 		if self.service_order:
-			frappe.throw(_("Service Order already exists: {0}").format(self.service_order))
+			frappe.throw(_("Service Order already exists: {0}").format(self.service_order), title=_("Service Request Error"))
 
 		# Enforce: diagnosis → repairability → estimate approval → SO
 		try:
@@ -560,7 +560,7 @@ class ServiceRequest(Document):
 			return so.name
 		except Exception as e:
 			frappe.log_error(f"Error creating Service Order: {str(e)}")
-			frappe.throw(_("Error creating Service Order: {0}").format(str(e)))
+			frappe.throw(_("Error creating Service Order: {0}").format(str(e)), title=_("Service Request Error"))
 
 	def calculate_costs(self):
 		"""Calculate total costs from service items and spare parts"""
@@ -590,16 +590,16 @@ class ServiceRequest(Document):
 		if self.service_invoice:
 			invoice = frappe.get_doc("Sales Invoice", self.service_invoice)
 			if invoice.docstatus == 1:
-				frappe.throw(_("Please cancel Sales Invoice {0} first").format(self.service_invoice))
+				frappe.throw(_("Please cancel Sales Invoice {0} first").format(self.service_invoice), title=_("Service Request Error"))
 		
 		# Cancel stock entry if exists
 		if self.stock_entry:
 			stock_entry = frappe.get_doc("Stock Entry", self.stock_entry)
 			if stock_entry.docstatus == 1:
-				frappe.throw(_("Please cancel Stock Entry {0} first").format(self.stock_entry))
+				frappe.throw(_("Please cancel Stock Entry {0} first").format(self.stock_entry), title=_("Service Request Error"))
 
 	@frappe.whitelist()
-	def get_device_details(self):
+	def get_device_details(self) -> None:
 		"""Fetch device item details"""
 		if self.device_item:
 			item = frappe.get_doc("Item", self.device_item)
@@ -614,7 +614,7 @@ class ServiceRequest(Document):
 			return serial_nos
 
 	@frappe.whitelist()
-	def get_open_requests(self):
+	def get_open_requests(self) -> None:
 		"""Get list of open requests for this customer"""
 		if self.customer:
 			open_requests = frappe.get_all("Service Request",
@@ -636,11 +636,11 @@ class ServiceRequest(Document):
 			return
 		
 		if not self.is_completed_status():
-			frappe.throw(_("Service Invoice can only be created for Completed requests"))
+			frappe.throw(_("Service Invoice can only be created for Completed requests"), title=_("Service Request Error"))
 		
 		items = self.get_service_invoice_items()
 		if not items:
-			frappe.throw(_("No service items or spare parts to invoice"))
+			frappe.throw(_("No service items or spare parts to invoice"), title=_("Service Request Error"))
 
 		posting_date = self.get("actual_completion_date") or today()
 		
@@ -792,7 +792,7 @@ class ServiceRequest(Document):
 		"""Validate courier details are mandatory if delivery mode is Courier"""
 		if self.get("delivery_mode") == "Courier":
 			if not self.get("courier_name"):
-				frappe.throw(_("Courier Name is mandatory when Delivery Mode is Courier"))
+				frappe.throw(_("Courier Name is mandatory when Delivery Mode is Courier"), title=_("Service Request Error"))
 			if not self.get("delivery_address"):
 				frappe.msgprint(_("Warning: Delivery Address is not provided"), 
 					indicator="orange", alert=True)
@@ -823,15 +823,15 @@ class ServiceRequest(Document):
 		
 		# Product condition description is mandatory for submission
 		if not self.product_condition_desc:
-			frappe.throw(_("Product Condition Description is mandatory before submission"))
+			frappe.throw(_("Product Condition Description is mandatory before submission"), title=_("Service Request Error"))
 		
 		# Backup info is mandatory for submission
 		if not self.backup_info:
-			frappe.throw(_("Backup Information is mandatory before submission. Please specify what data was backed up."))
+			frappe.throw(_("Backup Information is mandatory before submission. Please specify what data was backed up."), title=_("Service Request Error"))
 		
 		# Fault/Issue description is mandatory
 		if not self.issue_description:
-			frappe.throw(_("Issue Description is mandatory"))
+			frappe.throw(_("Issue Description is mandatory"), title=_("Service Request Error"))
 		
 		# State name and code mandatory for GST compliance
 		if not self.state_name or not self.state_code:
@@ -845,7 +845,7 @@ class ServiceRequest(Document):
 					error_msg += "1. Go to Warehouse master and link an Address with State details, OR<br>"
 					error_msg += "2. Manually enter State Name and State Code in this form"
 			
-			frappe.throw(error_msg)
+			frappe.throw(error_msg, title=_("Service Request Error"))
 
 	def validate_backdating(self):
 		"""Control backdating - require approval if more than 3 days old"""
@@ -857,7 +857,7 @@ class ServiceRequest(Document):
 			if days_diff > 3:
 				# Check if user has permission to backdate
 				if not frappe.has_permission("Service Request", "write", user=frappe.session.user):
-					frappe.throw(_("Service Request Date is more than 3 days old. Backdating requires System Manager approval."))
+					frappe.throw(_("Service Request Date is more than 3 days old. Backdating requires System Manager approval."), title=_("Service Request Error"))
 				
 				# Log the backdating
 				frappe.msgprint(
@@ -870,7 +870,7 @@ class ServiceRequest(Document):
 		"""Validate delivery date is not before received date"""
 		if self.expected_delivery_date and self.service_date:
 			if getdate(self.expected_delivery_date) < getdate(self.service_date):
-				frappe.throw(_("Expected Delivery Date cannot be before Service Date"))
+				frappe.throw(_("Expected Delivery Date cannot be before Service Date"), title=_("Service Request Error"))
 	
 	def validate_issue_solution_cascade(self):
 		"""Validate the Issue → Solution → Spare cascade.
@@ -1213,7 +1213,7 @@ class ServiceRequest(Document):
 
 # API Methods
 @frappe.whitelist()
-def get_customer_details(customer):
+def get_customer_details(customer) -> dict:
 	"""Get customer details including contact info (whitelisted for client-side calls)"""
 	if not customer:
 		return {}
@@ -1244,7 +1244,7 @@ def get_customer_details(customer):
 	return result
 
 @frappe.whitelist()
-def get_open_requests(name):
+def get_open_requests(name) -> list:
 	"""Get open service requests for the same customer"""
 	doc = frappe.get_doc("Service Request", name)
 	doc.check_permission("read")
@@ -1266,7 +1266,7 @@ def get_open_requests(name):
 	return open_requests
 
 @frappe.whitelist()
-def generate_barcode_manual(name):
+def generate_barcode_manual(name) -> dict:
 	"""Manually generate barcode for a service request"""
 	doc = frappe.get_doc("Service Request", name)
 	doc.check_permission("write")
@@ -1282,7 +1282,7 @@ def generate_barcode_manual(name):
 	return doc.serial_no
 
 @frappe.whitelist()
-def accept_service_request(service_request):
+def accept_service_request(service_request) -> dict:
 	"""Accept Service Request and create Service Order
 	
 	This method handles accepting submitted Service Requests
@@ -1323,7 +1323,7 @@ def accept_service_request(service_request):
 	return doc.service_order
 
 @frappe.whitelist()
-def reject_service_request(service_request, rejection_reason):
+def reject_service_request(service_request, rejection_reason) -> bool:
 	"""Reject Service Request
 	
 	This method handles rejecting submitted Service Requests
@@ -1365,7 +1365,7 @@ def complete_service_request(service_request, completion_date=None):
 	return doc.name
 
 @frappe.whitelist()
-def get_warehouse_state(warehouse):
+def get_warehouse_state(warehouse) -> dict:
 	"""Get state details from warehouse address
 	
 	Returns state_name and state_code for GST compliance

@@ -66,7 +66,8 @@
    "in_standard_filter": 1,
    "label": "Issue Category",
    "options": "Issue Category",
-   "description": "Leave blank to match all categories"
+   "description": "Leave blank to match all categories",
+   "search_index": 1
   },
   {
    "fieldname": "repair_solution",
@@ -75,7 +76,8 @@
    "in_standard_filter": 1,
    "label": "Repair Solution",
    "options": "Repair Solution",
-   "description": "Leave blank to match all solutions"
+   "description": "Leave blank to match all solutions",
+   "search_index": 1
   },
   {
    "fieldname": "device_brand",
@@ -128,13 +130,13 @@
    "fieldname": "min_charge",
    "fieldtype": "Currency",
    "label": "Minimum Charge",
-   "description": "Floor price — customer will not be charged less than this"
+   "description": "Floor price \u2014 customer will not be charged less than this"
   },
   {
    "fieldname": "max_charge",
    "fieldtype": "Currency",
    "label": "Maximum Charge",
-   "description": "Ceiling price — technician cannot override above this without approval"
+   "description": "Ceiling price \u2014 technician cannot override above this without approval"
   },
   {
    "fieldname": "section_break_spare",
@@ -236,5 +238,7 @@
  "sort_field": "priority_order",
  "sort_order": "ASC",
  "states": [],
- "track_changes": 1
+ "track_changes": 1,
+ "search_fields": "rule_name,issue_category",
+ "title_field": "rule_name"
 }

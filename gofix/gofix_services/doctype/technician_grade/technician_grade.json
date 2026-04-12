@@ -95,5 +95,6 @@
  "sort_order": "ASC",
  "states": [],
  "title_field": "grade_name",
- "track_changes": 1
+ "track_changes": 1,
+ "search_fields": "grade_name"
 }

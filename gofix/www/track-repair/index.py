@@ -143,17 +143,17 @@ def _build_tracking_data(sr_name):
 
 
 @frappe.whitelist(allow_guest=True)
-def get_tracking_data(sr_name=None, phone_last4=None, token=None):
+def get_tracking_data(sr_name=None, phone_last4=None, token=None) -> dict:
 	"""Public API for AJAX tracking lookups."""
 	if token:
 		data = _get_by_token(token)
 	elif sr_name and phone_last4:
 		data = _get_by_phone(sr_name, phone_last4)
 	else:
-		frappe.throw(_("Please provide SR number and phone, or a tracking token"))
+		frappe.throw(_("Please provide SR number and phone, or a tracking token"), title=_("Validation Error"))
 
 	if not data:
-		frappe.throw(_("Service request not found or phone number does not match"))
+		frappe.throw(_("Service request not found or phone number does not match"), title=_("Validation Error"))
 
 	return data
 
@@ -170,7 +170,7 @@ def generate_tracking_url(sr_name):
 
 
 @frappe.whitelist(allow_guest=True)
-def customer_estimate_action(sr_name, version_number, action, remarks=None, token=None, phone_last4=None):
+def customer_estimate_action(sr_name, version_number, action, remarks=None, token=None, phone_last4=None) -> dict:
 	"""Allow customer to approve/reject an estimate from the tracking page.
 
 	Authentication: must provide either a valid token or SR + phone_last4.
@@ -187,10 +187,10 @@ def customer_estimate_action(sr_name, version_number, action, remarks=None, toke
 			verified = True
 
 	if not verified:
-		frappe.throw(_("Access denied. Invalid token or phone number."))
+		frappe.throw(_("Access denied. Invalid token or phone number."), title=_("Validation Error"))
 
 	if action not in ("approve", "reject"):
-		frappe.throw(_("Invalid action. Must be 'approve' or 'reject'."))
+		frappe.throw(_("Invalid action. Must be 'approve' or 'reject'."), title=_("Validation Error"))
 
 	version_number = int(version_number or 0)
 

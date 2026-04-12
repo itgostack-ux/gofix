@@ -32,11 +32,11 @@ class SparePartsUsage(Document):
 	def validate_service_request(self):
 		"""Validate that service request exists and is open"""
 		if not self.service_request:
-			frappe.throw(_("Service Request is mandatory"))
+			frappe.throw(_("Service Request is mandatory"), title=_("Spare Parts Usage Error"))
 
 		service_request = frappe.get_doc("Service Request", self.service_request)
 		if service_request.status in ["Completed", "Invoiced", "Delivered", "Cancelled", "Rejected", "Withdrawn"]:
-			frappe.throw(_("Cannot add spare parts when Service Request is in status {0}").format(service_request.status))
+			frappe.throw(_("Cannot add spare parts when Service Request is in status {0}").format(service_request.status), title=_("Spare Parts Usage Error"))
 
 	def validate_barcode(self):
 		"""Validate barcode uniqueness and availability"""
@@ -53,7 +53,7 @@ class SparePartsUsage(Document):
 		""", (self.barcode_value, self.service_request, self.name or ""))
 
 		if existing:
-			frappe.throw(_("Barcode {0} is already used in this service request").format(self.barcode_value))
+			frappe.throw(_("Barcode {0} is already used in this service request").format(self.barcode_value), title=_("Spare Parts Usage Error"))
 
 		# Check if barcode exists in stock and is available
 		barcode_exists = frappe.db.exists("Serial No", {"name": self.barcode_value})
@@ -181,7 +181,7 @@ class SparePartsUsage(Document):
 		) or frappe.db.get_value("Item", self.spare_part_item, "default_warehouse")
 
 		if not source_warehouse:
-			frappe.throw(_("Warehouse is required to issue spare part {0}").format(self.spare_part_item))
+			frappe.throw(_("Warehouse is required to issue spare part {0}").format(self.spare_part_item), title=_("Spare Parts Usage Error"))
 
 		# Create Stock Entry for consumption
 		stock_entry = frappe.new_doc("Stock Entry")
@@ -253,7 +253,7 @@ class SparePartsUsage(Document):
 	def move_to_main_stock(self, reason):
 		"""Move spare part back to main stock"""
 		if self.status != "Active":
-			frappe.throw(_("Can only move active spare parts"))
+			frappe.throw(_("Can only move active spare parts"), title=_("Spare Parts Usage Error"))
 
 		self.status = "Moved to Main Stock"
 		self.part_status = "Returned"
@@ -273,7 +273,7 @@ class SparePartsUsage(Document):
 	def move_to_dispose_stock(self, reason):
 		"""Move spare part to dispose stock"""
 		if self.status != "Active":
-			frappe.throw(_("Can only move active spare parts"))
+			frappe.throw(_("Can only move active spare parts"), title=_("Spare Parts Usage Error"))
 
 		self.status = "Moved to Dispose Stock"
 		self.part_status = "Defective"
@@ -290,7 +290,7 @@ class SparePartsUsage(Document):
 	def mark_defective(self, defect_type, description, action):
 		"""Mark spare part as defective with details."""
 		if self.part_status not in ("Issued", "Reserved"):
-			frappe.throw(_("Only Reserved or Issued parts can be marked defective"))
+			frappe.throw(_("Only Reserved or Issued parts can be marked defective"), title=_("Spare Parts Usage Error"))
 
 		self.is_defective = 1
 		self.part_status = "Defective"
@@ -352,7 +352,7 @@ class SparePartsUsage(Document):
 		) or frappe.db.get_value("Item", self.spare_part_item, "default_warehouse")
 
 		if not target_warehouse:
-			frappe.throw(_("Warehouse is required to return spare part {0}").format(self.spare_part_item))
+			frappe.throw(_("Warehouse is required to return spare part {0}").format(self.spare_part_item), title=_("Spare Parts Usage Error"))
 
 		stock_entry = frappe.new_doc("Stock Entry")
 		stock_entry.stock_entry_type = "Material Receipt"
@@ -394,7 +394,7 @@ def _get_matching_approval_rule(rule_type, value, service_request=None):
 
 # API Methods
 @frappe.whitelist()
-def move_to_main_stock(name, reason):
+def move_to_main_stock(name, reason) -> dict:
 	"""Whitelisted method to move spare part to main stock"""
 	frappe.only_for(["Sales Manager", "System Manager", "Service Manager", "Sales User"])
 	doc = frappe.get_doc("Spare Parts Usage", name)
@@ -403,7 +403,7 @@ def move_to_main_stock(name, reason):
 
 
 @frappe.whitelist()
-def move_to_dispose_stock(name, reason):
+def move_to_dispose_stock(name, reason) -> dict:
 	"""Whitelisted method to move spare part to dispose stock"""
 	frappe.only_for(["Sales Manager", "System Manager", "Service Manager"])
 	doc = frappe.get_doc("Spare Parts Usage", name)
@@ -412,7 +412,7 @@ def move_to_dispose_stock(name, reason):
 
 
 @frappe.whitelist()
-def mark_defective(name, defect_type, description=None, action=None):
+def mark_defective(name, defect_type, description=None, action=None) -> dict:
 	"""Mark a spare part as defective."""
 	frappe.only_for(["Sales Manager", "System Manager", "Service Manager", "Service Engineer"])
 	doc = frappe.get_doc("Spare Parts Usage", name)
@@ -421,7 +421,7 @@ def mark_defective(name, defect_type, description=None, action=None):
 
 
 @frappe.whitelist()
-def change_part_status(name, new_status):
+def change_part_status(name, new_status) -> dict:
 	"""Transition part status through lifecycle."""
 	frappe.only_for(["Sales Manager", "System Manager", "Service Manager", "Service Engineer", "Sales User"])
 	doc = frappe.get_doc("Spare Parts Usage", name)
@@ -446,14 +446,14 @@ def change_part_status(name, new_status):
 
 
 @frappe.whitelist()
-def approve_spare_part(name, remarks=None):
+def approve_spare_part(name, remarks=None) -> dict:
 	"""Approve a spare part that requires approval."""
 	frappe.only_for(["Sales Manager", "System Manager", "Service Manager", "Store Manager"])
 	doc = frappe.get_doc("Spare Parts Usage", name)
 	if not doc.requires_approval:
-		frappe.throw(_("This spare part does not require approval"))
+		frappe.throw(_("This spare part does not require approval"), title=_("Spare Parts Usage Error"))
 	if doc.approval_status == "Approved":
-		frappe.throw(_("Already approved"))
+		frappe.throw(_("Already approved"), title=_("Spare Parts Usage Error"))
 
 	doc.approval_status = "Approved"
 	doc.approved_by = frappe.session.user

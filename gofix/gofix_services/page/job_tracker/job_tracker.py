@@ -11,7 +11,7 @@ def get_context(context):
 
 
 @frappe.whitelist()
-def get_board_data(warehouse=None, date_from=None, date_to=None, search=None):
+def get_board_data(warehouse=None, date_from=None, date_to=None, search=None) -> dict:
 	"""Return all active Service Requests grouped by decision for the Kanban board."""
 	frappe.has_permission("Service Request", "read", throw=True)
 
@@ -101,7 +101,7 @@ def get_board_data(warehouse=None, date_from=None, date_to=None, search=None):
 
 
 @frappe.whitelist()
-def get_sr_detail(sr_name):
+def get_sr_detail(sr_name) -> dict:
 	"""Return full details of a single Service Request for the side panel."""
 	frappe.has_permission("Service Request", "read", throw=True)
 
@@ -148,7 +148,7 @@ def get_sr_detail(sr_name):
 
 
 @frappe.whitelist()
-def create_assignment(service_request, engineer, job_type="Repair", estimated_hours=None):
+def create_assignment(service_request, engineer, job_type="Repair", estimated_hours=None) -> dict:
 	"""Quick-assign a service engineer to a Service Request."""
 	frappe.has_permission("Job Assignment", "create", throw=True)
 

@@ -22,7 +22,7 @@ SWITCHER_PAGES = [
 
 
 @frappe.whitelist()
-def get_allowed_pages():
+def get_allowed_pages() -> dict:
 	"""Return page names the current user has permission to view."""
 	user_roles = set(frappe.get_roles())
 

@@ -31,7 +31,7 @@ def get_context(context):
 
 
 @frappe.whitelist()
-def get_store_context():
+def get_store_context() -> dict:
 	"""Return store context — warehouses, user info, summary counts."""
 	user = frappe.session.user
 	company = frappe.defaults.get_user_default("Company") or ""
@@ -53,7 +53,7 @@ def get_store_context():
 
 
 @frappe.whitelist()
-def get_queue(warehouse=None, search=None, date_from=None, date_to=None, stage_filter="all"):
+def get_queue(warehouse=None, search=None, date_from=None, date_to=None, stage_filter="all") -> dict:
 	"""Return store queue — all SRs at this store with stage classification.
 
 	Unlike Ops Hub (which requires a Service Order), this shows ALL requests
@@ -223,7 +223,7 @@ def _empty_summary():
 
 
 @frappe.whitelist()
-def get_request_detail(sr_name):
+def get_request_detail(sr_name) -> dict:
 	"""Return full SR detail for the store executive detail panel."""
 	frappe.has_permission("Service Request", sr_name, "read", throw=True)
 	sr = frappe.get_doc("Service Request", sr_name)
@@ -290,13 +290,13 @@ def get_request_detail(sr_name):
 
 
 @frappe.whitelist()
-def quick_accept(service_request):
+def quick_accept(service_request) -> dict:
 	"""Quick-accept a draft SR from the store queue (sets decision=Accepted)."""
 	sr = frappe.get_doc("Service Request", service_request)
 	frappe.has_permission("Service Request", doc=sr, ptype="write", throw=True)
 
 	if sr.decision != "Draft":
-		frappe.throw(_("Can only accept Draft requests. Current: {0}").format(sr.decision))
+		frappe.throw(_("Can only accept Draft requests. Current: {0}").format(sr.decision), title=_("Validation Error"))
 
 	if sr.docstatus == 0:
 		sr.decision = "Accepted"

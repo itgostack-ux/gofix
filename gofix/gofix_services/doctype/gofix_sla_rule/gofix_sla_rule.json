@@ -175,5 +175,7 @@
  "sort_field": "creation",
  "sort_order": "DESC",
  "states": [],
- "track_changes": 1
+ "track_changes": 1,
+ "search_fields": "rule_name,priority",
+ "title_field": "rule_name"
 }

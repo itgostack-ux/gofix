@@ -26,7 +26,8 @@
    "in_standard_filter": 1,
    "label": "Repair Solution",
    "options": "Repair Solution",
-   "reqd": 1
+   "reqd": 1,
+   "search_index": 1
   },
   {
    "fetch_from": "repair_solution.issue_category",
@@ -35,7 +36,8 @@
    "in_standard_filter": 1,
    "label": "Issue Category",
    "options": "Issue Category",
-   "read_only": 1
+   "read_only": 1,
+   "search_index": 1
   },
   {
    "fieldname": "column_break_1",
@@ -48,7 +50,8 @@
    "in_standard_filter": 1,
    "label": "Spare Part Item",
    "options": "Item",
-   "reqd": 1
+   "reqd": 1,
+   "search_index": 1
   },
   {
    "fetch_from": "spare_item.item_name",

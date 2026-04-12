@@ -31,7 +31,8 @@
    "label": "Rule Type",
    "options": "Spare Part\nHigh Estimate\nFree Repair\nDiscount\nReplacement\nWrite-Off\nBeyond Repair",
    "reqd": 1,
-   "description": "The type of action that requires approval"
+   "description": "The type of action that requires approval",
+   "search_index": 1
   },
   {
    "fieldname": "rule_name",
@@ -176,5 +177,7 @@
  "sort_field": "priority",
  "sort_order": "DESC",
  "states": [],
- "track_changes": 1
+ "track_changes": 1,
+ "search_fields": "rule_name",
+ "title_field": "rule_name"
 }

@@ -22,7 +22,7 @@ from frappe.utils import flt, now_datetime, nowdate, today
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @frappe.whitelist()
-def create_estimate_version(service_request, reason=None, send_to_customer=False):
+def create_estimate_version(service_request, reason=None, send_to_customer=False) -> dict:
 	"""Snapshot current issues/solutions/spares into a new Estimate Version.
 
 	This is called:
@@ -94,7 +94,7 @@ def create_estimate_version(service_request, reason=None, send_to_customer=False
 
 
 @frappe.whitelist()
-def send_estimate_for_approval(service_request, version_number=None):
+def send_estimate_for_approval(service_request, version_number=None) -> dict:
 	"""Send the latest (or specified) estimate version to customer via WhatsApp."""
 	sr = frappe.get_doc("Service Request", service_request)
 	frappe.has_permission("Service Request", doc=sr, ptype="write", throw=True)
@@ -106,7 +106,7 @@ def send_estimate_for_approval(service_request, version_number=None):
 
 
 @frappe.whitelist()
-def customer_approve_estimate(service_request, version_number=None, remarks=None):
+def customer_approve_estimate(service_request, version_number=None, remarks=None) -> dict:
 	"""Customer approves the estimate — resume repair."""
 	sr = frappe.get_doc("Service Request", service_request)
 	frappe.has_permission("Service Request", doc=sr, ptype="write", throw=True)
@@ -122,7 +122,7 @@ def customer_approve_estimate(service_request, version_number=None, remarks=None
 			ev.customer_remarks = remarks
 			break
 	else:
-		frappe.throw(_("Estimate version {0} not found or already processed").format(version_number))
+		frappe.throw(_("Estimate version {0} not found or already processed").format(version_number), title=_("Validation Error"))
 
 	sr.set("estimate_approval_pending", 0)
 
@@ -142,7 +142,7 @@ def customer_approve_estimate(service_request, version_number=None, remarks=None
 
 
 @frappe.whitelist()
-def customer_reject_estimate(service_request, version_number=None, remarks=None):
+def customer_reject_estimate(service_request, version_number=None, remarks=None) -> dict:
 	"""Customer rejects the estimate."""
 	sr = frappe.get_doc("Service Request", service_request)
 	frappe.has_permission("Service Request", doc=sr, ptype="write", throw=True)
@@ -265,14 +265,14 @@ def _has_other_blockers(sr):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @frappe.whitelist()
-def set_repairability(service_request, status, reason=None):
+def set_repairability(service_request, status, reason=None) -> dict:
 	"""Formal repairability decision by technician/manager.
 
 	status: Repairable | Not Repairable | BER | Customer Declined
 	"""
 	valid = ("Repairable", "Not Repairable", "BER", "Customer Declined")
 	if status not in valid:
-		frappe.throw(_("Invalid repairability status. Must be one of: {0}").format(", ".join(valid)))
+		frappe.throw(_("Invalid repairability status. Must be one of: {0}").format(", ".join(valid)), title=_("Validation Error"))
 
 	sr = frappe.get_doc("Service Request", service_request)
 	frappe.has_permission("Service Request", doc=sr, ptype="write", throw=True)
@@ -306,7 +306,7 @@ def set_repairability(service_request, status, reason=None):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @frappe.whitelist()
-def reassign_repair_location(service_request, new_location, location_type=None, reason=None):
+def reassign_repair_location(service_request, new_location, location_type=None, reason=None) -> dict:
 	"""Move repair from current location to a new one.
 
 	Orchestrates:
@@ -321,7 +321,7 @@ def reassign_repair_location(service_request, new_location, location_type=None, 
 
 	old_location = sr.get("current_processing_location") or sr.source_warehouse
 	if new_location == old_location:
-		frappe.throw(_("New location is same as current location"))
+		frappe.throw(_("New location is same as current location"), title=_("Validation Error"))
 
 	# 1. Auto-create device transfer
 	transfer_name = _auto_create_device_transfer(sr, old_location, new_location, reason)
@@ -354,7 +354,7 @@ def reassign_repair_location(service_request, new_location, location_type=None, 
 
 
 @frappe.whitelist()
-def receive_device_at_repair_location(service_request):
+def receive_device_at_repair_location(service_request) -> dict:
 	"""Mark device as received at the new repair location. Resumes repair."""
 	sr = frappe.get_doc("Service Request", service_request)
 	frappe.has_permission("Service Request", doc=sr, ptype="write", throw=True)
@@ -374,7 +374,7 @@ def receive_device_at_repair_location(service_request):
 
 
 @frappe.whitelist()
-def return_device_to_source(service_request, reason=None):
+def return_device_to_source(service_request, reason=None) -> dict:
 	"""Return device to source store (for invoicing). Auto-transfer."""
 	sr = frappe.get_doc("Service Request", service_request)
 	frappe.has_permission("Service Request", doc=sr, ptype="write", throw=True)
@@ -384,7 +384,7 @@ def return_device_to_source(service_request, reason=None):
 	source = sr.source_warehouse
 
 	if current == source:
-		frappe.throw(_("Device is already at the source store"))
+		frappe.throw(_("Device is already at the source store"), title=_("Validation Error"))
 
 	transfer_name = _auto_create_device_transfer(
 		sr, current, source,
@@ -400,7 +400,7 @@ def return_device_to_source(service_request, reason=None):
 
 
 @frappe.whitelist()
-def confirm_return_at_source(service_request):
+def confirm_return_at_source(service_request) -> dict:
 	"""Confirm device returned to source store. Ready for billing."""
 	sr = frappe.get_doc("Service Request", service_request)
 	frappe.has_permission("Service Request", doc=sr, ptype="write", throw=True)
@@ -515,7 +515,7 @@ def _reroute_pending_spare_requests(sr_name, old_location, new_location):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @frappe.whitelist()
-def check_billing_readiness(service_request):
+def check_billing_readiness(service_request) -> dict:
 	"""Validate all gates before allowing invoice creation.
 
 	Gates:
@@ -574,7 +574,7 @@ def check_billing_readiness(service_request):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @frappe.whitelist()
-def qc_fail_with_issues(service_request, failed_checks_json, new_issues_json=None):
+def qc_fail_with_issues(service_request, failed_checks_json, new_issues_json=None) -> dict:
 	"""Process a QC failure with issue-level granularity.
 
 	failed_checks_json: list of {check_name, fail_reason, linked_issue_category, linked_solution}

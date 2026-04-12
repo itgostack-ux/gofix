@@ -10,7 +10,7 @@ from frappe.utils import flt
 class GoFixPricingRule(Document):
 	def validate(self):
 		if self.max_charge and self.min_charge and flt(self.max_charge) < flt(self.min_charge):
-			frappe.throw(_("Maximum Charge cannot be less than Minimum Charge"))
+			frappe.throw(_("Maximum Charge cannot be less than Minimum Charge"), title=_("Gofix Pricing Rule Error"))
 
 
 def get_pricing_rule(issue_category=None, repair_solution=None, brand=None,

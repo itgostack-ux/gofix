@@ -7,7 +7,7 @@ from frappe.utils import today, flt
 
 
 @frappe.whitelist()
-def get_intake_context():
+def get_intake_context() -> dict:
 	"""Return context for the intake form: warehouses, recent customers, config."""
 	user_warehouse = frappe.defaults.get_user_default("warehouse") or ""
 	company = frappe.defaults.get_user_default("company") or frappe.db.get_single_value("Global Defaults", "default_company")
@@ -37,7 +37,7 @@ def get_intake_context():
 
 
 @frappe.whitelist()
-def search_serial(serial_no):
+def search_serial(serial_no) -> dict:
 	"""Look up serial and return device details + warranty + open SRs."""
 	if not frappe.db.exists("Serial No", serial_no):
 		return {"found": False}
@@ -72,7 +72,7 @@ def search_serial(serial_no):
 
 
 @frappe.whitelist()
-def search_customer(query):
+def search_customer(query) -> list:
 	"""Find customers by phone or name fragment."""
 	if not query or len(query) < 3:
 		return []
@@ -98,7 +98,7 @@ def search_customer(query):
 
 
 @frappe.whitelist()
-def submit_intake(data):
+def submit_intake(data) -> dict:
 	"""Create a Service Request from quick intake data.
 
 	data: dict with keys — customer, customer_name, contact_number, email,
@@ -113,7 +113,7 @@ def submit_intake(data):
 	required = ["customer", "contact_number", "device_item", "issue_description", "source_warehouse"]
 	for field in required:
 		if not data.get(field):
-			frappe.throw(_("{0} is required").format(field))
+			frappe.throw(_("{0} is required").format(field), title=_("Validation Error"))
 
 	sr = frappe.new_doc("Service Request")
 	sr.company = data.get("company") or frappe.defaults.get_user_default("company")

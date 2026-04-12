@@ -178,7 +178,8 @@
    "in_standard_filter": 1,
    "label": "Customer",
    "options": "Customer",
-   "reqd": 1
+   "reqd": 1,
+   "search_index": 1
   },
   {
    "fetch_from": "customer.customer_name",
@@ -251,7 +252,8 @@
    "label": "Store/Warehouse",
    "options": "Warehouse",
    "reqd": 1,
-   "description": "Store where customer walked in"
+   "description": "Store where customer walked in",
+   "search_index": 1
   },
   {
    "fieldname": "current_location",
@@ -307,7 +309,8 @@
    "in_standard_filter": 1,
    "label": "Walk-in Status",
    "options": "Accepted\nWithdrawn",
-   "description": "Mark as Accepted when customer confirms leaving device for repair"
+   "description": "Mark as Accepted when customer confirms leaving device for repair",
+   "search_index": 1
   },
   {
    "fieldname": "column_break_walkin",
@@ -530,7 +533,8 @@
    "in_standard_filter": 1,
    "label": "Decision",
    "options": "Draft\nAccepted\nIn Service\nCompleted\nInvoiced\nDelivered\nWithdrawn\nRejected\nExpired\nCancelled",
-   "reqd": 1
+   "reqd": 1,
+   "search_index": 1
   },
   {
    "depends_on": "eval:doc.decision=='Rejected'",
@@ -611,7 +615,8 @@
    "label": "Status",
    "options": "Draft\nAccepted\nIn Service\nCompleted\nInvoiced\nDelivered\nWithdrawn\nRejected\nExpired\nCancelled",
    "reqd": 1,
-   "description": "Overall status synced from Service Order"
+   "description": "Overall status synced from Service Order",
+   "search_index": 1
   },
   {
    "collapsible": 1,
@@ -1265,6 +1270,32 @@
  ],
  "sort_field": "modified",
  "sort_order": "DESC",
- "states": [],
- "track_changes": 1
+ "states": [
+  {
+   "color": "Blue",
+   "title": "Open"
+  },
+  {
+   "color": "Yellow",
+   "title": "In Progress"
+  },
+  {
+   "color": "Orange",
+   "title": "On Hold"
+  },
+  {
+   "color": "Green",
+   "title": "Completed"
+  },
+  {
+   "color": "Red",
+   "title": "Cancelled"
+  },
+  {
+   "color": "Gray",
+   "title": "Draft"
+  }
+ ],
+ "track_changes": 1,
+ "search_fields": "customer,customer_name,serial_no,item_code,status"
 }

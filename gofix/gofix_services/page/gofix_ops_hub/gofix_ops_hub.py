@@ -534,7 +534,6 @@ def save_issue_lines(sr_name, issues_json) -> dict:
 		})
 
 	sr.save()
-	frappe.db.commit()
 	active_count = sum(1 for r in sr.issue_lines if r.status != "Deleted")
 	return {"ok": True, "issue_count": active_count}
 
@@ -592,7 +591,6 @@ def delete_issue_line(sr_name, issue_row_name, reason) -> dict:
 					sp.status = "Returned"
 
 	sr.save()
-	frappe.db.commit()
 	return {"ok": True, "cancelled_solutions": cancelled_solutions if deleted_category else []}
 
 
@@ -620,8 +618,6 @@ def confirm_analysis(sr_name) -> dict:
 		frappe.db.commit()
 
 	_log_ops_stage(sr_name, "analysis", "confirm")
-	frappe.db.commit()
-
 	return {"ok": True, "stage": "confirm"}
 
 
@@ -697,8 +693,6 @@ def mark_customer_confirmed(sr_name) -> dict:
 		frappe.db.commit()
 
 	_log_ops_stage(sr_name, "confirm", "solutions")
-	frappe.db.commit()
-
 	return {"ok": True, "stage": "solutions"}
 
 
@@ -762,8 +756,6 @@ def quick_create_solution(solution_name, issue_category, estimated_minutes=30, r
 	doc.description = description or ""
 	doc.is_active = 1
 	doc.insert()
-	frappe.db.commit()
-
 	return {
 		"name": doc.name,
 		"solution_name": doc.solution_name,
@@ -895,8 +887,6 @@ def save_solution_assignment(sr_name, solutions_json) -> dict:
 	frappe.db.commit()
 
 	_log_ops_stage(sr_name, "solutions", "assign")
-	frappe.db.commit()
-
 	return {"ok": True, "solution_count": len(sr.solution_lines), "stage": "assign"}
 
 
@@ -973,8 +963,6 @@ def assign_technician(sr_name, technician, job_type="Repair", estimated_hours=No
 
 	_log_ops_stage(sr_name, "assign", "repair")
 	_mark_sr_in_service(sr_name)
-	frappe.db.commit()
-
 	return {"ok": True, "job_assignment": ja.name, "stage": "repair"}
 
 
@@ -1026,8 +1014,6 @@ def assign_solutions_to_technician(sr_name, solution_rows_json, technician, esti
 		_log_ops_stage(sr_name, "assign", "repair")
 		_mark_sr_in_service(sr_name)
 
-	frappe.db.commit()
-
 	return {
 		"ok": True,
 		"job_assignment": ja.name,
@@ -1045,8 +1031,6 @@ def unassign_solution(sr_name, solution_row_name) -> dict:
 		"technician": "",
 		"technician_name": "",
 	}, update_modified=True)
-	frappe.db.commit()
-
 	return {"ok": True}
 
 
@@ -1062,8 +1046,6 @@ def advance_to_repair(sr_name) -> dict:
 
 	_log_ops_stage(sr_name, "assign", "repair")
 	_mark_sr_in_service(sr_name)
-	frappe.db.commit()
-
 	return {"ok": True, "stage": "repair"}
 
 
@@ -1088,7 +1070,6 @@ def update_solution_status(sr_name, solution_row_name, status, remarks="") -> di
 		update_fields,
 		update_modified=True,
 	)
-	frappe.db.commit()
 	return {"ok": True}
 
 
@@ -1112,7 +1093,6 @@ def restart_solution_line(sr_name, solution_row_name, remarks="") -> dict:
 		"technician_remarks": (prev_remarks + "\n" + remark).strip(),
 	}, update_modified=True)
 
-	frappe.db.commit()
 	return {"ok": True}
 
 
@@ -1130,7 +1110,6 @@ def mark_spare_damaged(sr_name, spare_row_name, remarks="") -> dict:
 		{"status": "Damaged", "remarks": remarks.strip()},
 		update_modified=True,
 	)
-	frappe.db.commit()
 	return {"ok": True}
 
 
@@ -1170,7 +1149,6 @@ def add_spare_to_ticket(sr_name, spare_item, qty, rate=0, repair_solution=None) 
 	})
 
 	sr.save()
-	frappe.db.commit()
 	return {"ok": True}
 
 
@@ -1195,8 +1173,6 @@ def handoff_to_technician(sr_name, new_technician, job_type="Repair", reason="")
 
 	ja.insert()
 	ja.submit()
-	frappe.db.commit()
-
 	return {"ok": True, "job_assignment": ja.name}
 
 
@@ -1273,8 +1249,6 @@ def submit_for_qc(sr_name) -> dict:
 	frappe.db.commit()
 
 	_log_ops_stage(sr_name, "repair", "qc")
-	frappe.db.commit()
-
 	return {
 		"ok": True,
 		"qc_status": frappe.db.get_value("Sales Order", sr.service_order, "qc_status") or "Awaiting",
@@ -1301,7 +1275,6 @@ def save_qc_results(sr_name, checklist_json) -> dict:
 				row.remarks = entry.get("remarks", row.remarks or "")
 
 	so.save()
-	frappe.db.commit()
 	return {"ok": True}
 
 
@@ -1342,8 +1315,6 @@ def complete_qc(sr_name, qc_result) -> dict:
 
 	stage = "invoice" if qc_result == "Pass" else "rework"
 	_log_ops_stage(sr_name, "qc", stage)
-	frappe.db.commit()
-
 	return {"ok": True, "qc_result": qc_result, "stage": stage}
 
 
@@ -1515,8 +1486,6 @@ def create_ops_hub_invoice(sr_name) -> dict:
 		"workflow_state": "Invoiced",
 	}, update_modified=True)
 
-	frappe.db.commit()
-
 	return {"ok": True, "invoice": inv.name, "grand_total": inv.grand_total}
 
 
@@ -1598,8 +1567,6 @@ def reassign_after_qc_fail(sr_name, technician, job_type="Repair", manager_notes
 
 	_log_ops_stage(sr_name, "rework", "repair")
 	_mark_sr_in_service(sr_name)
-	frappe.db.commit()
-
 	return {
 		"ok": True,
 		"job_assignment": ja.name,
@@ -1664,5 +1631,4 @@ def go_back_to_stage(sr_name, target_stage) -> dict:
 			ja.save()
 		_log_ops_stage(sr_name, current, "assign")
 
-	frappe.db.commit()
 	return {"ok": True, "stage": target_stage}

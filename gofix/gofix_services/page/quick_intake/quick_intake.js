@@ -210,7 +210,7 @@ class QuickIntake {
 			const val = $(this).val();
 			frappe.call({
 				method: "frappe.client.get_list",
-				args: { doctype: "Item", filters: { item_name: ["like", `%${val}%`], disabled: 0 }, fields: ["name", "item_name", "brand"], limit_page_length: 10 },
+				args: { doctype: "Item", filters: { item_name: ["like", `%${val}%`], disabled: 0, has_variants: 0 }, fields: ["name", "item_name", "brand"], limit_page_length: 10 },
 				callback: () => {},
 			});
 		});
@@ -250,7 +250,7 @@ class QuickIntake {
 				method: "frappe.client.get_list",
 				args: {
 					doctype: doctype,
-					filters: [[doctype, "name", "like", `%${txt}%`]],
+					filters: [[doctype, "name", "like", `%${txt}%`]].concat(doctype === "Item" ? [["Item", "has_variants", "=", 0]] : []),
 					or_filters: [[doctype, doctype === "Item" ? "item_name" : "name", "like", `%${txt}%`]],
 					fields: doctype === "Item" ? ["name", "item_name as description", "brand"] : ["name"],
 					limit_page_length: 8,

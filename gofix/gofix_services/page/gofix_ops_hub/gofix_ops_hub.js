@@ -1455,7 +1455,7 @@ class GoFixOpsHub {
 					title: __("Add Spare Part"),
 					fields: [
 						{ fieldname: "spare_item", label: __("Spare Part"), fieldtype: "Link", options: "Item", reqd: 1,
-							get_query: () => ({ filters: { item_group: ["descendants of (inclusive)", "Spare Parts"] } }) },
+							get_query: () => ({ filters: { item_group: ["descendants of (inclusive)", "Spare Parts"], has_variants: 0 } }) },
 						{ fieldname: "qty", label: __("Qty"), fieldtype: "Float", default: 1, reqd: 1 },
 						{ fieldname: "rate", label: __("Rate"), fieldtype: "Currency", default: 0 },
 					],

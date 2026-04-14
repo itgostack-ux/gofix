@@ -14,6 +14,7 @@ SWITCHER_PAGES = [
 	"purchase-hub",
 	"stock-hub",
 	"logistics-hub",
+    "scheme-hub",
 	"ceo-command-center",
 	"finance-dashboard",
 	"operations-dashboard",

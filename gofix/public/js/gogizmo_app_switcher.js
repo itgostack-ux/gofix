@@ -18,6 +18,7 @@
 		{ key: "purchase-hub",      label: "Purchase",         icon: "fa-shopping-bag",   group: "operations", color: "#4f46e5" },
 		{ key: "stock-hub",         label: "Stock Hub",        icon: "fa-cubes",          group: "operations", color: "#059669" },
 		{ key: "logistics-hub",     label: "Logistics",        icon: "fa-map-signs",      group: "operations", color: "#d97706" },
+		{ key: "scheme-hub",         label: "Schemes",           icon: "fa-tags",           group: "operations", color: "#0891b2" },
 		// group: dashboards
 		{ key: "ceo-command-center",         label: "CEO",              icon: "fa-line-chart",     group: "dashboards", color: "#8b5cf6" },
 		{ key: "finance-dashboard",          label: "Finance",          icon: "fa-inr",            group: "dashboards", color: "#059669" },

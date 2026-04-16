@@ -62,6 +62,11 @@ frappe.ui.form.on('Service Request', {
 					frm.add_custom_button(__('Recover Spares ({0})').replace('{0}', pending.length), function() {
 						show_spare_recovery_form(frm, pending);
 					}).addClass('btn-warning');
+				} else {
+					// All spares recovered → show Return Device button
+					frm.add_custom_button(__('Return Device to Customer'), function() {
+						create_return_delivery(frm);
+					}, __('Actions')).addClass('btn-primary');
 				}
 			});
 		}
@@ -946,4 +951,19 @@ function process_spare_recoveries(frm, entries, dlg, idx) {
 		$body.find(`.spu-status[data-idx="${e.idx}"]`).html('<i class="fa fa-times text-danger"></i>');
 		process_spare_recoveries(frm, entries, dlg, idx + 1);
 	});
+}
+
+function create_return_delivery(frm) {
+	frappe.confirm(
+		__('Return unrepaired device ({0}) to customer? This will mark the SR as Delivered.', [frm.doc.repairability_status]),
+		() => {
+			frappe.xcall(`${OPS_API}.return_unrepaired_device`, {
+				sr_name: frm.doc.name,
+				remarks: '',
+			}).then(r => {
+				frappe.show_alert({ message: r.message, indicator: 'green' });
+				frm.reload_doc();
+			});
+		}
+	);
 }

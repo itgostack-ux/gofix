@@ -1699,6 +1699,23 @@ def mark_not_repairable(sr_name, status="Not Repairable", reason="") -> dict:
 			frappe.log_error(frappe.get_traceback(), f"Not Repairable: JA cancel failed for {ja_name}")
 
 	_log_ops_stage(sr_name, current_stage, "closed")
+
+	# 4) Update serial lifecycle
+	serial_no = sr.get("serial_no")
+	if serial_no:
+		try:
+			from ch_item_master.ch_item_master.doctype.ch_serial_lifecycle.ch_serial_lifecycle import (
+				update_lifecycle_status,
+			)
+			update_lifecycle_status(
+				serial_no=serial_no,
+				new_status="Not Repairable",
+				company=sr.company,
+				remarks=_("{0} — {1}").format(status, reason or ""),
+			)
+		except (ImportError, Exception):
+			frappe.log_error(frappe.get_traceback(), f"Not Repairable: lifecycle update failed for {sr_name}")
+
 	frappe.db.commit()
 
 	# 4) Check for consumed spares that need recovery
@@ -1736,3 +1753,49 @@ def recover_spare_from_ops_hub(sr_name, spu_name, disposition, remarks="") -> di
 		"service_request": sr_name, "part_status": "Consumed",
 		"deleted": 0, "status": "Active"})
 	return {"message": _("Recovered: {0}").format(disposition), "remaining": remaining}
+
+
+@frappe.whitelist()
+def return_unrepaired_device(sr_name, remarks="") -> dict:
+	"""Mark an NR/BER device as returned to customer (Delivered) after spare recovery.
+
+	Gate: all consumed spares must be recovered first.
+	"""
+	_assert_sr_permission(sr_name, "write")
+	sr = frappe.get_doc("Service Request", sr_name)
+
+	if sr.decision != "Rejected":
+		frappe.throw(_("Can only return devices that are Rejected (Not Repairable/BER)"))
+	if sr.repairability_status not in ("Not Repairable", "BER"):
+		frappe.throw(_("Device must be Not Repairable or BER to use this action"))
+
+	# Gate: spare recovery must be complete
+	pending = frappe.db.count("Spare Parts Usage", {
+		"service_request": sr_name, "part_status": "Consumed",
+		"deleted": 0, "status": "Active"})
+	if pending:
+		frappe.throw(_("{0} consumed spare(s) still need recovery before return").format(pending))
+
+	sr.flags.ignore_validate_update_after_submit = True
+	sr.flags.ignore_mandatory = True
+	sr.set("decision", "Delivered")
+	sr.set("status", "Delivered")
+	sr.set("delivery_remarks", remarks or _("Device returned to customer — {0}").format(
+		sr.repairability_status))
+	sr.set("actual_completion_date", frappe.utils.today())
+	sr.save()
+
+	# Update SO if linked
+	if sr.service_order:
+		try:
+			frappe.db.set_value("Sales Order", sr.service_order, {
+				"workflow_state": "Delivered",
+				"delivered_datetime": frappe.utils.now(),
+				"actual_delivery_date": frappe.utils.today(),
+			}, update_modified=True)
+		except Exception:
+			frappe.log_error(frappe.get_traceback(),
+				f"Return device: SO update failed for {sr.service_order}")
+
+	frappe.db.commit()
+	return {"message": _("Device returned to customer")}

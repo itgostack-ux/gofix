@@ -34,6 +34,8 @@ def on_service_request_update(doc, method):
         _notify_repair_completed(doc, phone, customer_name)
     elif new_decision == "Delivered":
         _notify_ready_for_delivery(doc, phone, customer_name)
+    elif new_decision == "Rejected":
+        _notify_not_repairable(doc, phone, customer_name)
 
 
 def notify_sla_breach(service_request_name: str):
@@ -135,6 +137,49 @@ def _notify_ready_for_delivery(doc, phone, customer_name):
         ref_doctype="Service Request",
         ref_name=doc.name,
     )
+
+
+def _notify_not_repairable(doc, phone, customer_name):
+    """Notify customer that device is Not Repairable / BER."""
+    settings = _get_settings()
+    if not settings:
+        return
+
+    template_name = getattr(settings, "gofix_not_repairable", None)
+    if not template_name:
+        # Fallback: use generic status update template or SMS
+        _fallback_sms(
+            phone,
+            "not_repairable",
+            {"sr_name": doc.name, "customer_name": customer_name},
+        )
+        return
+
+    try:
+        from ch_item_master.ch_core.whatsapp import send_template_message
+
+        status_label = doc.repairability_status or "Not Repairable"
+        reason = doc.rejection_reason or doc.get("repairability_reason") or ""
+
+        send_template_message(
+            phone=phone,
+            template_name=template_name,
+            body_values={
+                "1": customer_name,
+                "2": doc.name,
+                "3": doc.device_item_name or "",
+                "4": status_label,
+                "5": reason[:200] if reason else "Device cannot be repaired",
+            },
+            customer_name=customer_name,
+            ref_doctype="Service Request",
+            ref_name=doc.name,
+        )
+    except Exception:
+        frappe.log_error(
+            frappe.get_traceback(),
+            f"Not Repairable WhatsApp failed for {doc.name}",
+        )
 
 
 # ── Estimate Approval Notifications ─────────────────────────────────

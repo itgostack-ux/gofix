@@ -249,6 +249,7 @@ class ServiceRequest(Document):
 			"Received", "Diagnosis Complete", "Repair In Progress",
 			"QC Pass", "Ready for Delivery", "Delivered",
 			"Not Repairable", "Customer Cancelled",
+			"Rejected", "Cancelled",
 		}
 		if new_status not in notify_statuses:
 			return

@@ -92,7 +92,7 @@ class ServiceHub {
 			<div class="hub-header">
 				<div>
 					<div class="hub-title"><i class="fa fa-wrench"></i> ${__("Service Hub")}</div>
-					<div class="hub-subtitle">${__("Service lifecycle: Intake → Accepted → In Service → Completed → Delivered → Invoiced")}</div>
+				<div class="hub-subtitle">${__('Service lifecycle: Intake → Accepted → In Service → Completed / Not Repairable → Delivered → Invoiced')}</div>
 				</div>
 				<div class="hub-auto-badge">
 					<span class="pulse-dot"></span> ${__("Live · Auto-refreshes every 60s")}
@@ -154,8 +154,7 @@ class ServiceHub {
 					<button class="hub-action-btn" onclick="frappe.set_route('List','Service Request',{decision:'Draft'})"><i class="fa fa-plus"></i> ${__("New Requests")}</button>
 					<button class="hub-action-btn" onclick="frappe.set_route('List','Service Request',{decision:'Accepted'})"><i class="fa fa-check"></i> ${__("Accepted")}</button>
 					<button class="hub-action-btn" onclick="frappe.set_route('List','Service Request',{decision:'In Service'})"><i class="fa fa-cogs"></i> ${__("In Service")}</button>
-					<button class="hub-action-btn" onclick="frappe.set_route('List','Service Request',{decision:'Completed'})"><i class="fa fa-check-circle"></i> ${__("Completed")}</button>
-					<button class="hub-action-btn" onclick="frappe.set_route('app','gofix-ops-hub')"><i class="fa fa-dashboard"></i> ${__("GoFix Ops Hub")}</button>
+					<button class="hub-action-btn" onclick="frappe.set_route('List','Service Request',{decision:'Completed'})"><i class="fa fa-check-circle"></i> ${__("Completed")}</button>					<button class="hub-action-btn hub-action-nr" onclick="frappe.set_route('List','Service Request',{decision:'Rejected',repairability_status:['in',['Not Repairable','BER']]})"><i class="fa fa-ban"></i> ${__('Not Repairable')}</button>					<button class="hub-action-btn" onclick="frappe.set_route('app','gofix-ops-hub')"><i class="fa fa-dashboard"></i> ${__("GoFix Ops Hub")}</button>
 					<button class="hub-action-btn" onclick="frappe.set_route('List','Issue Category')"><i class="fa fa-tags"></i> ${__("Issue Categories")}</button>
 				</div>
 			</div>
@@ -210,6 +209,7 @@ class ServiceHub {
 			{ key: "pending", label: __("Pending Intake"), count: (data.pending_intake || []).length },
 			{ key: "in_service", label: __("In Service"), count: (data.in_service || []).length },
 			{ key: "completed", label: __("Ready for Delivery"), count: (data.ready_delivery || []).length },
+			{ key: "not_repairable", label: __("Not Repairable"), count: (data.not_repairable || []).length },
 			{ key: "overdue", label: __("Overdue"), count: (data.overdue || []).length },
 			{ key: "technicians", label: __("Technician Load"), count: (data.technician_load || []).length },
 			{ key: "categories", label: __("Issue Breakdown"), count: (data.issue_breakdown || []).length },
@@ -227,6 +227,7 @@ class ServiceHub {
 				<div class="hub-tab-panel active" data-panel="pending">${this._table_pending(data.pending_intake || [])}</div>
 				<div class="hub-tab-panel" data-panel="in_service">${this._table_in_service(data.in_service || [])}</div>
 				<div class="hub-tab-panel" data-panel="completed">${this._table_ready(data.ready_delivery || [])}</div>
+				<div class="hub-tab-panel" data-panel="not_repairable">${this._table_not_repairable(data.not_repairable || [])}</div>
 				<div class="hub-tab-panel" data-panel="overdue">${this._table_overdue(data.overdue || [])}</div>
 				<div class="hub-tab-panel" data-panel="technicians">${this._table_technicians(data.technician_load || [])}</div>
 				<div class="hub-tab-panel" data-panel="categories">${this._table_categories(data.issue_breakdown || [])}</div>
@@ -244,7 +245,7 @@ class ServiceHub {
 
 	_lnk(dt, name) { return `<a href="/app/${frappe.router.slug(dt)}/${name}">${name}</a>`; }
 	_badge(status) {
-		const map = { "Draft": "grey", "Accepted": "blue", "In Service": "purple", "Completed": "green", "Delivered": "green", "Invoiced": "green", "Rejected": "red", "Cancelled": "grey", "Expired": "orange" };
+		const map = { "Draft": "grey", "Accepted": "blue", "In Service": "purple", "Completed": "green", "Delivered": "green", "Invoiced": "green", "Rejected": "red", "Cancelled": "grey", "Expired": "orange", "Not Repairable": "red", "BER": "red" };
 		return `<span class="hub-badge hub-badge-${map[status] || "grey"}">${status}</span>`;
 	}
 
@@ -333,4 +334,19 @@ class ServiceHub {
 			<td class="text-right">${r.completed || 0}</td>
 		</tr>`).join("")}</tbody></table></div>`;
 	}
-}
+	_table_not_repairable(rows) {
+		if (!rows.length) return `<div class="hub-empty"><i class="fa fa-check-circle"></i> ${__('No not-repairable devices')}</div>`;
+		return `<div class="hub-table-wrap"><table class="hub-table"><thead><tr>
+			<th>${__('SR #')}</th><th>${__('Customer')}</th><th>${__('Device')}</th>
+			<th>${__('Status')}</th><th>${__('Reason')}</th>
+			<th class="text-center">${__('Pending Spares')}</th><th>${__('Date')}</th>
+		</tr></thead><tbody>${rows.map((r) => `<tr>
+			<td>${this._lnk('Service Request', r.name)}</td>
+			<td>${r.customer_name || r.customer || ''}</td>
+			<td>${r.device_item || ''}</td>
+			<td>${this._badge(r.repairability_status || 'Rejected')}</td>
+			<td>${r.rejection_reason || '-'}</td>
+			<td class="text-center">${cint(r.pending_spares) ? '<span class="text-danger"><i class="fa fa-exclamation-triangle"></i> ' + r.pending_spares + '</span>' : '<i class="fa fa-check text-success"></i>'}</td>
+			<td>${r.rejected_on ? frappe.datetime.str_to_user(r.rejected_on) : '-'}</td>
+		</tr>`).join('')}</tbody></table></div>`;
+	}}

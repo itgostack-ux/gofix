@@ -57,6 +57,16 @@ def get_service_hub_data(company=None, store=None, from_date=None, to_date=None)
     )
     sc = {r.decision: cint(r.cnt) for r in status_counts}
 
+    # Count Not Repairable / BER separately — use modified date (when NR was set)
+    nr_count_r = frappe.db.sql(
+        f"""SELECT COUNT(*) FROM `tabService Request` sr
+            WHERE sr.docstatus < 2 AND sr.decision = 'Rejected'
+            AND sr.repairability_status IN ('Not Repairable','BER')
+            {co} {wh} {dc('sr.modified')}""", prm
+    )
+    nr_count = cint(nr_count_r[0][0]) if nr_count_r else 0
+    other_rejected = sc.get("Rejected", 0) - nr_count
+
     pipeline = [
         {"key": "draft",       "label": "New / Draft",     "count": sc.get("Draft", 0),
          "icon": "inbox",       "color": "#94a3b8",  "sub": "Awaiting review"},
@@ -66,6 +76,8 @@ def get_service_hub_data(company=None, store=None, from_date=None, to_date=None)
          "icon": "cogs",        "color": "#7c3aed",  "sub": "Under repair"},
         {"key": "completed",   "label": "Completed",       "count": sc.get("Completed", 0),
          "icon": "check-circle","color": "#059669",  "sub": "QC passed"},
+        {"key": "not_repairable", "label": "Not Repairable", "count": nr_count,
+         "icon": "ban",         "color": "#dc2626",  "sub": "NR / BER"},
         {"key": "delivered",   "label": "Delivered",        "count": sc.get("Delivered", 0),
          "icon": "truck",       "color": "#0ea5e9",  "sub": "Handed over"},
         {"key": "invoiced",    "label": "Invoiced",         "count": sc.get("Invoiced", 0),
@@ -105,8 +117,6 @@ def get_service_hub_data(company=None, store=None, from_date=None, to_date=None)
             {co} {wh}""", prm
     )[0][0]
 
-    rejected_cnt = sc.get("Rejected", 0) + sc.get("Cancelled", 0)
-
     kpis = [
         {"key": "intake_today", "label": "Intake Today",       "value": cint(today_intake),   "color": "#6366f1", "fmt": "number"},
         {"key": "active",       "label": "Active Jobs",        "value": total_active,          "color": "#7c3aed", "fmt": "number"},
@@ -115,7 +125,8 @@ def get_service_hub_data(company=None, store=None, from_date=None, to_date=None)
         {"key": "avg_tat",      "label": "Avg TAT (days)",     "value": avg_tat,               "color": "#f59e0b", "fmt": "number"},
         {"key": "est_rev",      "label": "Est. Revenue MTD",   "value": flt(est_revenue),      "color": "#10b981", "fmt": "currency"},
         {"key": "total",        "label": "Total SRs",          "value": total_all,             "color": "#0ea5e9", "fmt": "number"},
-        {"key": "rejected",     "label": "Rejected/Cancelled", "value": rejected_cnt,          "color": "#dc2626", "fmt": "number"},
+        {"key": "not_repairable", "label": "Not Repairable/BER", "value": nr_count,            "color": "#dc2626", "fmt": "number"},
+        {"key": "cancelled",    "label": "Cancelled/Other",    "value": sc.get("Cancelled", 0) + other_rejected, "color": "#9ca3af", "fmt": "number"},
     ]
 
     # ── Detail tables ──
@@ -172,6 +183,21 @@ def get_service_hub_data(company=None, store=None, from_date=None, to_date=None)
             ORDER BY active_jobs DESC LIMIT 20""", prm, as_dict=True
     )
 
+    # Not Repairable detail table
+    not_repairable = frappe.db.sql(
+        f"""SELECT sr.name, sr.customer_name, sr.customer, sr.device_item,
+                   sr.repairability_status, sr.rejection_reason,
+                   sr.modified AS rejected_on,
+                   (SELECT COUNT(*) FROM `tabSpare Parts Usage` spu
+                    WHERE spu.service_request = sr.name AND spu.part_status = 'Consumed'
+                    AND spu.deleted = 0 AND spu.status = 'Active') AS pending_spares
+            FROM `tabService Request` sr
+            WHERE sr.decision = 'Rejected'
+            AND sr.repairability_status IN ('Not Repairable','BER')
+            {co} {wh} {dc('sr.modified')}
+            ORDER BY sr.modified DESC LIMIT 50""", prm, as_dict=True
+    )
+
     # Issue category breakdown
     issue_breakdown = frappe.db.sql(
         f"""SELECT sr.issue_category,
@@ -220,12 +246,23 @@ def get_service_hub_data(company=None, store=None, from_date=None, to_date=None)
         "revenue_mtd": flt(est_revenue),
     }
 
+    # AI insight for Not Repairable
+    if nr_count >= 3:
+        nr_rate = round(nr_count * 100 / max(total_all, 1), 1)
+        ai_insights.append({
+            "severity": "Medium",
+            "title": f"{nr_count} Not Repairable Devices ({nr_rate}%)",
+            "detail": "Review NR/BER reasons for patterns — common causes may indicate intake screening gaps.",
+            "action": "Check the Not Repairable tab for pending spare recoveries.",
+        })
+
     return {
         "pipeline": pipeline,
         "kpis": kpis,
         "pending_intake": pending_intake,
         "in_service": in_service,
         "ready_delivery": ready_delivery,
+        "not_repairable": not_repairable,
         "overdue": overdue,
         "technician_load": technician_load,
         "issue_breakdown": issue_breakdown,

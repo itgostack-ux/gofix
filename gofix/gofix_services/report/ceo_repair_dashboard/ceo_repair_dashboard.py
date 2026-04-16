@@ -43,6 +43,7 @@ def get_columns():
 		 "fieldtype": "Int", "width": 80},
 		{"label": _("Cost Bearer"), "fieldname": "cost_bearer", "width": 110},
 		{"label": _("Warranty"), "fieldname": "warranty_status", "width": 100},
+		{"label": _("Repair Outcome"), "fieldname": "repair_outcome", "width": 110},
 		{"label": _("Transfer Status"), "fieldname": "transfer_status", "width": 110},
 		{"label": _("QC→Delivery (hrs)"), "fieldname": "qc_to_delivery_hours",
 		 "fieldtype": "Float", "precision": 1, "width": 110},
@@ -81,6 +82,7 @@ def get_data(filters):
 			COALESCE(so.rework_count, 0) as rework_count,
 			COALESCE(so.cost_bearer, '') as cost_bearer,
 			COALESCE(so.warranty_status, '') as warranty_status,
+			COALESCE(so.repair_outcome, '') as repair_outcome,
 			COALESCE(sr.transfer_status, '') as transfer_status,
 			so.qc_pass_datetime,
 			so.delivered_datetime
@@ -118,12 +120,13 @@ def get_chart(data):
 	no_override = len(data) - override_count
 	damage_count = sum(1 for d in data if flt(d.get("technician_damage_cost")) > 0)
 	rework_count = sum(1 for d in data if (d.get("rework_count") or 0) > 0)
+	nr_count = sum(1 for d in data if d.get("repair_outcome") in ("Not Repairable", "Beyond Repair", "BER"))
 
 	return {
 		"data": {
-			"labels": ["No Override", "Price Overridden", "Tech Damage", "Rework"],
+			"labels": ["No Override", "Price Overridden", "Tech Damage", "Rework", "Not Repairable"],
 			"datasets": [
-				{"name": "Count", "values": [no_override, override_count, damage_count, rework_count]}
+				{"name": "Count", "values": [no_override, override_count, damage_count, rework_count, nr_count]}
 			]
 		},
 		"type": "bar",
@@ -141,6 +144,7 @@ def get_summary(data):
 	total_damage = sum(flt(d.get("technician_damage_cost")) for d in data)
 	total_reworks = sum(d.get("rework_count", 0) for d in data)
 	override_count = sum(1 for d in data if abs(flt(d.get("price_override_amount"))) > 1)
+	nr_count = sum(1 for d in data if d.get("repair_outcome") in ("Not Repairable", "Beyond Repair", "BER"))
 
 	return [
 		{"value": len(data), "label": _("Total Service Orders"), "datatype": "Int"},
@@ -156,4 +160,6 @@ def get_summary(data):
 		 "indicator": "red"},
 		{"value": total_reworks, "label": _("Total Reworks"), "datatype": "Int",
 		 "indicator": "orange"},
+		{"value": nr_count, "label": _("Not Repairable"), "datatype": "Int",
+		 "indicator": "red"},
 	]

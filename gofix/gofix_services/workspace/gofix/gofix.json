@@ -1,6 +1,7 @@
 {
+ "app": "gofix",
  "charts": [],
- "content": "[{\"type\": \"header\", \"data\": {\"text\": \"Operations\", \"col\": 12}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Ops Hub\", \"col\": 4}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Job Tracker\", \"col\": 4}}, {\"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"type\": \"header\", \"data\": {\"text\": \"Services\", \"col\": 12}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Service Request\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Job Assignment\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Spare Parts\", \"col\": 3}}, {\"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"type\": \"header\", \"data\": {\"text\": \"Masters\", \"col\": 12}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Walkin Source\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Issue Category\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Withdrawal Reason\", \"col\": 3}}, {\"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"type\": \"header\", \"data\": {\"text\": \"Quick Access\", \"col\": 12}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Operations\", \"col\": 4}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Services\", \"col\": 4}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Job Management\", \"col\": 4}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Items\", \"col\": 4}}, {\"id\": \"card_qc\", \"type\": \"card\", \"data\": {\"card_name\": \"Quality Control\", \"col\": 4}}, {\"id\": \"card_sla\", \"type\": \"card\", \"data\": {\"card_name\": \"SLA & Monitoring\", \"col\": 4}}, {\"id\": \"card_repair_soln\", \"type\": \"card\", \"data\": {\"card_name\": \"Repair Solutions\", \"col\": 4}}, {\"id\": \"card_pricing_rules\", \"type\": \"card\", \"data\": {\"card_name\": \"Pricing & Approvals\", \"col\": 4}}, {\"id\": \"card_gofix_pages\", \"type\": \"card\", \"data\": {\"card_name\": \"Quick Pages\", \"col\": 4}}, {\"id\": \"card_gofix_reports\", \"type\": \"card\", \"data\": {\"card_name\": \"GoFix Reports\", \"col\": 6}}]",
+ "content": "[{\"type\": \"header\", \"data\": {\"text\": \"Operations\", \"col\": 12}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Ops Hub\", \"col\": 4}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Service Hub\", \"col\": 4}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Job Tracker\", \"col\": 4}}, {\"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"type\": \"header\", \"data\": {\"text\": \"Services\", \"col\": 12}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Service Request\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Job Assignment\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Spare Parts\", \"col\": 3}}, {\"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"type\": \"header\", \"data\": {\"text\": \"Masters\", \"col\": 12}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Walkin Source\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Issue Category\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Withdrawal Reason\", \"col\": 3}}, {\"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"type\": \"header\", \"data\": {\"text\": \"Quick Access\", \"col\": 12}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Operations\", \"col\": 4}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Services\", \"col\": 4}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Job Management\", \"col\": 4}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Items\", \"col\": 4}}, {\"id\": \"card_qc\", \"type\": \"card\", \"data\": {\"card_name\": \"Quality Control\", \"col\": 4}}, {\"id\": \"card_sla\", \"type\": \"card\", \"data\": {\"card_name\": \"SLA & Monitoring\", \"col\": 4}}, {\"id\": \"card_repair_soln\", \"type\": \"card\", \"data\": {\"card_name\": \"Repair Solutions\", \"col\": 4}}, {\"id\": \"card_pricing_rules\", \"type\": \"card\", \"data\": {\"card_name\": \"Pricing & Approvals\", \"col\": 4}}, {\"id\": \"card_gofix_pages\", \"type\": \"card\", \"data\": {\"card_name\": \"Quick Pages\", \"col\": 4}}, {\"id\": \"card_gofix_reports\", \"type\": \"card\", \"data\": {\"card_name\": \"GoFix Reports\", \"col\": 6}}]",
  "creation": "2025-12-05 07:30:00",
  "custom_blocks": [],
  "docstatus": 0,
@@ -339,9 +340,19 @@
    "link_type": "Report",
    "onboard": 0,
    "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Service Hub",
+   "link_count": 0,
+   "link_to": "service-hub",
+   "link_type": "Page",
+   "onboard": 1,
+   "type": "Link"
   }
  ],
- "modified": "2026-04-11 12:42:23.001493",
+ "modified": "2026-04-16 12:18:19.655226",
  "modified_by": "Administrator",
  "module": "GoFix Services",
  "name": "GoFix",
@@ -448,8 +459,16 @@
    "link_to": "Spare Parts Usage",
    "stats_filter": "{\"status\": [\"=\", \"Active\"]}",
    "type": "DocType"
+  },
+  {
+   "color": "Purple",
+   "doc_view": "",
+   "icon": "fa fa-th-large",
+   "label": "Service Hub",
+   "link_to": "service-hub",
+   "type": "Page"
   }
  ],
  "title": "GoFix",
- "app": "gofix"
+ "type": "Workspace"
 }

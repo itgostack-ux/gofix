@@ -3,8 +3,57 @@
 
 import frappe
 from frappe import _
-from frappe.utils import flt, now, today, add_days, random_string, getdate
+from frappe.utils import flt, now, today, add_days, random_string, getdate, get_datetime
 import secrets
+
+
+def _ensure_future_datetime(value, label):
+	"""Validate that a provided datetime exists and is not in the past."""
+	if not value:
+		frappe.throw(_("{0} is required").format(label), title=_("Missing Date"))
+	dt = get_datetime(value)
+	if dt < get_datetime():
+		frappe.throw(_("{0} cannot be in the past.").format(label), title=_("Invalid Date"))
+	return dt
+
+
+def _validate_logistics_address(address):
+	"""Require a complete pickup address including a usable pincode."""
+	address = str(address or "").strip()
+	if not address:
+		frappe.throw(_("Pickup address is required."), title=_("Missing Address"))
+	if len(address) < 15:
+		frappe.throw(
+			_("Pickup address is too short. Please include landmark and pincode."),
+			title=_("Incomplete Address"),
+		)
+	digits = "".join(ch for ch in address if ch.isdigit())
+	if len(digits) < 6:
+		frappe.throw(
+			_("Pickup address should include a valid 6-digit pincode."),
+			title=_("Pincode Required"),
+		)
+	return address
+
+
+def _audit_service_update(sr, event_type, before=None, after=None, remarks=None):
+	"""Best-effort business audit entry for service logistics milestones."""
+	try:
+		from ch_pos.audit import log_business_event
+
+		log_business_event(
+			event_type=event_type,
+			ref_doctype="Service Request",
+			ref_name=sr.name,
+			before=before,
+			after=after,
+			remarks=remarks,
+			store=sr.get("service_center") or sr.get("warehouse") or sr.get("store"),
+			company=sr.get("company"),
+			user=frappe.session.user,
+		)
+	except Exception:
+		frappe.log_error(frappe.get_traceback(), f"Service audit log failed for {sr.name}")
 
 
 # ── Delivery Control ─────────────────────────────────────────────────
@@ -509,13 +558,25 @@ def schedule_pickup(service_request, address, scheduled_datetime, agent=None) ->
 	frappe.only_for(["Sales Manager", "System Manager", "Service Manager", "Sales User"])
 	sr = frappe.get_doc("Service Request", service_request)
 
+	address = _validate_logistics_address(address)
+	scheduled_dt = _ensure_future_datetime(scheduled_datetime, _("Pickup schedule"))
+	previous_schedule = sr.get("pickup_scheduled_datetime")
+
 	sr.db_set("pickup_address", address, update_modified=True)
-	sr.db_set("pickup_scheduled_datetime", scheduled_datetime, update_modified=False)
+	sr.db_set("pickup_scheduled_datetime", scheduled_dt, update_modified=False)
 	if agent:
 		sr.db_set("pickup_agent", agent, update_modified=False)
 
+	_audit_service_update(
+		sr,
+		"Pickup Scheduled",
+		before=previous_schedule,
+		after=scheduled_dt,
+		remarks=f"Pickup scheduled for {sr.name}",
+	)
+
 	frappe.msgprint(_("Pickup scheduled"), indicator="blue")
-	return {"message": "Pickup scheduled", "scheduled": scheduled_datetime}
+	return {"message": "Pickup scheduled", "scheduled": str(scheduled_dt)}
 
 
 @frappe.whitelist()
@@ -524,9 +585,22 @@ def complete_pickup(service_request) -> dict:
 	frappe.only_for(["Sales Manager", "System Manager", "Service Manager", "Sales User"])
 	sr = frappe.get_doc("Service Request", service_request)
 
-	sr.db_set("pickup_completed_datetime", now(), update_modified=True)
+	if not sr.get("pickup_scheduled_datetime"):
+		frappe.throw(_("Pickup must be scheduled before it can be completed."), title=_("Pickup Not Scheduled"))
+	if sr.get("pickup_completed_datetime"):
+		return {"message": "Pickup already completed", "completed_at": str(sr.get("pickup_completed_datetime"))}
+
+	completed_at = now()
+	sr.db_set("pickup_completed_datetime", completed_at, update_modified=True)
+	_audit_service_update(
+		sr,
+		"Pickup Completed",
+		before=sr.get("pickup_scheduled_datetime"),
+		after=completed_at,
+		remarks=f"Pickup completed for {sr.name}",
+	)
 	frappe.msgprint(_("Pickup completed"), indicator="green")
-	return {"message": "Pickup completed", "completed_at": now()}
+	return {"message": "Pickup completed", "completed_at": completed_at}
 
 
 @frappe.whitelist()
@@ -535,9 +609,23 @@ def dispatch_return(service_request, courier_name=None, tracking_number=None) ->
 	frappe.only_for(["Sales Manager", "System Manager", "Service Manager", "Sales User"])
 	sr = frappe.get_doc("Service Request", service_request)
 
-	sr.db_set("return_courier_name", courier_name or "", update_modified=True)
-	sr.db_set("return_tracking_number", tracking_number or "", update_modified=False)
+	mode_of_service = (sr.get("mode_of_service") or "").strip()
+	if mode_of_service == "Courier":
+		if not (courier_name or "").strip():
+			frappe.throw(_("Return courier is required for courier-mode service requests."), title=_("Courier Required"))
+		if not (tracking_number or "").strip():
+			frappe.throw(_("Tracking number is required for courier dispatch."), title=_("Tracking Required"))
+
+	sr.db_set("return_courier_name", (courier_name or "").strip(), update_modified=True)
+	sr.db_set("return_tracking_number", (tracking_number or "").strip(), update_modified=False)
 	sr.db_set("return_dispatched_date", today(), update_modified=False)
+	_audit_service_update(
+		sr,
+		"Return Dispatched",
+		before=mode_of_service or "Pending Dispatch",
+		after=tracking_number or courier_name or "Hand Delivery",
+		remarks=f"Return dispatched for {sr.name}",
+	)
 
 	frappe.msgprint(_("Device dispatched to customer"), indicator="blue")
 	return {"message": "Dispatched", "tracking": tracking_number}
@@ -549,9 +637,19 @@ def confirm_return_delivery(service_request) -> dict:
 	frappe.only_for(["Sales Manager", "System Manager", "Service Manager", "Sales User"])
 	sr = frappe.get_doc("Service Request", service_request)
 
+	if sr.get("mode_of_service") == "Courier" and not sr.get("return_dispatched_date"):
+		frappe.throw(_("Return must be dispatched before delivery can be confirmed."), title=_("Dispatch Pending"))
+
 	sr.db_set("return_delivered_date", today(), update_modified=True)
 	sr.db_set("status", "Delivered", update_modified=False)
 	sr.db_set("decision", "Delivered", update_modified=False)
+	_audit_service_update(
+		sr,
+		"Return Delivered",
+		before=sr.get("return_dispatched_date") or "Dispatched",
+		after=today(),
+		remarks=f"Return delivery confirmed for {sr.name}",
+	)
 
 	frappe.msgprint(_("Return delivery confirmed"), indicator="green")
 	return {"message": "Delivered"}

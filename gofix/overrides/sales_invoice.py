@@ -6,7 +6,22 @@ from frappe import _
 
 
 def resolve_gofix_links(doc, method=None):
-	"""Before insert: auto-fill GoFix link fields from Repair Intake or item Sales Orders."""
+	"""Before insert: auto-fill GoFix link fields from Repair Intake or
+	item Sales Orders.
+
+	Wrapped in try/except so a failure here never blocks invoice creation.
+	"""
+	try:
+		_resolve_gofix_links_inner(doc)
+	except Exception:
+		frappe.log_error(
+			title=f"GoFix SI resolve_links error: {doc.name}",
+			message=frappe.get_traceback(),
+		)
+
+
+def _resolve_gofix_links_inner(doc):
+	"""Inner implementation — separated for clean error isolation."""
 	# 1) From POS Repair Intake → look up the Service Request
 	if doc.get("custom_repair_intake") and not doc.get("custom_gofix_service_request"):
 		sr_name = frappe.db.get_value(
@@ -34,30 +49,40 @@ def resolve_gofix_links(doc, method=None):
 
 
 def update_service_request_on_invoice(doc, method=None):
-	"""Update Service Request status when Invoice is created/submitted.
-	Also back-fills GoFix link fields on the Sales Invoice.
+	"""Update Service Request status when a *service* Invoice is
+	submitted or cancelled.
 
-	Args:
-		doc: Sales Invoice document
-		method: Hook method (on_submit, on_cancel, etc.)
+	This hook runs on ALL Sales Invoices but exits immediately for
+	non-service documents.  Wrapped in try/except so a failure here
+	never blocks the standard Sales Invoice pipeline.
 	"""
-	# Check if this invoice is linked to a Service Order
+	try:
+		_update_service_request_on_invoice_inner(doc, method)
+	except Exception:
+		frappe.log_error(
+			title=f"GoFix SI hook error: {doc.name}",
+			message=frappe.get_traceback(),
+		)
+
+
+def _update_service_request_on_invoice_inner(doc, method):
+	"""Inner implementation — separated for clean error isolation."""
 	if not doc.items:
 		return
-	
-	# Get Sales Order from first item
+
+	# Find a Sales Order linked to this invoice
 	sales_order = None
 	for item in doc.items:
 		if item.sales_order:
 			sales_order = item.sales_order
 			break
-	
+
 	if not sales_order:
 		return
-	
-	# Check if it's a Service Order
+
+	# ── Guard: only act on GoFix Service Orders ──
 	so = frappe.get_doc("Sales Order", sales_order)
-	if not so.is_service_order or not so.service_request:
+	if not getattr(so, "is_service_order", False) or not so.service_request:
 		return
 
 	# Back-fill GoFix link fields on the invoice (idempotent)
@@ -65,25 +90,21 @@ def update_service_request_on_invoice(doc, method=None):
 		doc.db_set("custom_gofix_service_request", so.service_request, update_modified=False)
 	if not doc.get("custom_gofix_service_order"):
 		doc.db_set("custom_gofix_service_order", sales_order, update_modified=False)
-	
-	try:
-		sr = frappe.get_doc("Service Request", so.service_request)
-		
-		if method == "on_submit":
-			# Invoice submitted - mark as Invoiced
-			sr.db_set("status", "Invoiced", update_modified=True)
-			sr.db_set("decision", "Invoiced", update_modified=False)
-			
-			frappe.msgprint(
-				_("Service Request {0} marked as Invoiced").format(so.service_request),
-				indicator="green",
-				alert=True
-			)
-		
-		elif method == "on_cancel":
-			# Invoice cancelled - revert to Completed
-			sr.db_set("status", "Completed", update_modified=True)
-			sr.db_set("decision", "Completed", update_modified=False)
-	
-	except Exception as e:
-		frappe.log_error(f"Failed to update SR on invoice: {str(e)}")
+
+	sr = frappe.get_doc("Service Request", so.service_request)
+
+	if method == "on_submit":
+		# Invoice submitted - mark as Invoiced
+		sr.db_set("status", "Invoiced", update_modified=True)
+		sr.db_set("decision", "Invoiced", update_modified=False)
+
+		frappe.msgprint(
+			_("Service Request {0} marked as Invoiced").format(so.service_request),
+			indicator="green",
+			alert=True
+		)
+
+	elif method == "on_cancel":
+		# Invoice cancelled - revert to Completed
+		sr.db_set("status", "Completed", update_modified=True)
+		sr.db_set("decision", "Completed", update_modified=False)

@@ -29,7 +29,25 @@ def create_custom_fields():
 				"insert_after": "default_warehouse",
 				"description": "Main repair center where complex repairs are handled",
 				"get_query": "function() { return { filters: { company: cur_frm.doc.name, is_group: 0 } }; }"
-			}
+			},
+			{
+				"fieldname": "supplier_return_warehouse",
+				"label": "Supplier Return Warehouse",
+				"fieldtype": "Link",
+				"options": "Warehouse",
+				"insert_after": "master_hub_warehouse",
+				"description": "Warehouse for faulty spares awaiting supplier return / credit note",
+				"get_query": "function() { return { filters: { company: cur_frm.doc.name, is_group: 0 } }; }"
+			},
+			{
+				"fieldname": "damaged_stock_warehouse",
+				"label": "Damaged Stock Warehouse",
+				"fieldtype": "Link",
+				"options": "Warehouse",
+				"insert_after": "supplier_return_warehouse",
+				"description": "Warehouse for spares damaged by technicians (write-off / disposal)",
+				"get_query": "function() { return { filters: { company: cur_frm.doc.name, is_group: 0 } }; }"
+			},
 		],
 		"Warehouse": [
 			{

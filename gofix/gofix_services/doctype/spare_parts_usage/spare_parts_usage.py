@@ -10,10 +10,17 @@ from frappe.utils import flt
 PART_STATUS_TRANSITIONS = {
 	"Reserved": ["Issued", "Returned"],
 	"Issued": ["Consumed", "Returned", "Defective"],
-	"Consumed": [],  # terminal
+	"Consumed": ["Returned", "Defective"],  # recovery on Not Repairable / BER
 	"Returned": [],  # terminal
 	"Defective": [],  # terminal
 }
+
+# Disposition choices when recovering a consumed spare
+SPARE_DISPOSITION_CHOICES = (
+	"Good - Back to Stock",        # spare condition good → Material Receipt to source warehouse
+	"Faulty - Supplier Return",    # spare received faulty → Material Transfer to supplier return warehouse
+	"Damaged by Technician",       # tech damaged it → Material Transfer to damaged stock warehouse
+)
 
 
 class SparePartsUsage(Document):
@@ -374,6 +381,136 @@ class SparePartsUsage(Document):
 		except Exception as e:
 			frappe.log_error(message=str(e), title="Spare Parts Return Stock Entry Error")
 
+	# ── Spare Recovery (Not Repairable / BER) ─────────────────────────
+
+	def recover_spare(self, disposition, remarks=None):
+		"""Recover a consumed spare when a device is Not Repairable / BER.
+
+		disposition must be one of SPARE_DISPOSITION_CHOICES:
+		  - "Good - Back to Stock"      → Material Receipt to source warehouse
+		  - "Faulty - Supplier Return"  → Material Transfer to supplier return warehouse
+		  - "Damaged by Technician"     → Material Transfer to damaged stock warehouse
+		"""
+		if self.part_status != "Consumed":
+			frappe.throw(
+				_("Only consumed parts can be recovered. Current status: {0}").format(self.part_status),
+				title=_("Spare Parts Usage Error"),
+			)
+		if disposition not in SPARE_DISPOSITION_CHOICES:
+			frappe.throw(
+				_("Invalid disposition. Must be one of: {0}").format(", ".join(SPARE_DISPOSITION_CHOICES)),
+				title=_("Spare Parts Usage Error"),
+			)
+
+		sr = frappe.get_doc("Service Request", self.service_request)
+		company = sr.company or frappe.defaults.get_user_default("Company")
+		source_wh = sr.source_warehouse
+
+		if disposition == "Good - Back to Stock":
+			self._recover_to_stock(company, source_wh)
+			self.part_status = "Returned"
+			self.status = "Moved to Main Stock"
+		elif disposition == "Faulty - Supplier Return":
+			self._recover_to_warehouse(company, source_wh, "supplier_return_warehouse",
+				fallback_field="master_hub_warehouse",
+				remark_prefix="Faulty spare - supplier return")
+			self.part_status = "Defective"
+			self.status = "Moved to Main Stock"
+			self.is_defective = 1
+			self.defect_type = "Manufacture Defect"
+			self.defective_action = "Return to Vendor"
+		elif disposition == "Damaged by Technician":
+			self._recover_to_warehouse(company, source_wh, "damaged_stock_warehouse",
+				fallback_field="master_hub_warehouse",
+				remark_prefix="Technician damage")
+			self.part_status = "Defective"
+			self.status = "Moved to Dispose Stock"
+			self.is_defective = 1
+			self.defect_type = "Technician Damage"
+			self.defective_action = "Dispose"
+
+		self.deleted = 1
+		self.narration = f"Recovered: {disposition}" + (f" — {remarks}" if remarks else "")
+		# reason_desc is a Select field; map disposition to closest valid option
+		_disposition_reason_map = {
+			"Good - Back to Stock": "Wrong Spare",
+			"Faulty - Supplier Return": "Manufacture Defect",
+			"Damaged by Technician": "Damage",
+		}
+		self.reason_desc = _disposition_reason_map.get(disposition, "")
+		self.recovery_disposition = disposition
+
+		self.save(ignore_permissions=True)
+		self.update_spare_parts_count()
+		self._unsync_from_service_request()
+		self._log_parts_consumption()
+
+		frappe.msgprint(_("Spare {0} recovered: {1}").format(self.spare_part_item, disposition))
+
+	def _recover_to_stock(self, company, source_wh):
+		"""Material Receipt — good condition spare back to original warehouse."""
+		target_wh = source_wh or frappe.db.get_value(
+			"Item Default", {"parent": self.spare_part_item, "company": company}, "default_warehouse"
+		) or frappe.db.get_value("Item", self.spare_part_item, "default_warehouse")
+		if not target_wh:
+			frappe.throw(_("No warehouse found to return spare {0}").format(self.spare_part_item))
+
+		se = frappe.new_doc("Stock Entry")
+		se.stock_entry_type = "Material Receipt"
+		se.company = company
+		se.remarks = f"Spare recovery (good condition): {self.spare_part_item} from SR {self.service_request}"
+		se.append("items", {
+			"item_code": self.spare_part_item,
+			"qty": self.qty_used,
+			"uom": self.uom,
+			"basic_rate": self.purchase_cost,
+			"t_warehouse": target_wh,
+			"serial_no": self.barcode_value if self.barcode_value else None,
+		})
+		se.insert(ignore_permissions=True)
+		se.submit()
+		self.db_set("recovery_stock_entry", se.name, update_modified=False)
+
+	def _recover_to_warehouse(self, company, source_wh, company_wh_field,
+							  fallback_field="master_hub_warehouse", remark_prefix=""):
+		"""Material Receipt into a segregated warehouse (supplier return / damaged)."""
+		target_wh = frappe.db.get_value("Company", company, company_wh_field)
+		if not target_wh:
+			target_wh = frappe.db.get_value("Company", company, fallback_field)
+		if not target_wh:
+			target_wh = source_wh
+		if not target_wh:
+			frappe.throw(_("No target warehouse configured for {0}").format(company_wh_field))
+
+		se = frappe.new_doc("Stock Entry")
+		se.stock_entry_type = "Material Receipt"
+		se.company = company
+		se.remarks = f"{remark_prefix}: {self.spare_part_item} from SR {self.service_request}"
+		se.append("items", {
+			"item_code": self.spare_part_item,
+			"qty": self.qty_used,
+			"uom": self.uom,
+			"basic_rate": self.purchase_cost,
+			"t_warehouse": target_wh,
+			"serial_no": self.barcode_value if self.barcode_value else None,
+		})
+		se.insert(ignore_permissions=True)
+		se.submit()
+		self.db_set("recovery_stock_entry", se.name, update_modified=False)
+
+	def _unsync_from_service_request(self):
+		"""Remove this spare from the SR spare_parts child table after recovery."""
+		try:
+			sr = frappe.get_doc("Service Request", self.service_request)
+			to_remove = [row for row in sr.spare_parts if row.get("spu_reference") == self.name]
+			for row in to_remove:
+				sr.remove(row)
+			if to_remove:
+				sr.flags.ignore_validate = True
+				sr.save(ignore_permissions=True)
+		except Exception:
+			frappe.log_error(frappe.get_traceback(), f"Failed to unsync spare {self.name} from SR")
+
 
 def _get_matching_approval_rule(rule_type, value, service_request=None):
 	"""Find the best matching GoFix Approval Rule for a given type and value."""
@@ -461,3 +598,61 @@ def approve_spare_part(name, remarks=None) -> dict:
 	doc.approval_remarks = remarks or ""
 	doc.save(ignore_permissions=True)
 	return {"message": "Spare part approved"}
+
+
+@frappe.whitelist()
+def recover_spare(name, disposition, remarks=None) -> dict:
+	"""Recover a consumed spare part when device is Not Repairable.
+
+	disposition: "Good - Back to Stock" | "Faulty - Supplier Return" | "Damaged by Technician"
+	"""
+	frappe.only_for(["Sales Manager", "System Manager", "Service Manager", "Service Engineer"])
+	doc = frappe.get_doc("Spare Parts Usage", name)
+	doc.recover_spare(disposition, remarks)
+	return {"message": f"Spare recovered: {disposition}"}
+
+
+@frappe.whitelist()
+def get_pending_recovery_spares(service_request) -> list:
+	"""Return consumed spares that need recovery disposition for a Service Request."""
+	frappe.has_permission("Service Request", doc=service_request, throw=True)
+	return frappe.get_all("Spare Parts Usage",
+		filters={
+			"service_request": service_request,
+			"part_status": "Consumed",
+			"deleted": 0,
+			"status": "Active",
+		},
+		fields=["name", "spare_part_item", "item_name", "qty_used", "uom",
+				"barcode_value", "purchase_cost", "sales_price"],
+	)
+
+
+@frappe.whitelist()
+def bulk_recover_spares(service_request, dispositions_json) -> dict:
+	"""Recover all consumed spares for a service request in one go.
+
+	dispositions_json: JSON list of {"spu_name": "...", "disposition": "...", "remarks": "..."}
+	"""
+	import json as _json
+	frappe.only_for(["Sales Manager", "System Manager", "Service Manager", "Service Engineer"])
+	dispositions = _json.loads(dispositions_json) if isinstance(dispositions_json, str) else dispositions_json
+
+	recovered = []
+	errors = []
+	for entry in dispositions:
+		try:
+			doc = frappe.get_doc("Spare Parts Usage", entry["spu_name"])
+			doc.recover_spare(entry["disposition"], entry.get("remarks"))
+			recovered.append(entry["spu_name"])
+		except Exception as e:
+			errors.append({"spu_name": entry["spu_name"], "error": str(e)})
+			frappe.log_error(frappe.get_traceback(),
+				f"Spare recovery failed: {entry['spu_name']}")
+
+	frappe.db.commit()
+	return {
+		"recovered": len(recovered),
+		"errors": errors,
+		"message": _("{0} spare(s) recovered, {1} error(s)").format(len(recovered), len(errors)),
+	}

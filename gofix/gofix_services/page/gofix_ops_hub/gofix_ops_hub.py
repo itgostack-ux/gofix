@@ -72,6 +72,11 @@ def get_context(context):
 	context.show_sidebar = False
 
 
+def _assert_sr_permission(sr_name, ptype="read"):
+	"""Validate Service Request access using the correct Frappe argument order."""
+	frappe.has_permission("Service Request", ptype=ptype, doc=sr_name, throw=True)
+
+
 # ── Context ───────────────────────────────────────────────────────────────────
 
 @frappe.whitelist()
@@ -294,7 +299,7 @@ def _derive_stage(sr):
 @frappe.whitelist()
 def get_ticket_detail(sr_name) -> dict:
 	"""Return full SR data with child tables and computed ops_stage."""
-	frappe.has_permission("Service Request", sr_name, "read", throw=True)
+	_assert_sr_permission(sr_name, "read")
 
 	sr = frappe.get_doc("Service Request", sr_name)
 
@@ -501,7 +506,7 @@ def save_issue_lines(sr_name, issues_json) -> dict:
 	"""Save issue lines identified during technical analysis.
 	Preserves soft-deleted rows — only replaces active (non-Deleted) rows.
 	"""
-	frappe.has_permission("Service Request", sr_name, "write", throw=True)
+	_assert_sr_permission(sr_name, "write")
 
 	issues = json.loads(issues_json) if isinstance(issues_json, str) else issues_json
 
@@ -541,7 +546,7 @@ def save_issue_lines(sr_name, issues_json) -> dict:
 @frappe.whitelist()
 def delete_issue_line(sr_name, issue_row_name, reason) -> dict:
 	"""Soft-delete an issue line — marks as Deleted with reason, user, and timestamp."""
-	frappe.has_permission("Service Request", sr_name, "write", throw=True)
+	_assert_sr_permission(sr_name, "write")
 
 	if not reason or not reason.strip():
 		frappe.throw(_("A reason is required to delete an issue."), title=_("Validation Error"))
@@ -597,7 +602,7 @@ def delete_issue_line(sr_name, issue_row_name, reason) -> dict:
 @frappe.whitelist()
 def confirm_analysis(sr_name) -> dict:
 	"""Confirm the technical analysis — moves all Open issues to In Progress."""
-	frappe.has_permission("Service Request", sr_name, "write", throw=True)
+	_assert_sr_permission(sr_name, "write")
 
 	sr = frappe.get_doc("Service Request", sr_name)
 	active_issues = [r for r in sr.get("issue_lines", []) if r.status != "Deleted"]
@@ -626,7 +631,7 @@ def confirm_analysis(sr_name) -> dict:
 @frappe.whitelist()
 def send_confirmation_whatsapp(sr_name) -> dict:
 	"""Send a WhatsApp confirmation message to the customer with issue summary & estimate."""
-	frappe.has_permission("Service Request", sr_name, "write", throw=True)
+	_assert_sr_permission(sr_name, "write")
 
 	sr = frappe.get_doc("Service Request", sr_name)
 	if not sr.contact_number:
@@ -686,7 +691,7 @@ def send_confirmation_whatsapp(sr_name) -> dict:
 @frappe.whitelist()
 def mark_customer_confirmed(sr_name) -> dict:
 	"""Mark customer as having confirmed the estimate and issues list."""
-	frappe.has_permission("Service Request", sr_name, "write", throw=True)
+	_assert_sr_permission(sr_name, "write")
 
 	if frappe.db.has_column("Service Request", "customer_confirmed"):
 		frappe.db.set_value("Service Request", sr_name, "customer_confirmed", 1, update_modified=True)
@@ -778,7 +783,7 @@ def save_solution_assignment(sr_name, solutions_json) -> dict:
 	Validates that every active (non-Deleted) issue category gets at
 	least one solution before proceeding.
 	"""
-	frappe.has_permission("Service Request", sr_name, "write", throw=True)
+	_assert_sr_permission(sr_name, "write")
 
 	solutions = json.loads(solutions_json) if isinstance(solutions_json, str) else solutions_json
 
@@ -1025,7 +1030,7 @@ def assign_solutions_to_technician(sr_name, solution_rows_json, technician, esti
 @frappe.whitelist()
 def unassign_solution(sr_name, solution_row_name) -> dict:
 	"""Remove technician assignment from a solution line."""
-	frappe.has_permission("Service Request", sr_name, "write", throw=True)
+	_assert_sr_permission(sr_name, "write")
 
 	frappe.db.set_value("SR Solution Line", solution_row_name, {
 		"technician": "",
@@ -1037,7 +1042,7 @@ def unassign_solution(sr_name, solution_row_name) -> dict:
 @frappe.whitelist()
 def advance_to_repair(sr_name) -> dict:
 	"""Manually advance from assign to repair stage (when all solutions assigned)."""
-	frappe.has_permission("Service Request", sr_name, "write", throw=True)
+	_assert_sr_permission(sr_name, "write")
 
 	sr = frappe.get_doc("Service Request", sr_name)
 	unassigned = [row for row in sr.get("solution_lines", []) if not row.technician and row.status != "Cancelled"]
@@ -1054,7 +1059,7 @@ def advance_to_repair(sr_name) -> dict:
 @frappe.whitelist()
 def update_solution_status(sr_name, solution_row_name, status, remarks="") -> dict:
 	"""Update a solution line status during repair."""
-	frappe.has_permission("Service Request", sr_name, "write", throw=True)
+	_assert_sr_permission(sr_name, "write")
 
 	valid = ("Planned", "In Progress", "Completed", "Skipped", "Cancelled")
 	if status not in valid:
@@ -1080,7 +1085,7 @@ def restart_solution_line(sr_name, solution_row_name, remarks="") -> dict:
 	Allows technicians to re-open a previously completed repair item
 	when QC has identified the fix was insufficient.
 	"""
-	frappe.has_permission("Service Request", sr_name, "write", throw=True)
+	_assert_sr_permission(sr_name, "write")
 
 	current = frappe.db.get_value("SR Solution Line", solution_row_name, "status")
 	if current not in ("Completed", "Skipped"):
@@ -1099,7 +1104,7 @@ def restart_solution_line(sr_name, solution_row_name, remarks="") -> dict:
 @frappe.whitelist()
 def mark_spare_damaged(sr_name, spare_row_name, remarks="") -> dict:
 	"""Mark a spare part as damaged/unusable with a mandatory comment."""
-	frappe.has_permission("Service Request", sr_name, "write", throw=True)
+	_assert_sr_permission(sr_name, "write")
 
 	if not remarks or not remarks.strip():
 		frappe.throw(_("Please provide a reason for marking the spare as damaged."), title=_("Validation Error"))
@@ -1116,7 +1121,7 @@ def mark_spare_damaged(sr_name, spare_row_name, remarks="") -> dict:
 @frappe.whitelist()
 def add_spare_to_ticket(sr_name, spare_item, qty, rate=0, repair_solution=None) -> dict:
 	"""Append a spare part used during repair to the SR spare_lines."""
-	frappe.has_permission("Service Request", sr_name, "write", throw=True)
+	_assert_sr_permission(sr_name, "write")
 
 	if not spare_item or not frappe.db.exists("Item", spare_item):
 		frappe.throw(_("Please select a valid spare part."), title=_("Validation Error"))
@@ -1327,7 +1332,7 @@ def get_invoice_summary(sr_name) -> dict:
 	  - customer cost: consumed spares only
 	  - company cost: all spares including damaged
 	"""
-	frappe.has_permission("Service Request", sr_name, "read", throw=True)
+	_assert_sr_permission(sr_name, "read")
 
 	sr = frappe.get_doc("Service Request", sr_name)
 
@@ -1587,7 +1592,7 @@ def go_back_to_stage(sr_name, target_stage) -> dict:
 	  assign    → solutions  (clear solution_lines)
 	  repair    → assign     (cancel open Job Assignments)
 	"""
-	frappe.has_permission("Service Request", sr_name, "write", throw=True)
+	_assert_sr_permission(sr_name, "write")
 
 	ALLOWED = {"analysis", "confirm", "solutions", "assign"}
 	if target_stage not in ALLOWED:

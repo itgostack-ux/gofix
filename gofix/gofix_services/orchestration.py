@@ -293,6 +293,25 @@ def set_repairability(service_request, status, reason=None) -> dict:
 		sr.set("decision", "Rejected")
 		sr.set("status", "Rejected")
 		sr.set("rejection_reason", reason or f"Device is {status}")
+
+		# Check if there are consumed spares that need recovery
+		pending = frappe.get_all("Spare Parts Usage", filters={
+			"service_request": service_request,
+			"part_status": "Consumed",
+			"deleted": 0,
+			"status": "Active",
+		}, fields=["name", "spare_part_item", "item_name", "qty_used"])
+		if pending:
+			items_str = ", ".join(f"{p.item_name or p.spare_part_item} (x{p.qty_used})" for p in pending)
+			frappe.msgprint(
+				_("<b>⚠ {0} consumed spare(s) need recovery before device return:</b><br>{1}<br><br>"
+				  "Use the Spare Recovery panel to disposition each part as:<br>"
+				  "• Good → Back to Stock<br>"
+				  "• Faulty → Supplier Return<br>"
+				  "• Damaged by Technician → Damaged Stock").format(len(pending), items_str),
+				title=_("Spare Recovery Required"),
+				indicator="orange",
+			)
 	elif status == "Customer Declined":
 		sr.set("decision", "Cancelled")
 		sr.set("status", "Cancelled")
@@ -684,3 +703,99 @@ def validate_so_creation_prerequisites(sr):
 			frappe.throw(_(
 				"Cannot create Service Order: Estimate version {0} is not approved by customer."
 			).format(latest_version))
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 8. SPARE RECOVERY ON NOT REPAIRABLE / BER
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@frappe.whitelist()
+def get_spare_recovery_status(service_request) -> dict:
+	"""Check if a Service Request has consumed spares that need recovery.
+
+	Returns:
+	  - needs_recovery: bool
+	  - pending_spares: list of consumed spare details
+	  - all_recovered: bool (True when every consumed spare has been dispositioned)
+	"""
+	frappe.has_permission("Service Request", doc=service_request, throw=True)
+
+	pending = frappe.get_all("Spare Parts Usage",
+		filters={
+			"service_request": service_request,
+			"part_status": "Consumed",
+			"deleted": 0,
+			"status": "Active",
+		},
+		fields=["name", "spare_part_item", "item_name", "qty_used", "uom",
+				"barcode_value", "purchase_cost", "sales_price"],
+	)
+
+	# Count total SPUs ever created for this SR (including recovered)
+	total_consumed = frappe.db.count("Spare Parts Usage", {
+		"service_request": service_request,
+	})
+
+	total_recovered = frappe.db.count("Spare Parts Usage", {
+		"service_request": service_request,
+		"recovery_disposition": ["is", "set"],
+	})
+
+	return {
+		"needs_recovery": len(pending) > 0,
+		"pending_spares": pending,
+		"total_consumed": total_consumed,
+		"total_recovered": total_recovered,
+		"all_recovered": len(pending) == 0 and total_consumed > 0,
+	}
+
+
+@frappe.whitelist()
+def validate_spare_recovery_before_return(service_request) -> dict:
+	"""Pre-return gate: blocks device handback until all consumed spares are accounted for.
+
+	Business rule: Before returning a Not Repairable / BER device to the customer,
+	every spare that was consumed must have a recovery disposition:
+	  - Good → back to stock
+	  - Faulty → supplier return
+	  - Damaged by Technician → damaged stock
+
+	Returns:
+	  - ready: bool
+	  - blockers: list of messages
+	"""
+	frappe.has_permission("Service Request", doc=service_request, throw=True)
+	sr = frappe.get_doc("Service Request", service_request)
+	blockers = []
+
+	# Only enforce for Not Repairable / BER / Customer Cancelled outcomes
+	repair_outcome = ""
+	if sr.service_order:
+		repair_outcome = frappe.db.get_value("Sales Order", sr.service_order, "repair_outcome") or ""
+
+	if repair_outcome not in ("Not Repairable", "Beyond Repair", "Customer Cancelled"):
+		return {"ready": True, "blockers": []}
+
+	# Check for consumed spares without recovery disposition
+	pending = frappe.get_all("Spare Parts Usage",
+		filters={
+			"service_request": service_request,
+			"part_status": "Consumed",
+			"deleted": 0,
+			"status": "Active",
+		},
+		fields=["name", "spare_part_item", "item_name", "qty_used"],
+	)
+
+	if pending:
+		items_str = ", ".join(f"{p.item_name or p.spare_part_item} (x{p.qty_used})" for p in pending)
+		blockers.append(
+			_("{0} consumed spare(s) must be recovered before returning device: {1}").format(
+				len(pending), items_str
+			)
+		)
+
+	return {
+		"ready": len(blockers) == 0,
+		"blockers": blockers,
+	}

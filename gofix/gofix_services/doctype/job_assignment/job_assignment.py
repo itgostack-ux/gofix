@@ -112,6 +112,28 @@ class JobAssignment(Document):
 					indicator="orange",
 					alert=True,
 				)
+
+				# Alert about consumed spares that need recovery
+				sr_name = so.get("service_request") or frappe.db.get_value(
+					"Sales Order", self.service_order, "service_request")
+				if sr_name:
+					pending = frappe.get_all("Spare Parts Usage", filters={
+						"service_request": sr_name,
+						"part_status": "Consumed",
+						"deleted": 0,
+						"status": "Active",
+					}, fields=["spare_part_item", "item_name", "qty_used"])
+					if pending:
+						items_str = ", ".join(
+							f"{p.item_name or p.spare_part_item} (x{p.qty_used})" for p in pending
+						)
+						frappe.msgprint(
+							_("<b>⚠ Spare Recovery Required:</b> {0} consumed spare(s) must be "
+							  "removed and dispositioned before returning device to customer.<br>"
+							  "Pending: {1}").format(len(pending), items_str),
+							title=_("Spare Recovery"),
+							indicator="red",
+						)
 			else:
 				# Set to QC Awaiting for repairable items
 				so.db_set("qc_status", "Awaiting", update_modified=False)

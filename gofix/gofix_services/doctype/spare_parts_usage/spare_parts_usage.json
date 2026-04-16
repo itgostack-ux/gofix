@@ -341,7 +341,7 @@
    "fieldname": "defect_type",
    "fieldtype": "Select",
    "label": "Defect Type",
-   "options": "\nDOA (Dead on Arrival)\nManufacture Defect\nInstallation Damage\nTransit Damage\nOther",
+   "options": "\nDOA (Dead on Arrival)\nManufacture Defect\nInstallation Damage\nTransit Damage\nOther\nTechnician Damage",
    "depends_on": "eval:doc.is_defective"
   },
   {
@@ -382,11 +382,38 @@
    "options": "Stock Entry",
    "read_only": 1,
    "description": "Stock Entry created on consumption"
+  },
+  {
+   "fieldname": "section_break_recovery",
+   "fieldtype": "Section Break",
+   "label": "Spare Recovery",
+   "depends_on": "recovery_disposition",
+   "collapsible": 1
+  },
+  {
+   "fieldname": "recovery_disposition",
+   "fieldtype": "Select",
+   "label": "Recovery Disposition",
+   "options": "\nGood - Back to Stock\nFaulty - Supplier Return\nDamaged by Technician",
+   "read_only": 1,
+   "description": "Set when spare is recovered after Not Repairable / BER decision"
+  },
+  {
+   "fieldname": "column_break_recovery",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "recovery_stock_entry",
+   "fieldtype": "Link",
+   "label": "Recovery Stock Entry",
+   "options": "Stock Entry",
+   "read_only": 1,
+   "description": "Stock entry created to reverse spare consumption"
   }
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2024-12-05 10:40:00",
+ "modified": "2026-04-16 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "GoFix Services",
  "name": "Spare Parts Usage",

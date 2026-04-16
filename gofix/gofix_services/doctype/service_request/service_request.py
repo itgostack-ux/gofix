@@ -1365,6 +1365,153 @@ def complete_service_request(service_request, completion_date=None):
 	return doc.name
 
 @frappe.whitelist()
+def request_item_replacement(service_request, original_serial_no, replacement_serial_no, reason=None):
+	"""Open a formal replacement request on a submitted Service Request."""
+	doc = frappe.get_doc("Service Request", service_request)
+	doc.check_permission("write")
+
+	if not original_serial_no or not replacement_serial_no:
+		frappe.throw(_("Original and replacement serial numbers are required."))
+	if original_serial_no == replacement_serial_no:
+		frappe.throw(_("Replacement serial number must be different from the original serial number."))
+
+	updates = {
+		"original_serial_no": original_serial_no,
+		"replacement_serial_no": replacement_serial_no,
+		"substitution_reason": reason or _("Replacement requested during service"),
+	}
+	frappe.db.set_value("Service Request", doc.name, updates, update_modified=True)
+	doc.reload()
+
+	try:
+		if not doc.substitution_exception_request:
+			doc._create_serial_sub_exception()
+			if doc.substitution_exception_request:
+				frappe.db.set_value(
+					"Service Request",
+					doc.name,
+					"substitution_exception_request",
+					doc.substitution_exception_request,
+					update_modified=False,
+				)
+	except Exception:
+		frappe.log_error(frappe.get_traceback(), _("Replacement request setup failed for {0}").format(doc.name))
+
+	try:
+		doc.add_comment(
+			"Comment",
+			_("Item replacement requested: {0} → {1}. Reason: {2}").format(
+				original_serial_no,
+				replacement_serial_no,
+				reason or _("Not specified"),
+			),
+		)
+	except Exception:
+		pass
+
+	return {
+		"status": "Requested",
+		"service_request": doc.name,
+		"original_serial_no": original_serial_no,
+		"replacement_serial_no": replacement_serial_no,
+		"exception_request": doc.substitution_exception_request,
+	}
+
+
+@frappe.whitelist()
+def approve_item_replacement(service_request, approver_user=None, remarks=None):
+	"""Approve a pending item replacement request."""
+	frappe.only_for(["Sales Manager", "System Manager", "Service Manager"])
+	doc = frappe.get_doc("Service Request", service_request)
+	doc.check_permission("write")
+
+	approver_user = approver_user or frappe.session.user
+	frappe.db.set_value(
+		"Service Request",
+		doc.name,
+		"substitution_approved_by",
+		approver_user,
+		update_modified=True,
+	)
+	doc.reload()
+
+	if doc.substitution_exception_request:
+		try:
+			from ch_item_master.ch_item_master.exception_api import approve_exception
+			approve_exception(
+				exception_name=doc.substitution_exception_request,
+				approver_user=approver_user,
+				channel="Workflow Approval",
+				remarks=remarks or _("Approved from Service Request replacement workflow"),
+			)
+		except Exception:
+			frappe.log_error(frappe.get_traceback(), _("Replacement approval sync failed for {0}").format(doc.name))
+
+	try:
+		doc.add_comment(
+			"Comment",
+			_("Item replacement approved by {0}. {1}").format(
+				approver_user,
+				remarks or "",
+			),
+		)
+	except Exception:
+		pass
+
+	return {
+		"status": "Approved",
+		"service_request": doc.name,
+		"approved_by": approver_user,
+		"exception_request": doc.substitution_exception_request,
+	}
+
+
+@frappe.whitelist()
+def complete_item_replacement(service_request, replacement_serial_no=None, completed_by=None):
+	"""Finalize the approved serial substitution on the Service Request."""
+	doc = frappe.get_doc("Service Request", service_request)
+	doc.check_permission("write")
+
+	if replacement_serial_no and replacement_serial_no != doc.replacement_serial_no:
+		frappe.db.set_value("Service Request", doc.name, "replacement_serial_no", replacement_serial_no, update_modified=True)
+		doc.reload()
+
+	if not doc.original_serial_no or not doc.replacement_serial_no:
+		frappe.throw(_("Replacement request details are incomplete."))
+	if not doc.substitution_approved_by:
+		frappe.throw(_("Replacement approval is required before completion."))
+
+	updates = {}
+	if doc.meta.has_field("serial_no"):
+		updates["serial_no"] = doc.replacement_serial_no
+	if doc.meta.has_field("status") and doc.status in ("Draft", "Open"):
+		updates["status"] = "In Progress"
+	if updates:
+		frappe.db.set_value("Service Request", doc.name, updates, update_modified=True)
+
+	try:
+		frappe.get_doc({
+			"doctype": "Comment",
+			"comment_type": "Info",
+			"reference_doctype": "Service Request",
+			"reference_name": doc.name,
+			"content": _("Replacement completed by {0}: {1} replaced with {2}").format(
+				completed_by or frappe.session.user,
+				doc.original_serial_no,
+				doc.replacement_serial_no,
+			),
+		}).insert(ignore_permissions=True)
+	except Exception:
+		pass
+
+	return {
+		"status": "Completed",
+		"service_request": doc.name,
+		"serial_no": doc.replacement_serial_no,
+		"approved_by": doc.substitution_approved_by,
+	}
+
+@frappe.whitelist()
 def get_warehouse_state(warehouse) -> dict:
 	"""Get state details from warehouse address
 	

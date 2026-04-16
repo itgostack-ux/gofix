@@ -6,52 +6,80 @@ from frappe import _
 
 
 def update_service_request_on_delivery(doc, method=None):
-	"""Update Service Request status when Delivery Note is created/submitted
-	
-	Args:
-		doc: Delivery Note document
-		method: Hook method (on_submit, on_cancel, etc.)
+	"""Update Service Request status when a *service* Delivery Note is
+	submitted or cancelled.
+
+	This hook runs on ALL Delivery Notes but exits immediately for
+	non-service documents.  Wrapped in try/except so a failure here
+	never blocks the standard Delivery Note pipeline.
 	"""
-	# Check if this delivery is linked to a Service Order
+	try:
+		_update_service_request_on_delivery_inner(doc, method)
+	except Exception:
+		frappe.log_error(
+			title=f"GoFix DN hook error: {doc.name}",
+			message=frappe.get_traceback(),
+		)
+
+
+def _update_service_request_on_delivery_inner(doc, method):
+	"""Inner implementation — separated for clean error isolation."""
 	if not doc.items:
 		return
-	
-	# Get Sales Order from first item
+
+	# Find a Sales Order linked to this DN
 	sales_order = None
 	for item in doc.items:
 		if item.against_sales_order:
 			sales_order = item.against_sales_order
 			break
-	
+
 	if not sales_order:
 		return
-	
-	# Check if it's a Service Order
+
+	# ── Guard: only act on GoFix Service Orders ──
 	so = frappe.get_doc("Sales Order", sales_order)
-	if not so.is_service_order or not so.service_request:
+	if not getattr(so, "is_service_order", False) or not so.service_request:
 		return
-	
-	try:
-		sr = frappe.get_doc("Service Request", so.service_request)
-		
-		if method == "on_submit":
-			# Delivery Note submitted - mark as Delivered
-			sr.db_set("status", "Delivered", update_modified=True)
-			sr.db_set("decision", "Delivered", update_modified=False)
-			sr.db_set("walkin_status", None, update_modified=False)  # Device no longer with you
-			
-			frappe.msgprint(
-				_("Service Request {0} marked as Delivered").format(so.service_request),
-				indicator="green",
-				alert=True
-			)
-		
-		elif method == "on_cancel":
-			# Delivery cancelled - revert to Invoiced or Completed
-			previous_status = "Invoiced" if sr.status == "Delivered" else "Completed"
-			sr.db_set("status", previous_status, update_modified=True)
-			sr.db_set("decision", previous_status, update_modified=False)
-			sr.db_set("walkin_status", "Accepted", update_modified=False)  # Device back with you
-	
-	except Exception as e:
-		frappe.log_error(f"Failed to update SR on delivery: {str(e)}")
+
+	sr = frappe.get_doc("Service Request", so.service_request)
+
+	if method == "on_submit":
+		# ── Gate: spare recovery check for Not Repairable / BER ──
+		repair_outcome = getattr(so, "repair_outcome", None) or ""
+		if repair_outcome in ("Not Repairable", "Beyond Repair", "Customer Cancelled"):
+			pending = frappe.get_all("Spare Parts Usage", filters={
+				"service_request": so.service_request,
+				"part_status": "Consumed",
+				"deleted": 0,
+				"status": "Active",
+			}, fields=["spare_part_item", "item_name", "qty_used"])
+			if pending:
+				items_str = ", ".join(
+					f"{p.item_name or p.spare_part_item} (x{p.qty_used})" for p in pending
+				)
+				frappe.throw(
+					_("Cannot deliver: {0} consumed spare(s) have not been recovered.<br>"
+					  "Each spare must be dispositioned (Good → Stock / Faulty → Supplier Return / "
+					  "Damaged → Damaged Stock) before returning the device.<br><br>"
+					  "Pending: {1}").format(len(pending), items_str),
+					title=_("Spare Recovery Required"),
+				)
+
+		# Delivery Note submitted - mark as Delivered
+		sr.db_set("status", "Delivered", update_modified=True)
+		sr.db_set("decision", "Delivered", update_modified=False)
+		sr.db_set("walkin_status", None, update_modified=False)  # Device no longer with you
+
+		frappe.msgprint(
+			_("Service Request {0} marked as Delivered").format(so.service_request),
+			indicator="green",
+			alert=True
+		)
+
+	elif method == "on_cancel":
+		# Delivery cancelled - revert to Invoiced or Completed
+		previous_status = "Invoiced" if sr.status == "Delivered" else "Completed"
+		sr.db_set("status", previous_status, update_modified=True)
+		sr.db_set("decision", previous_status, update_modified=False)
+		sr.db_set("walkin_status", "Accepted", update_modified=False)  # Device back with you

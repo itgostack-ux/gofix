@@ -268,7 +268,23 @@ class GoFixOpsHub {
 			data = await frappe.xcall(`${API}.get_ticket_detail`, { sr_name });
 		} catch (e) {
 			console.error("GoFix Ops Hub: API error", e);
-			main.html(`<div class="goh-empty-state"><i class="fa fa-exclamation-circle fa-3x text-danger"></i><p class="mt-2">${__("API Error loading ticket")}</p><pre class="text-muted small mt-2">${frappe.utils.escape_html(String(e && (e.message || e) || "Unknown"))}</pre></div>`);
+			let errMsg = "Unknown";
+			if (typeof e === "string") {
+				errMsg = e;
+			} else if (e?.message) {
+				errMsg = e.message;
+			} else if (e?._server_messages) {
+				try {
+					const serverMessages = JSON.parse(e._server_messages || "[]");
+					const first = serverMessages?.[0] ? JSON.parse(serverMessages[0]) : null;
+					errMsg = first?.message || first?.title || e.exc_type || "Unknown";
+				} catch (_) {
+					errMsg = e.exc_type || e.statusText || "Unknown";
+				}
+			} else {
+				errMsg = e?.exc_type || e?.statusText || String(e || "Unknown");
+			}
+			main.html(`<div class="goh-empty-state"><i class="fa fa-exclamation-circle fa-3x text-danger"></i><p class="mt-2">${__("API Error loading ticket")}</p><pre class="text-muted small mt-2">${frappe.utils.escape_html(errMsg)}</pre></div>`);
 			return;
 		}
 		try {

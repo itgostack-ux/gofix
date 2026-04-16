@@ -1,0 +1,20 @@
+{
+ "creation": "2025-07-08 00:00:00.000000",
+ "docstatus": 0,
+ "doctype": "Page",
+ "idx": 0,
+ "modified": "2025-07-08 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "GoFix Services",
+ "name": "service-hub",
+ "owner": "Administrator",
+ "page_name": "service-hub",
+ "roles": [
+  {"role": "System Manager"},
+  {"role": "Service Manager"},
+  {"role": "Technician"},
+  {"role": "Customer Service"}
+ ],
+ "standard": "Yes",
+ "title": "Service Hub"
+}

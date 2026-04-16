@@ -64,6 +64,62 @@ NOTIFICATIONS = [
         "send_to_all_assignees": 0,
         "recipients": [{"receiver_by_document_field": "email"}],
     },
+    {
+        "name": "GoFix - Pickup Scheduled",
+        "subject": "Pickup scheduled for your device - {{ doc.name }}",
+        "document_type": "Service Request",
+        "event": "Value Change",
+        "value_changed": "pickup_scheduled_datetime",
+        "condition": "doc.pickup_scheduled_datetime",
+        "message": (
+            "Dear {{ doc.customer_name }},\n\n"
+            "Your device pickup has been scheduled.\n\n"
+            "Service Request: {{ doc.name }}\n"
+            "Pickup Date & Time: {{ doc.pickup_scheduled_datetime }}\n"
+            "Pickup Address: {{ doc.pickup_address or '' }}\n\n"
+            "Our team will contact you if any coordination is needed."
+        ),
+        "channel": "Email",
+        "send_to_all_assignees": 0,
+        "recipients": [{"receiver_by_document_field": "email"}],
+    },
+    {
+        "name": "GoFix - Return Dispatched",
+        "subject": "Your repaired device is on the way - {{ doc.name }}",
+        "document_type": "Service Request",
+        "event": "Value Change",
+        "value_changed": "return_dispatched_date",
+        "condition": "doc.return_dispatched_date",
+        "message": (
+            "Dear {{ doc.customer_name }},\n\n"
+            "Your repaired device has been dispatched.\n\n"
+            "Service Request: {{ doc.name }}\n"
+            "Courier: {{ doc.return_courier_name or 'Store Delivery' }}\n"
+            "Tracking: {{ doc.return_tracking_number or 'Will be shared shortly' }}\n\n"
+            "Thank you for choosing GoFix."
+        ),
+        "channel": "Email",
+        "send_to_all_assignees": 0,
+        "recipients": [{"receiver_by_document_field": "email"}],
+    },
+    {
+        "name": "GoFix - Return Delivered",
+        "subject": "Delivery confirmed - {{ doc.name }}",
+        "document_type": "Service Request",
+        "event": "Value Change",
+        "value_changed": "return_delivered_date",
+        "condition": "doc.return_delivered_date",
+        "message": (
+            "Dear {{ doc.customer_name }},\n\n"
+            "We have marked your service request as delivered successfully.\n\n"
+            "Service Request: {{ doc.name }}\n"
+            "Delivered On: {{ doc.return_delivered_date }}\n\n"
+            "If you need any further help, simply reply to this email or visit your nearest GoFix store."
+        ),
+        "channel": "Email",
+        "send_to_all_assignees": 0,
+        "recipients": [{"receiver_by_document_field": "email"}],
+    },
 ]
 
 

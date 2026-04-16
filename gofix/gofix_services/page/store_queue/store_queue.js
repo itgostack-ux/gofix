@@ -148,7 +148,9 @@ class StoreQueue {
 			e.preventDefault();
 			e.stopPropagation();
 			const stage = $(e.currentTarget).data("stage");
-			const f = STAGE_LIST_FILTERS[stage] || {};
+			const f = Object.assign({}, STAGE_LIST_FILTERS[stage] || {});
+			const co = frappe.defaults.get_user_default("Company");
+			if (co) f.company = co;
 			frappe.set_route("List", "Service Request", f);
 		});
 	}

@@ -155,6 +155,8 @@ const filters = { decision: status };
 if (status === 'Rejected') {
 filters.repairability_status = ['in', ['Not Repairable', 'BER']];
 }
+const co = frappe.defaults.get_user_default('Company');
+if (co) filters.company = co;
 frappe.set_route('List', 'Service Request', filters);
 });
 }

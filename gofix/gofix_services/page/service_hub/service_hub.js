@@ -58,6 +58,12 @@ class ServiceHub {
 		this.$root = $(`<div class="hub-root"></div>`).appendTo(this.page.body);
 	}
 
+	_go_list(doctype, filters = {}) {
+		const co = this.company_field?.get_value();
+		if (co) filters.company = co;
+		frappe.set_route("List", doctype, filters);
+	}
+
 	refresh() {
 		const company = this.company_field?.get_value() || "";
 		const store = this.store_field?.get_value() || "";
@@ -139,10 +145,10 @@ class ServiceHub {
 			"delivered":      { decision: "Delivered" },
 			"invoiced":       { decision: "Invoiced" },
 		};
-		this.$root.find(".hub-flow-node").on("click", function () {
-			const key = $(this).data("step");
+		this.$root.find(".hub-flow-node").on("click", (e) => {
+			const key = $(e.currentTarget).data("step");
 			if (FILTERS[key]) {
-				frappe.set_route("List", "Service Request", FILTERS[key]);
+				this._go_list("Service Request", { ...FILTERS[key] });
 			}
 		});
 	}
@@ -170,14 +176,30 @@ class ServiceHub {
 			<div class="hub-section">
 				<h5 class="hub-section-title"><i class="fa fa-bolt"></i> ${__("Quick Actions")}</h5>
 				<div class="hub-actions-grid">
-					<button class="hub-action-btn" onclick="frappe.set_route('List','Service Request',{decision:'Draft'})"><i class="fa fa-plus"></i> ${__("New Requests")}</button>
-					<button class="hub-action-btn" onclick="frappe.set_route('List','Service Request',{decision:'Accepted'})"><i class="fa fa-check"></i> ${__("Accepted")}</button>
-					<button class="hub-action-btn" onclick="frappe.set_route('List','Service Request',{decision:'In Service'})"><i class="fa fa-cogs"></i> ${__("In Service")}</button>
-					<button class="hub-action-btn" onclick="frappe.set_route('List','Service Request',{decision:'Completed'})"><i class="fa fa-check-circle"></i> ${__("Completed")}</button>					<button class="hub-action-btn hub-action-nr" onclick="frappe.set_route('List','Service Request',{decision:'Rejected',repairability_status:['in',['Not Repairable','BER']]})"><i class="fa fa-ban"></i> ${__('Not Repairable')}</button>					<button class="hub-action-btn" onclick="frappe.set_route('app','gofix-ops-hub')"><i class="fa fa-dashboard"></i> ${__("GoFix Ops Hub")}</button>
-					<button class="hub-action-btn" onclick="frappe.set_route('List','Issue Category')"><i class="fa fa-tags"></i> ${__("Issue Categories")}</button>
+					<button class="hub-action-btn" data-act="new_req"><i class="fa fa-plus"></i> ${__("New Requests")}</button>
+					<button class="hub-action-btn" data-act="accepted"><i class="fa fa-check"></i> ${__("Accepted")}</button>
+					<button class="hub-action-btn" data-act="in_service"><i class="fa fa-cogs"></i> ${__("In Service")}</button>
+					<button class="hub-action-btn" data-act="completed"><i class="fa fa-check-circle"></i> ${__("Completed")}</button>
+					<button class="hub-action-btn hub-action-nr" data-act="not_repairable"><i class="fa fa-ban"></i> ${__("Not Repairable")}</button>
+					<button class="hub-action-btn" data-act="ops_hub"><i class="fa fa-dashboard"></i> ${__("GoFix Ops Hub")}</button>
+					<button class="hub-action-btn" data-act="issue_cat"><i class="fa fa-tags"></i> ${__("Issue Categories")}</button>
 				</div>
 			</div>
 		`);
+
+		this.$root.on("click", ".hub-action-btn", (e) => {
+			const actions = {
+				new_req:        () => this._go_list("Service Request", { decision: "Draft" }),
+				accepted:       () => this._go_list("Service Request", { decision: "Accepted" }),
+				in_service:     () => this._go_list("Service Request", { decision: "In Service" }),
+				completed:      () => this._go_list("Service Request", { decision: "Completed" }),
+				not_repairable: () => this._go_list("Service Request", { decision: "Rejected", repairability_status: ["in", ["Not Repairable", "BER"]] }),
+				ops_hub:        () => frappe.set_route("app", "gofix-ops-hub"),
+				issue_cat:      () => this._go_list("Issue Category"),
+			};
+			const fn = actions[$(e.currentTarget).data("act")];
+			if (fn) fn();
+		});
 	}
 
 	_render_intelligence(insights, financial) {

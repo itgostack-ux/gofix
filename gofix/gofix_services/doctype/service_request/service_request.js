@@ -40,6 +40,31 @@ frappe.ui.form.on('Service Request', {
 				reject_service_request(frm);
 			}).addClass('btn-danger');
 		}
+
+		// NOT REPAIRABLE button — available at any active stage
+		if (!frm.is_new() && frm.doc.docstatus === 1
+			&& !["Delivered", "Withdrawn", "Cancelled", "Rejected"].includes(frm.doc.decision)) {
+			frm.add_custom_button(__('Not Repairable'), function() {
+				show_not_repairable_dialog(frm);
+			}, __('Actions')).addClass('btn-danger');
+		}
+
+		// SPARE RECOVERY button — show when SR is Rejected and has pending consumed spares
+		if (!frm.is_new() && frm.doc.decision === "Rejected"
+			&& frm.doc.repairability_status && ["Not Repairable", "BER"].includes(frm.doc.repairability_status)) {
+			frappe.xcall("gofix.gofix_services.doctype.spare_parts_usage.spare_parts_usage.get_pending_recovery_spares", {
+				service_request: frm.doc.name,
+			}).then(pending => {
+				if (pending && pending.length) {
+					frm.dashboard.set_headline(
+						__('<span style="color:#dc2626"><i class="fa fa-exclamation-triangle"></i> {0} consumed spare(s) need recovery disposition</span>', [pending.length])
+					);
+					frm.add_custom_button(__('Recover Spares ({0})').replace('{0}', pending.length), function() {
+						show_spare_recovery_form(frm, pending);
+					}).addClass('btn-warning');
+				}
+			});
+		}
 		
 		// View Service Order button if created (make it prominent)
 		if (frm.doc.service_order) {
@@ -791,4 +816,134 @@ frappe.ui.form.on('SR Spare Line', {
 function calculate_spare_line_amount(cdt, cdn) {
 	let row = locals[cdt][cdn];
 	frappe.model.set_value(cdt, cdn, 'amount', flt(row.qty) * flt(row.rate));
+}
+
+// ── Not Repairable Flow ──────────────────────────────────────────────────────
+
+const OPS_API = "gofix.gofix_services.page.gofix_ops_hub.gofix_ops_hub";
+
+function show_not_repairable_dialog(frm) {
+	let d = new frappe.ui.Dialog({
+		title: __('Mark as Not Repairable'),
+		fields: [
+			{
+				fieldtype: 'Select', fieldname: 'status', label: __('Status'),
+				options: 'Not Repairable\nBER', reqd: 1, default: 'Not Repairable',
+				description: __('BER = Beyond Economical Repair'),
+			},
+			{
+				fieldtype: 'Small Text', fieldname: 'reason', label: __('Reason'),
+				reqd: 1, description: __('Explain why the device cannot be repaired'),
+			},
+		],
+		primary_action_label: __('Confirm'),
+		primary_action(values) {
+			d.disable_primary_action();
+			frappe.xcall(`${OPS_API}.mark_not_repairable`, {
+				sr_name: frm.doc.name,
+				status: values.status,
+				reason: values.reason,
+			}).then(r => {
+				d.hide();
+				frappe.show_alert({ message: r.message, indicator: 'orange' });
+				if (r.needs_spare_recovery && r.pending_spares && r.pending_spares.length) {
+					show_spare_recovery_form(frm, r.pending_spares);
+				} else {
+					frm.reload_doc();
+				}
+			}).catch(() => d.enable_primary_action());
+		},
+	});
+	d.show();
+}
+
+function show_spare_recovery_form(frm, pending) {
+	let rows_html = pending.map((sp, idx) => `
+		<tr data-idx="${idx}" data-spu="${frappe.utils.escape_html(sp.name)}">
+			<td>${idx + 1}</td>
+			<td>${frappe.utils.escape_html(sp.item_name || sp.spare_part_item)}</td>
+			<td class="text-center">${sp.qty_used}</td>
+			<td>
+				<select class="form-control input-sm spu-disposition" data-idx="${idx}">
+					<option value="">-- select --</option>
+					<option value="Good - Back to Stock">Good - Back to Stock</option>
+					<option value="Faulty - Supplier Return">Faulty - Supplier Return</option>
+					<option value="Damaged by Technician">Damaged by Technician</option>
+				</select>
+			</td>
+			<td><input type="text" class="form-control input-sm spu-remarks" data-idx="${idx}" placeholder="Optional"></td>
+			<td class="text-center spu-status" data-idx="${idx}">⏳</td>
+		</tr>
+	`).join('');
+
+	let d = new frappe.ui.Dialog({
+		title: __('Recover Spares — {0}', [frm.doc.name]),
+		size: 'large',
+		fields: [
+			{
+				fieldtype: 'HTML', fieldname: 'spare_table',
+				options: `
+					<p class="text-muted">${__('Select a disposition for each consumed spare before returning device to customer.')}</p>
+					<table class="table table-bordered table-sm">
+						<thead><tr>
+							<th>#</th><th>${__('Spare')}</th><th class="text-center">${__('Qty')}</th>
+							<th>${__('Disposition')}</th><th>${__('Remarks')}</th><th class="text-center">${__('Status')}</th>
+						</tr></thead>
+						<tbody>${rows_html}</tbody>
+					</table>`,
+			},
+		],
+		primary_action_label: __('Recover All'),
+		primary_action() {
+			let entries = [];
+			let $body = d.$wrapper;
+			let all_valid = true;
+			pending.forEach((sp, idx) => {
+				let disp = $body.find(`.spu-disposition[data-idx="${idx}"]`).val();
+				let rem = $body.find(`.spu-remarks[data-idx="${idx}"]`).val();
+				if (!disp) {
+					$body.find(`.spu-disposition[data-idx="${idx}"]`).css('border-color', 'red');
+					all_valid = false;
+				}
+				entries.push({ spu_name: sp.name, disposition: disp, remarks: rem, idx });
+			});
+			if (!all_valid) {
+				frappe.msgprint(__('Please select a disposition for every spare.'));
+				return;
+			}
+			d.disable_primary_action();
+			process_spare_recoveries(frm, entries, d, 0);
+		},
+		secondary_action_label: __('Skip for Now'),
+		secondary_action() {
+			d.hide();
+			frm.reload_doc();
+		},
+	});
+	d.show();
+}
+
+function process_spare_recoveries(frm, entries, dlg, idx) {
+	if (idx >= entries.length) {
+		dlg.hide();
+		frappe.show_alert({ message: __('All spares recovered'), indicator: 'green' });
+		frm.reload_doc();
+		return;
+	}
+	let e = entries[idx];
+	let $body = dlg.$wrapper;
+	$body.find(`.spu-status[data-idx="${e.idx}"]`).html('<i class="fa fa-spinner fa-spin"></i>');
+
+	frappe.xcall(`${OPS_API}.recover_spare_from_ops_hub`, {
+		sr_name: frm.doc.name,
+		spu_name: e.spu_name,
+		disposition: e.disposition,
+		remarks: e.remarks || '',
+	}).then(() => {
+		$body.find(`.spu-status[data-idx="${e.idx}"]`).html('<i class="fa fa-check text-success"></i>');
+		process_spare_recoveries(frm, entries, dlg, idx + 1);
+	}).catch(() => {
+		$body.find(`.spu-status[data-idx="${e.idx}"]`).html('<i class="fa fa-times text-danger"></i>');
+		process_spare_recoveries(frm, entries, dlg, idx + 1);
+	});
 }

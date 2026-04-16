@@ -1637,3 +1637,102 @@ def go_back_to_stage(sr_name, target_stage) -> dict:
 		_log_ops_stage(sr_name, current, "assign")
 
 	return {"ok": True, "stage": target_stage}
+
+
+# ── Not Repairable Flow ───────────────────────────────────────────────────────
+
+@frappe.whitelist()
+def mark_not_repairable(sr_name, status="Not Repairable", reason="") -> dict:
+	"""Mark a Service Request as Not Repairable / BER from the Ops Hub.
+
+	Orchestrates:
+	  1) Set repairability status on SR → Rejected
+	  2) Update Sales Order repair_outcome + workflow_state
+	  3) Cancel open Job Assignments
+	  4) Return list of consumed spares needing recovery
+	"""
+	_assert_sr_permission(sr_name, "write")
+	if status not in ("Not Repairable", "BER"):
+		frappe.throw(_("Status must be 'Not Repairable' or 'BER'"))
+
+	sr = frappe.get_doc("Service Request", sr_name)
+	if sr.decision in ("Delivered", "Withdrawn", "Cancelled"):
+		frappe.throw(_("Cannot mark as {0} — SR is already {1}").format(status, sr.decision))
+
+	current_stage = _derive_stage(sr.as_dict())
+
+	# 1) Update SR
+	sr.flags.ignore_validate_update_after_submit = True
+	sr.flags.ignore_mandatory = True
+	sr.set("repairability_status", status)
+	sr.set("repairability_reason", reason)
+	sr.set("repairability_decided_by", frappe.session.user)
+	sr.set("repairability_decided_at", frappe.utils.now_datetime())
+	sr.set("decision", "Rejected")
+	sr.set("status", "Rejected")
+	sr.set("rejection_reason", reason or f"Device is {status}")
+	sr.save()
+
+	# 2) Update Sales Order if linked
+	if sr.service_order:
+		try:
+			so = frappe.get_doc("Sales Order", sr.service_order)
+			so.flags.ignore_validate_update_after_submit = True
+			so.db_set("repair_outcome", status, update_modified=True)
+			so.db_set("workflow_state", "Not Repairable", update_modified=False)
+		except Exception:
+			frappe.log_error(frappe.get_traceback(), f"Not Repairable: SO update failed for {sr.service_order}")
+
+	# 3) Cancel open Job Assignments
+	open_jobs = frappe.get_all("Job Assignment",
+		filters={"service_request": sr_name, "docstatus": 1,
+				 "assignment_status": ["in", ["Open", "In Progress"]]},
+		pluck="name")
+	for ja_name in open_jobs:
+		try:
+			ja = frappe.get_doc("Job Assignment", ja_name)
+			ja.flags.ignore_validate_update_after_submit = True
+			ja.assignment_status = "Cancelled"
+			ja.repair_outcome = status
+			ja.save()
+		except Exception:
+			frappe.log_error(frappe.get_traceback(), f"Not Repairable: JA cancel failed for {ja_name}")
+
+	_log_ops_stage(sr_name, current_stage, "closed")
+	frappe.db.commit()
+
+	# 4) Check for consumed spares that need recovery
+	pending_spares = frappe.get_all("Spare Parts Usage",
+		filters={"service_request": sr_name, "part_status": "Consumed",
+				 "deleted": 0, "status": "Active"},
+		fields=["name", "spare_part_item", "item_name", "qty_used", "uom",
+				"barcode_value", "purchase_cost", "sales_price"])
+
+	return {
+		"message": _("Marked as {0}").format(status),
+		"pending_spares": pending_spares,
+		"needs_spare_recovery": len(pending_spares) > 0,
+	}
+
+
+@frappe.whitelist()
+def recover_spare_from_ops_hub(sr_name, spu_name, disposition, remarks="") -> dict:
+	"""Recover a single consumed spare from the Ops Hub spare recovery panel."""
+	_assert_sr_permission(sr_name, "write")
+	from gofix.gofix_services.doctype.spare_parts_usage.spare_parts_usage import (
+		SPARE_DISPOSITION_CHOICES,
+	)
+	if disposition not in SPARE_DISPOSITION_CHOICES:
+		frappe.throw(_("Invalid disposition: {0}").format(disposition))
+
+	doc = frappe.get_doc("Spare Parts Usage", spu_name)
+	if doc.service_request != sr_name:
+		frappe.throw(_("Spare {0} does not belong to SR {1}").format(spu_name, sr_name))
+	doc.recover_spare(disposition, remarks)
+	frappe.db.commit()
+
+	# Return updated pending count
+	remaining = frappe.db.count("Spare Parts Usage", {
+		"service_request": sr_name, "part_status": "Consumed",
+		"deleted": 0, "status": "Active"})
+	return {"message": _("Recovered: {0}").format(disposition), "remaining": remaining}

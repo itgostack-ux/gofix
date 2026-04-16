@@ -337,6 +337,7 @@ class GoFixOpsHub {
 		this._bind_tabs();
 		this._bind_stepper_nav(d);
 		this._bind_step_events(d);
+		this._bind_not_repairable(d);
 	}
 
 	/* ── Stepper ────────────────────────────────────────────────────────── */
@@ -438,6 +439,9 @@ class GoFixOpsHub {
 				<div class="goh-banner-right">
 					${sla_html}
 					<div class="goh-banner-actions">
+						<button class="btn btn-xs btn-danger goh-not-repairable-btn" title="${__("Mark Not Repairable")}" style="margin-right:4px;">
+							<i class="fa fa-ban"></i> ${__("Not Repairable")}
+						</button>
 						<a href="/app/service-request/${encodeURIComponent(d.name)}" target="_blank" class="btn btn-xs btn-default" title="${__("Open Full SR")}">
 							<i class="fa fa-external-link"></i>
 						</a>
@@ -1770,5 +1774,158 @@ class GoFixOpsHub {
 	_refresh_all() {
 		this._load_queue();
 		if (this.selectedSR) this._load_detail(this.selectedSR);
+	}
+
+	/* ── Not Repairable Flow ─────────────────────────────────────────── */
+	_bind_not_repairable(d) {
+		const self = this;
+		// Hide for terminal states
+		if (["done", "closed", "draft"].includes(d.ops_stage)) {
+			this.parent.find(".goh-not-repairable-btn").hide();
+			return;
+		}
+		this.parent.find(".goh-not-repairable-btn").on("click", () => {
+			const dlg = new frappe.ui.Dialog({
+				title: __("Mark Not Repairable"),
+				fields: [
+					{
+						fieldname: "status", label: __("Status"), fieldtype: "Select",
+						options: "Not Repairable\nBER", default: "Not Repairable", reqd: 1,
+						description: __("BER = Beyond Economical Repair (repair cost exceeds device value)")
+					},
+					{
+						fieldname: "reason", label: __("Reason"), fieldtype: "Small Text", reqd: 1,
+						description: __("Why is the device not repairable? This will be shown on the customer receipt.")
+					},
+				],
+				primary_action_label: __("Confirm — Not Repairable"),
+				primary_action: v => {
+					dlg.disable_primary_action();
+					frappe.xcall(`${API}.mark_not_repairable`, {
+						sr_name: d.name, status: v.status, reason: v.reason,
+					}).then(r => {
+						dlg.hide();
+						frappe.show_alert({
+							message: __("Marked as {0}", [v.status]), indicator: "orange",
+						});
+						if (r.needs_spare_recovery && r.pending_spares.length) {
+							self._show_spare_recovery_dialog(d.name, r.pending_spares);
+						} else {
+							self._refresh_all();
+						}
+					}).catch(() => dlg.enable_primary_action());
+				},
+			});
+			dlg.show();
+		});
+	}
+
+	_show_spare_recovery_dialog(sr_name, spares) {
+		const self = this;
+		const esc = frappe.utils.escape_html;
+		const DISPOSITIONS = [
+			{ value: "Good - Back to Stock", label: __("Good → Back to Stock") },
+			{ value: "Faulty - Supplier Return", label: __("Faulty → Supplier Return") },
+			{ value: "Damaged by Technician", label: __("Damaged → Damaged Stock") },
+		];
+		const opts = DISPOSITIONS.map(d => `<option value="${d.value}">${d.label}</option>`).join("");
+
+		const rows = spares.map(sp => `
+			<tr data-spu="${esc(sp.name)}">
+				<td>${esc(sp.item_name || sp.spare_part_item)}</td>
+				<td class="text-center">${sp.qty_used}</td>
+				<td>
+					<select class="form-control input-xs goh-recovery-disp" data-spu="${esc(sp.name)}">
+						<option value="">${__("— Select —")}</option>
+						${opts}
+					</select>
+				</td>
+				<td>
+					<input class="form-control input-xs goh-recovery-remarks" data-spu="${esc(sp.name)}" placeholder="${__("Remarks")}">
+				</td>
+				<td class="text-center goh-recovery-status">
+					<span class="text-warning"><i class="fa fa-clock-o"></i></span>
+				</td>
+			</tr>
+		`).join("");
+
+		const dlg = new frappe.ui.Dialog({
+			title: __("⚠ Spare Recovery Required"),
+			size: "large",
+			fields: [{
+				fieldname: "html", fieldtype: "HTML",
+				options: `
+					<div class="mb-3 text-muted small">
+						${__("These consumed spares must be recovered before returning the device. Select a disposition for each spare.")}
+					</div>
+					<table class="table table-sm" id="goh-recovery-table">
+						<thead><tr>
+							<th>${__("Part")}</th>
+							<th class="text-center" style="width:60px">${__("Qty")}</th>
+							<th style="width:220px">${__("Disposition")}</th>
+							<th>${__("Remarks")}</th>
+							<th class="text-center" style="width:50px"></th>
+						</tr></thead>
+						<tbody>${rows}</tbody>
+					</table>
+				`,
+			}],
+			primary_action_label: __("Recover All"),
+			primary_action: () => {
+				const entries = [];
+				let valid = true;
+				dlg.$wrapper.find("#goh-recovery-table tbody tr").each(function () {
+					const spu = $(this).data("spu");
+					const disp = $(this).find(".goh-recovery-disp").val();
+					const remarks = $(this).find(".goh-recovery-remarks").val();
+					if (!disp) {
+						$(this).find(".goh-recovery-disp").css("border-color", "red");
+						valid = false;
+					} else {
+						$(this).find(".goh-recovery-disp").css("border-color", "");
+					}
+					entries.push({ spu, disp, remarks });
+				});
+				if (!valid) {
+					frappe.show_alert({ message: __("Select a disposition for every spare."), indicator: "orange" });
+					return;
+				}
+				dlg.disable_primary_action();
+				self._process_spare_recoveries(sr_name, entries, dlg, 0);
+			},
+			secondary_action_label: __("Skip for Now"),
+			secondary_action: () => {
+				dlg.hide();
+				frappe.show_alert({
+					message: __("Spares not recovered yet. You can recover them later from the Service Request."),
+					indicator: "yellow",
+				});
+				self._refresh_all();
+			},
+		});
+		dlg.show();
+	}
+
+	_process_spare_recoveries(sr_name, entries, dlg, idx) {
+		if (idx >= entries.length) {
+			dlg.hide();
+			frappe.show_alert({ message: __("All spares recovered!"), indicator: "green" });
+			this._refresh_all();
+			return;
+		}
+		const entry = entries[idx];
+		const statusCell = dlg.$wrapper.find(`tr[data-spu="${entry.spu}"] .goh-recovery-status`);
+		statusCell.html('<i class="fa fa-spinner fa-spin text-muted"></i>');
+
+		frappe.xcall(`${API}.recover_spare_from_ops_hub`, {
+			sr_name, spu_name: entry.spu, disposition: entry.disp, remarks: entry.remarks || "",
+		}).then(() => {
+			statusCell.html('<i class="fa fa-check text-success"></i>');
+			this._process_spare_recoveries(sr_name, entries, dlg, idx + 1);
+		}).catch(e => {
+			statusCell.html('<i class="fa fa-times text-danger"></i>');
+			frappe.show_alert({ message: __("Recovery failed for spare: {0}", [e.message || e]), indicator: "red" });
+			this._process_spare_recoveries(sr_name, entries, dlg, idx + 1);
+		});
 	}
 }

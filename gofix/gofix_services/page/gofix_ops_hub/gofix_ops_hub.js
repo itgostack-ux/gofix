@@ -197,9 +197,47 @@ class GoFixOpsHub {
 			return;
 		}
 
-		container.html(this.queue.map(sr => this._queue_card(sr)).join(""));
+		// Stage count bar with click-to-list
+		const stageCounts = {};
+		this.queue.forEach(sr => { stageCounts[sr.ops_stage] = (stageCounts[sr.ops_stage] || 0) + 1; });
 
-		// Bind clicks
+		const STAGE_LIST_FILTERS = {
+			analysis:  { decision: "Accepted" },
+			confirm:   { decision: "Accepted" },
+			solutions: { decision: "Accepted" },
+			assign:    { decision: "Accepted" },
+			repair:    { decision: "In Service" },
+			qc:        { decision: "Completed" },
+			invoice:   { decision: "Invoiced" },
+			rework:    { decision: "In Service" },
+			done:      { decision: ["in", ["Invoiced", "Delivered"]] },
+			closed:    { decision: "Delivered" },
+		};
+
+		const pillsHTML = [...STAGES, { key: "rework", label: "Rework", color: "#ef4444" }, { key: "done", label: "Done", color: "#059669" }]
+			.filter(s => stageCounts[s.key])
+			.map(s => `<span class="goh-stage-pill" data-stage="${s.key}"
+				style="cursor:pointer;display:inline-flex;align-items:center;gap:3px;padding:2px 8px;
+				border-radius:10px;font-size:11px;background:${s.color}22;color:${s.color};border:1px solid ${s.color}44;"
+				title="${__("Open in List View")}">
+				${s.label}: <b>${stageCounts[s.key]}</b> <i class="fa fa-external-link" style="font-size:9px;opacity:0.6;"></i>
+			</span>`).join("");
+
+		const countBar = pillsHTML
+			? `<div class="goh-stage-counts" style="display:flex;flex-wrap:wrap;gap:5px;padding:6px 8px;border-bottom:1px solid var(--border-color);">${pillsHTML}</div>`
+			: "";
+
+		container.html(countBar + this.queue.map(sr => this._queue_card(sr)).join(""));
+
+		// Bind stage pill clicks → open SR list
+		container.find(".goh-stage-pill").on("click", (e) => {
+			e.stopPropagation();
+			const stage = $(e.currentTarget).data("stage");
+			const f = STAGE_LIST_FILTERS[stage] || {};
+			frappe.set_route("List", "Service Request", f);
+		});
+
+		// Bind queue card clicks
 		container.find(".goh-q-card").on("click", (e) => {
 			const name = $(e.currentTarget).data("sr");
 			this._select_ticket(name);

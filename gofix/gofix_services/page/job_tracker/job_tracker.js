@@ -148,11 +148,14 @@ const name = $(e.currentTarget).closest('.jt-card').data('name');
 if (name) this._open_drawer(name);
 });
 
-// Summary pill click → scroll to column (if visible)
+// Summary pill click → open SR list with that status filter
 this.parent.find('.jt-sum-pill').on('click', e => {
 const status = $(e.currentTarget).data('status');
-const col = this.parent.find(`.jt-col-body[data-status="${CSS.escape(status)}"]`).closest('.jt-col');
-if (col.length) col[0].scrollIntoView({ behavior: 'smooth', inline: 'center' });
+const filters = { decision: status };
+if (status === 'Rejected') {
+filters.repairability_status = ['in', ['Not Repairable', 'BER']];
+}
+frappe.set_route('List', 'Service Request', filters);
 });
 }
 

@@ -97,6 +97,18 @@ class StoreQueue {
 			{ key: "not_repairable", label: "Not Repairable", color: "red" },
 		];
 
+		const STAGE_LIST_FILTERS = {
+			"new_request":       { decision: "Draft" },
+			"awaiting_analysis": { decision: "Accepted", analysis_confirmed: 0 },
+			"awaiting_approval": { decision: "Accepted", estimate_approval_pending: 1 },
+			"approved":          { decision: "Accepted", customer_confirmed: 1 },
+			"in_repair":         { decision: "In Service" },
+			"qc":                { decision: "Completed" },
+			"ready_invoice":     { decision: "Completed" },
+			"ready_delivery":    { decision: "Invoiced" },
+			"not_repairable":    { decision: "Rejected", repairability_status: ["in", ["Not Repairable", "BER"]] },
+		};
+
 		const bar = this.wrapper.find(".sq-summary-bar");
 		bar.html(`
 			<div class="sq-summary" style="display:flex;gap:8px;flex-wrap:wrap;padding:10px 0;">
@@ -109,6 +121,9 @@ class StoreQueue {
 						background:var(--bg-${s.color}, #eee);font-size:12px;
 						border:${this.stage_filter === s.key ? "2px solid var(--primary)" : "1px solid #ddd"};">
 						${s.label}: <b>${summary[s.key] || 0}</b>
+						<a class="sq-open-list" data-stage="${s.key}" href="#"
+						   style="margin-left:4px;opacity:0.5;font-size:11px;"
+						   title="${__("Open in List View")}"><i class="fa fa-external-link"></i></a>
 					</div>
 				`
 					)
@@ -124,8 +139,17 @@ class StoreQueue {
 		`);
 
 		bar.find(".sq-badge").on("click", (e) => {
+			if ($(e.target).closest(".sq-open-list").length) return;
 			this.stage_filter = $(e.currentTarget).data("stage");
 			this.load_queue();
+		});
+
+		bar.find(".sq-open-list").on("click", (e) => {
+			e.preventDefault();
+			e.stopPropagation();
+			const stage = $(e.currentTarget).data("stage");
+			const f = STAGE_LIST_FILTERS[stage] || {};
+			frappe.set_route("List", "Service Request", f);
 		});
 	}
 

@@ -110,7 +110,7 @@ class ServiceHub {
 		</div>`;
 		const nodes = steps.map((s, i) => {
 			const node = `
-				<div class="hub-flow-node" data-step="${s.key}">
+				<div class="hub-flow-node" data-step="${s.key}" style="cursor:pointer">
 					<div class="hub-flow-badge" style="background:${s.color}">${s.count}</div>
 					<div class="hub-flow-meta">
 						<i class="fa fa-${s.icon}"></i>
@@ -126,6 +126,25 @@ class ServiceHub {
 				<div class="hub-flow-wrap"><div class="hub-flow">${nodes}</div></div>
 			</div>
 		`);
+		this._bind_pipeline_clicks();
+	}
+
+	_bind_pipeline_clicks() {
+		const FILTERS = {
+			"draft":          { decision: "Draft" },
+			"accepted":       { decision: "Accepted" },
+			"in_service":     { decision: "In Service" },
+			"completed":      { decision: "Completed" },
+			"not_repairable": { decision: "Rejected", repairability_status: ["in", ["Not Repairable", "BER"]] },
+			"delivered":      { decision: "Delivered" },
+			"invoiced":       { decision: "Invoiced" },
+		};
+		this.$root.find(".hub-flow-node").on("click", function () {
+			const key = $(this).data("step");
+			if (FILTERS[key]) {
+				frappe.set_route("List", "Service Request", FILTERS[key]);
+			}
+		});
 	}
 
 	_render_kpis(kpis) {
@@ -257,7 +276,7 @@ class ServiceHub {
 		</tr></thead><tbody>${rows.map((r) => `<tr>
 			<td>${this._lnk("Service Request", r.name)}</td>
 			<td>${r.customer_name || r.customer || ""}</td>
-			<td>${r.device_item || ""}</td>
+			<td>${r.device_item_name || r.device_item || ""}</td>
 			<td>${r.issue_category || ""}</td>
 			<td>${r.priority || "-"}</td>
 			<td>${frappe.datetime.str_to_user(r.creation)}</td>
@@ -273,7 +292,7 @@ class ServiceHub {
 		</tr></thead><tbody>${rows.map((r) => `<tr>
 			<td>${this._lnk("Service Request", r.name)}</td>
 			<td>${r.customer_name || r.customer || ""}</td>
-			<td>${r.device_item || ""}</td>
+			<td>${r.device_item_name || r.device_item || ""}</td>
 			<td>${r.brand || ""}</td>
 			<td>${r.technician || "-"}</td>
 			<td>${r.days_in_service || "-"}</td>
@@ -288,7 +307,7 @@ class ServiceHub {
 		</tr></thead><tbody>${rows.map((r) => `<tr>
 			<td>${this._lnk("Service Request", r.name)}</td>
 			<td>${r.customer_name || r.customer || ""}</td>
-			<td>${r.device_item || ""}</td>
+			<td>${r.device_item_name || r.device_item || ""}</td>
 			<td>${r.completed_on ? frappe.datetime.str_to_user(r.completed_on) : "-"}</td>
 			<td class="text-right">${frappe.format(r.estimated_cost || 0, {fieldtype:"Currency"})}</td>
 		</tr>`).join("")}</tbody></table></div>`;
@@ -302,7 +321,7 @@ class ServiceHub {
 		</tr></thead><tbody>${rows.map((r) => `<tr>
 			<td>${this._lnk("Service Request", r.name)}</td>
 			<td>${r.customer_name || r.customer || ""}</td>
-			<td>${r.device_item || ""}</td>
+			<td>${r.device_item_name || r.device_item || ""}</td>
 			<td>${r.expected_completion_date ? frappe.datetime.str_to_user(r.expected_completion_date) : "-"}</td>
 			<td class="text-danger">${r.days_overdue || "-"}</td>
 			<td>${this._badge(r.decision || r.status)}</td>
@@ -343,7 +362,7 @@ class ServiceHub {
 		</tr></thead><tbody>${rows.map((r) => `<tr>
 			<td>${this._lnk('Service Request', r.name)}</td>
 			<td>${r.customer_name || r.customer || ''}</td>
-			<td>${r.device_item || ''}</td>
+			<td>${r.device_item_name || r.device_item || ''}</td>
 			<td>${this._badge(r.repairability_status || 'Rejected')}</td>
 			<td>${r.rejection_reason || '-'}</td>
 			<td class="text-center">${cint(r.pending_spares) ? '<span class="text-danger"><i class="fa fa-exclamation-triangle"></i> ' + r.pending_spares + '</span>' : '<i class="fa fa-check text-success"></i>'}</td>

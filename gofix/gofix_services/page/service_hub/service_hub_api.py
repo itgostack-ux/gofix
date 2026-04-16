@@ -132,6 +132,7 @@ def get_service_hub_data(company=None, store=None, from_date=None, to_date=None)
     # ── Detail tables ──
     pending_intake = frappe.db.sql(
         f"""SELECT sr.name, sr.customer_name, sr.customer, sr.device_item,
+                   sr.device_item_name,
                    sr.issue_category, sr.priority, sr.creation, sr.decision, sr.status
             FROM `tabService Request` sr
             WHERE sr.decision = 'Draft' {co} {wh} {dc('sr.creation')}
@@ -140,6 +141,7 @@ def get_service_hub_data(company=None, store=None, from_date=None, to_date=None)
 
     in_service = frappe.db.sql(
         f"""SELECT sr.name, sr.customer_name, sr.customer, sr.device_item,
+                   sr.device_item_name,
                    sr.brand, sr.decision, sr.status,
                    DATEDIFF(%(today)s, sr.creation) AS days_in_service,
                    (SELECT ja.service_engineer FROM `tabJob Assignment` ja
@@ -151,6 +153,7 @@ def get_service_hub_data(company=None, store=None, from_date=None, to_date=None)
 
     ready_delivery = frappe.db.sql(
         f"""SELECT sr.name, sr.customer_name, sr.customer, sr.device_item,
+                   sr.device_item_name,
                    sr.modified AS completed_on, sr.estimated_cost
             FROM `tabService Request` sr
             WHERE sr.decision = 'Completed' {co} {wh}
@@ -159,6 +162,7 @@ def get_service_hub_data(company=None, store=None, from_date=None, to_date=None)
 
     overdue = frappe.db.sql(
         f"""SELECT sr.name, sr.customer_name, sr.customer, sr.device_item,
+                   sr.device_item_name,
                    sr.expected_completion_date, sr.decision, sr.status,
                    DATEDIFF(%(today)s, sr.expected_completion_date) AS days_overdue
             FROM `tabService Request` sr
@@ -186,6 +190,7 @@ def get_service_hub_data(company=None, store=None, from_date=None, to_date=None)
     # Not Repairable detail table
     not_repairable = frappe.db.sql(
         f"""SELECT sr.name, sr.customer_name, sr.customer, sr.device_item,
+                   sr.device_item_name,
                    sr.repairability_status, sr.rejection_reason,
                    sr.modified AS rejected_on,
                    (SELECT COUNT(*) FROM `tabSpare Parts Usage` spu

@@ -985,15 +985,30 @@ class GoFixOpsHub {
 		// Spare parts — separate active and damaged
 		const activeSpares = (d.spare_lines || []).filter(sp => sp.status !== "Damaged");
 		const damagedSpares = (d.spare_lines || []).filter(sp => sp.status === "Damaged");
+		const awaitingCount = (d.spare_lines || []).filter(sp => sp.status === "Awaiting Procurement").length;
 
-		const spareRows = activeSpares.map(sp => `
+		const spare_badge = (st) => {
+			const map = {
+				"Reserved": "badge-blue", "Consumed": "badge-green", "Issued": "badge-blue",
+				"Awaiting Procurement": "badge-orange", "Pending": "badge-muted", "Returned": "badge-grey",
+			};
+			return `<span class="goh-badge ${map[st] || "badge-muted"}">${__(st)}</span>`;
+		};
+
+		const spareRows = activeSpares.map(sp => {
+			const removable = ["Reserved", "Awaiting Procurement", "Pending"].includes(sp.status);
+			const actionBtn = removable
+				? `<button class="btn btn-xs btn-outline-secondary goh-spare-remove" data-row="${esc(sp.name)}" title="${__("Remove")}"><i class="fa fa-times"></i></button>`
+				: `<button class="btn btn-xs btn-outline-danger goh-spare-damage" data-row="${esc(sp.name)}" title="${__("Mark Damaged")}"><i class="fa fa-exclamation-triangle"></i></button>`;
+			return `
 			<tr data-spare-row="${esc(sp.name)}">
 				<td>${esc(sp.item_name || sp.spare_item)}</td>
 				<td class="text-center">${sp.qty} ${esc(sp.uom || "")}</td>
 				<td class="text-right">₹${format_number(sp.rate)}</td>
-				<td class="text-center"><button class="btn btn-xs btn-outline-danger goh-spare-damage" data-row="${esc(sp.name)}" title="${__("Mark Damaged")}"><i class="fa fa-exclamation-triangle"></i></button></td>
-			</tr>
-		`).join("");
+				<td class="text-center">${spare_badge(sp.status)}</td>
+				<td class="text-center">${actionBtn}</td>
+			</tr>`;
+		}).join("");
 
 		const damagedRows = damagedSpares.map(sp => `
 			<tr style="opacity:0.6; text-decoration:line-through">
@@ -1001,8 +1016,9 @@ class GoFixOpsHub {
 				<td class="text-center">${sp.qty} ${esc(sp.uom || "")}</td>
 				<td class="text-right">₹${format_number(sp.rate)}</td>
 				<td class="text-center"><span class="goh-badge badge-red">${__("Damaged")}</span></td>
+				<td></td>
 			</tr>
-			<tr style="opacity:0.6"><td colspan="4" class="text-danger small"><i class="fa fa-comment"></i> ${esc(sp.remarks || "")}</td></tr>
+			<tr style="opacity:0.6"><td colspan="5" class="text-danger small"><i class="fa fa-comment"></i> ${esc(sp.remarks || "")}</td></tr>
 		`).join("");
 
 		// Technician info
@@ -1044,13 +1060,14 @@ class GoFixOpsHub {
 				<div class="goh-section-title">
 					<i class="fa fa-cogs"></i> ${__("Spare Parts")}
 					<button class="btn btn-xs btn-default ml-2" id="goh-add-spare-btn"><i class="fa fa-plus"></i> ${__("Add")}</button>
+					${awaitingCount ? `<button class="btn btn-xs btn-warning ml-2" id="goh-raise-mr-btn"><i class="fa fa-shopping-cart"></i> ${__("Raise MR")} (${awaitingCount})</button>` : ""}
 				</div>
 				${spareRows || damagedRows ? `
 					<table class="goh-table">
-						<thead><tr><th>${__("Part")}</th><th class="text-center">${__("Qty")}</th><th class="text-right">${__("Rate")}</th><th class="text-center" style="width:50px"></th></tr></thead>
+						<thead><tr><th>${__("Part")}</th><th class="text-center">${__("Qty")}</th><th class="text-right">${__("Rate")}</th><th class="text-center">${__("Status")}</th><th class="text-center" style="width:50px"></th></tr></thead>
 						<tbody>${spareRows}${damagedRows}</tbody>
 					</table>
-				` : `<p class="text-muted">${__("No spare parts used")}</p>`}
+				` : `<p class="text-muted">${__("No spare parts added")}</p>`}
 			</div>
 
 			${allDone ? `
@@ -1511,21 +1528,74 @@ class GoFixOpsHub {
 			});
 
 			content.find("#goh-add-spare-btn").on("click", () => {
+				const warehouse = d.source_warehouse || "";
 				const dlg = new frappe.ui.Dialog({
 					title: __("Add Spare Part"),
 					fields: [
 						{ fieldname: "spare_item", label: __("Spare Part"), fieldtype: "Link", options: "Item", reqd: 1,
-							get_query: () => ({ filters: { item_group: ["descendants of (inclusive)", "Spare Parts"], has_variants: 0 } }) },
+							get_query: () => ({ filters: { item_group: ["descendants of (inclusive)", "Spare Parts"], has_variants: 0 } }),
+							change: () => {
+								const item = dlg.get_value("spare_item");
+								if (item && warehouse) {
+									frappe.xcall(`${API}.get_spare_availability`, { item_code: item, warehouse })
+										.then(r => {
+											const avail = r.available_qty || 0;
+											const cls = avail > 0 ? "green" : "red";
+											dlg.fields_dict.stock_html.$wrapper.html(
+												`<div class="text-${cls}" style="font-weight:600; margin-bottom:8px">
+													<i class="fa fa-${avail > 0 ? 'check-circle' : 'warning'}"></i>
+													${__("Available in store")}: ${avail}
+													${avail <= 0 ? ` — <span class="text-muted">${__("will be added to procurement cart")}</span>` : ""}
+												</div>`
+											);
+										});
+								} else {
+									dlg.fields_dict.stock_html.$wrapper.html("");
+								}
+							},
+						},
+						{ fieldname: "stock_html", fieldtype: "HTML" },
 						{ fieldname: "qty", label: __("Qty"), fieldtype: "Float", default: 1, reqd: 1 },
 						{ fieldname: "rate", label: __("Rate"), fieldtype: "Currency", default: 0 },
 					],
 					primary_action_label: __("Add"),
 					primary_action: v => {
 						frappe.xcall(`${API}.add_spare_to_ticket`, { sr_name: d.name, spare_item: v.spare_item, qty: v.qty, rate: v.rate || 0 })
-							.then(() => { dlg.hide(); self._load_detail(d.name); });
+							.then(r => {
+								dlg.hide();
+								if (r.status === "Awaiting Procurement") {
+									frappe.show_alert({ message: __("Spare not in stock — added to procurement cart"), indicator: "orange" });
+								} else {
+									frappe.show_alert({ message: __("Spare reserved successfully"), indicator: "green" });
+								}
+								self._load_detail(d.name);
+							});
 					},
 				});
 				dlg.show();
+			});
+
+			// Remove spare (reserved / awaiting procurement)
+			content.on("click", ".goh-spare-remove", function () {
+				const rowName = $(this).data("row");
+				frappe.confirm(__("Remove this spare from the ticket?"), () => {
+					frappe.xcall(`${API}.release_spare_reservation`, { sr_name: d.name, spare_row_name: rowName })
+						.then(() => { self._load_detail(d.name); });
+				});
+			});
+
+			// Raise Material Request
+			content.find("#goh-raise-mr-btn").on("click", () => {
+				frappe.confirm(
+					__("Create a Material Request for all spares awaiting procurement?"),
+					() => {
+						frappe.xcall(`${API}.raise_material_request`, { sr_name: d.name })
+							.then(r => {
+								frappe.show_alert({ message: __("MR {0} created for {1} spare(s)", [r.material_request, r.count]), indicator: "green" });
+								self._load_detail(d.name);
+							});
+					}
+				);
 			});
 
 			content.find("#goh-handoff-btn").on("click", () => {

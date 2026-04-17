@@ -120,23 +120,36 @@ frappe.ui.form.on('Service Request', {
 		frm.set_query('device_item', function() {
 			return {
 				filters: {
-				'item_group': ['in', ['Devices', 'Mobile Phones', 'Laptops', 'Tablets']],
-				'has_variants': 0
-		
+					'item_group': ['in', ['Devices', 'Mobile Phones', 'Laptops', 'Tablets']],
+					'has_variants': 0
+				}
+			};
+		});
+
 		// Filter service items to only show Services
-		frm.fields_dict.service_items.grid.get_field('service_item').get_query = function() {
-			return {
-				filters: {
-				'item_group': ['in', ['Services', 'Repair Services', 'Installation', 'Consultation']],
-				'has_variants': 0
-		
+		frm.fields_dict.service_items && (
+			frm.fields_dict.service_items.grid.get_field('service_item').get_query = function() {
+				return {
+					filters: {
+						'item_group': ['in', ['Services', 'Repair Services', 'Installation', 'Consultation']],
+						'has_variants': 0
+					}
+				};
+			}
+		);
+
 		// Filter spare parts to only show Spare Parts
-		frm.fields_dict.spare_parts.grid.get_field('spare_part_item').get_query = function() {
-			return {
-				filters: {
-				'item_group': ['in', ['Spare Parts', 'Mobile Parts', 'Laptop Parts', 'Tablet Parts']],
-				'has_variants': 0
-		
+		frm.fields_dict.spare_parts && (
+			frm.fields_dict.spare_parts.grid.get_field('spare_part_item').get_query = function() {
+				return {
+					filters: {
+						'item_group': ['in', ['Spare Parts', 'Mobile Parts', 'Laptop Parts', 'Tablet Parts']],
+						'has_variants': 0
+					}
+				};
+			}
+		);
+
 		// Filter serial no based on selected device item
 		frm.set_query('serial_no', function() {
 			if (frm.doc.device_item) {

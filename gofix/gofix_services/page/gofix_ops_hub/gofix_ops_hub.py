@@ -1120,7 +1120,12 @@ def mark_spare_damaged(sr_name, spare_row_name, remarks="") -> dict:
 
 @frappe.whitelist()
 def add_spare_to_ticket(sr_name, spare_item, qty, rate=0, repair_solution=None) -> dict:
-	"""Append a spare part used during repair to the SR spare_lines."""
+	"""Add a spare part to the SR.  Checks warehouse stock first.
+
+	Returns:
+	  {ok: True, status: "Reserved"}       — spare was in stock & reserved
+	  {ok: True, status: "Awaiting Procurement"} — spare NOT in stock, added to cart
+	"""
 	_assert_sr_permission(sr_name, "write")
 
 	if not spare_item or not frappe.db.exists("Item", spare_item):
@@ -1130,7 +1135,7 @@ def add_spare_to_ticket(sr_name, spare_item, qty, rate=0, repair_solution=None) 
 	if qty <= 0:
 		frappe.throw(_("Quantity must be greater than zero."), title=_("Validation Error"))
 
-	item = frappe.db.get_value("Item", spare_item, ["item_name", "stock_uom"], as_dict=True)
+	item = frappe.db.get_value("Item", spare_item, ["item_name", "stock_uom", "is_stock_item"], as_dict=True)
 	rate = flt(rate)
 
 	# Auto-fetch selling price if rate not provided
@@ -1140,6 +1145,15 @@ def add_spare_to_ticket(sr_name, spare_item, qty, rate=0, repair_solution=None) 
 		) or flt(frappe.db.get_value("Item", spare_item, "standard_rate"))
 
 	sr = frappe.get_doc("Service Request", sr_name)
+	warehouse = sr.source_warehouse
+
+	# ── Availability check ──────────────────────────────────────────────
+	avail = _get_spare_availability(spare_item, warehouse)
+	is_stock = cint(item.get("is_stock_item"))
+	in_stock = (avail["available_qty"] >= qty) if is_stock else True
+
+	status = "Reserved" if in_stock else "Awaiting Procurement"
+
 	sr.flags.ignore_validate_update_after_submit = True
 	sr.flags.ignore_mandatory = True
 	sr.append("spare_lines", {
@@ -1150,11 +1164,118 @@ def add_spare_to_ticket(sr_name, spare_item, qty, rate=0, repair_solution=None) 
 		"uom": item.stock_uom or "Nos",
 		"rate": rate,
 		"amount": qty * rate,
-		"status": "Consumed",
+		"status": status,
 	})
 
 	sr.save()
-	return {"ok": True}
+	return {"ok": True, "status": status, "available_qty": avail["available_qty"]}
+
+
+@frappe.whitelist()
+def get_spare_availability(item_code, warehouse) -> dict:
+	"""Public API: return stock availability for a spare + warehouse."""
+	return _get_spare_availability(item_code, warehouse)
+
+
+def _get_spare_availability(item_code, warehouse) -> dict:
+	"""Check available qty for a spare in warehouse, accounting for reservations.
+
+	available_qty = bin.actual_qty − already-reserved-on-other-tickets
+	"""
+	actual_qty = flt(
+		frappe.db.get_value("Bin", {"item_code": item_code, "warehouse": warehouse}, "actual_qty")
+	)
+
+	# Count already reserved across all SRs at this warehouse
+	reserved_qty = flt(frappe.db.sql("""
+		SELECT COALESCE(SUM(sl.qty), 0)
+		FROM `tabSR Spare Line` sl
+		JOIN `tabService Request` sr ON sr.name = sl.parent
+		WHERE sl.spare_item = %(item)s
+		  AND sr.source_warehouse = %(wh)s
+		  AND sl.status = 'Reserved'
+		  AND sl.parenttype = 'Service Request'
+	""", {"item": item_code, "wh": warehouse})[0][0])
+
+	return {
+		"actual_qty": actual_qty,
+		"reserved_qty": reserved_qty,
+		"available_qty": actual_qty - reserved_qty,
+	}
+
+
+@frappe.whitelist()
+def release_spare_reservation(sr_name, spare_row_name) -> dict:
+	"""Release a previously reserved spare (e.g. ticket cancelled, spare no longer needed)."""
+	_assert_sr_permission(sr_name, "write")
+	sr = frappe.get_doc("Service Request", sr_name)
+	sr.flags.ignore_validate_update_after_submit = True
+	sr.flags.ignore_mandatory = True
+
+	for row in sr.spare_lines:
+		if row.name == spare_row_name and row.status in ("Reserved", "Awaiting Procurement", "Pending"):
+			sr.remove(row)
+			sr.save()
+			return {"ok": True}
+
+	frappe.throw(_("Spare line not found or not in a removable state."))
+
+
+@frappe.whitelist()
+def raise_material_request(sr_name) -> dict:
+	"""Raise a single Material Request for all spares on this SR that need procurement.
+
+	Collects all spare_lines with status = 'Awaiting Procurement' and creates one MR
+	linked to the Service Request.
+	"""
+	_assert_sr_permission(sr_name, "write")
+	sr = frappe.get_doc("Service Request", sr_name)
+
+	pending_lines = [sl for sl in sr.spare_lines if sl.status == "Awaiting Procurement"]
+	if not pending_lines:
+		frappe.throw(_("No spares awaiting procurement on this ticket."))
+
+	warehouse = sr.source_warehouse
+	if not warehouse:
+		frappe.throw(_("Source warehouse not set on Service Request."))
+
+	mr = frappe.new_doc("Material Request")
+	mr.material_request_type = "Purchase"
+	mr.company = sr.company or frappe.defaults.get_user_default("Company")
+	mr.service_request = sr_name
+	mr.transaction_date = nowdate()
+	mr.schedule_date = add_days(nowdate(), 3)
+	mr.title = f"Spares for {sr_name} — {sr.customer_name or sr.customer}"
+
+	for sl in pending_lines:
+		mr.append("items", {
+			"item_code": sl.spare_item,
+			"item_name": sl.item_name,
+			"qty": sl.qty,
+			"uom": sl.uom or "Nos",
+			"warehouse": warehouse,
+			"schedule_date": add_days(nowdate(), 3),
+		})
+
+	mr.insert(ignore_permissions=True)
+	mr.submit()
+
+	# Update spare_lines with MR reference
+	sr.flags.ignore_validate_update_after_submit = True
+	sr.flags.ignore_mandatory = True
+	for sl in pending_lines:
+		sl.material_request = mr.name
+	sr.save()
+
+	frappe.msgprint(
+		_("Material Request {0} created for {1} spare(s).").format(
+			f'<a href="/app/material-request/{mr.name}">{mr.name}</a>',
+			len(pending_lines),
+		),
+		title=_("Material Request Created"),
+		indicator="green",
+	)
+	return {"ok": True, "material_request": mr.name, "count": len(pending_lines)}
 
 
 @frappe.whitelist()

@@ -18,7 +18,8 @@
   "amount",
   "section_break_status",
   "status",
-  "remarks"
+  "remarks",
+  "material_request"
  ],
  "fields": [
   {
@@ -104,12 +105,19 @@
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "Status",
-   "options": "Pending\nReserved\nIssued\nConsumed\nReturned\nDamaged"
+   "options": "Pending\nReserved\nIssued\nConsumed\nReturned\nDamaged\nAwaiting Procurement"
   },
   {
    "fieldname": "remarks",
    "fieldtype": "Small Text",
    "label": "Remarks"
+  },
+  {
+   "fieldname": "material_request",
+   "fieldtype": "Link",
+   "label": "Material Request",
+   "options": "Material Request",
+   "read_only": 1
   }
  ],
  "index_web_pages_for_search": 0,

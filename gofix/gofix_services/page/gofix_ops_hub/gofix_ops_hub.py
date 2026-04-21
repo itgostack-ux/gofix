@@ -121,22 +121,22 @@ def get_ticket_queue(warehouse=None, search=None, date_from=None, date_to=None, 
 	if not date_to:
 		date_to = nowdate()
 
-	filters = [
-		["service_date", ">=", date_from],
-		["service_date", "<=", date_to],
-		["service_order", "is", "set"],
-	]
+	# When a search term is supplied, skip date-range / stage / service_order
+	# restrictions so the user can find any SR by name, customer, or serial.
+	if not search:
+		filters = [
+			["service_date", ">=", date_from],
+			["service_date", "<=", date_to],
+			["service_order", "is", "set"],
+		]
 
-	if stage_filter == "active":
-		filters.append(["decision", "in", ["Accepted", "In Service", "Completed", "Invoiced"]])
-	elif stage_filter != "all":
-		filters.append(["decision", "not in", ["Cancelled", "Rejected", "Expired"]])
+		if stage_filter == "active":
+			filters.append(["decision", "in", ["Accepted", "In Service", "Completed", "Invoiced"]])
+		elif stage_filter != "all":
+			filters.append(["decision", "not in", ["Cancelled", "Rejected", "Expired"]])
 
-	if warehouse:
-		filters.append(["source_warehouse", "=", warehouse])
-
-	if search:
-		filters.append(["name", "like", f"%{search}%"])
+		if warehouse:
+			filters.append(["source_warehouse", "=", warehouse])
 
 	extra_fields = []
 	# analysis_confirmed and customer_confirmed are custom fields
@@ -144,19 +144,41 @@ def get_ticket_queue(warehouse=None, search=None, date_from=None, date_to=None, 
 		if frappe.db.has_column("Service Request", cf):
 			extra_fields.append(cf)
 
-	sr_list = frappe.get_list(
-		"Service Request",
-		filters=filters,
-		fields=[
-			"name", "customer_name", "customer", "contact_number",
-			"device_item_name", "device_item", "serial_no", "brand",
-			"issue_category", "decision", "priority",
-			"service_date", "expected_completion_date",
-			"source_warehouse", "service_order",
-		] + extra_fields,
-		order_by="service_date asc, priority desc",
-		limit=150,
-	)
+	all_fields = [
+		"name", "customer_name", "customer", "contact_number",
+		"device_item_name", "device_item", "serial_no", "brand",
+		"issue_category", "decision", "priority",
+		"service_date", "expected_completion_date",
+		"source_warehouse", "service_order",
+	] + extra_fields
+
+	if search:
+		# Use SQL OR to match name, customer_name, or serial_no
+		wh_clause = "AND source_warehouse = %(warehouse)s" if warehouse else ""
+		sr_list = frappe.db.sql(
+			f"""
+			SELECT {", ".join(f"`tab{'Service Request'}`.`{f}`" for f in all_fields)}
+			FROM `tabService Request`
+			WHERE (
+				`name` LIKE %(s)s
+				OR `customer_name` LIKE %(s)s
+				OR `serial_no` LIKE %(s)s
+				OR `contact_number` LIKE %(s)s
+			) {wh_clause}
+			ORDER BY service_date ASC, priority DESC
+			LIMIT 100
+			""",
+			{"s": f"%{search}%", "warehouse": warehouse or ""},
+			as_dict=True,
+		)
+	else:
+		sr_list = frappe.get_list(
+			"Service Request",
+			filters=filters,
+			fields=all_fields,
+			order_by="service_date asc, priority desc",
+			limit=150,
+		)
 
 	if not sr_list:
 		return []

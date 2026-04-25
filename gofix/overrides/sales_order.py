@@ -108,8 +108,7 @@ class CustomSalesOrder(SalesOrder):
 					if not any(role in user_roles for role in allowed_roles):
 						continue  # Try next transition
 				
-				# Check condition script — GF-3 fix: use declarative matcher first,
-				# fall back to restricted safe_eval for complex expressions
+				# Check condition script — declarative matcher only (no safe_eval)
 				if transition.condition_script:
 					try:
 						condition_met = self._evaluate_transition_condition(
@@ -170,19 +169,19 @@ class CustomSalesOrder(SalesOrder):
 		).format(from_state, to_state))
 
 	def _evaluate_transition_condition(self, condition_script):
-		"""GF-3 fix: Evaluate a transition condition using declarative field matching.
+		"""Evaluate a transition condition using declarative field matching only.
 
 		Supports simple expressions like:
 		  doc.status == "Completed"
 		  doc.grand_total > 5000
 		  doc.qc_status == "Passed" and doc.repair_outcome != "Not Repairable"
 
-		Falls back to restricted safe_eval for complex expressions.
+		Complex Python expressions are rejected — configure simpler conditions.
 		"""
 		import re
 		import operator
 
-		# Try declarative parsing first — simple field comparisons joined by and/or
+		# Declarative-only parsing — simple field comparisons joined by and/or
 		simple_pattern = re.compile(
 			r'doc\.(\w+)\s*(==|!=|>=|<=|>|<)\s*(?:"([^"]*)"|\'([^\']*)\'|(\d+(?:\.\d+)?))'
 		)
@@ -226,18 +225,13 @@ class CustomSalesOrder(SalesOrder):
 					result = result or results[i + 1]
 			return result
 
-		# Fallback: restricted safe_eval for complex expressions
-		return frappe.safe_eval(
-			condition_script,
-			eval_globals={"doc": self, "frappe": frappe._dict({
-				"utils": frappe._dict({
-					"flt": frappe.utils.flt,
-					"cint": frappe.utils.cint,
-					"getdate": frappe.utils.getdate,
-					"nowdate": frappe.utils.nowdate,
-				}),
-			})},
-			eval_locals={},
+		# Complex expressions are not supported — only declarative field comparisons
+		# are allowed (e.g. doc.status == "Completed" and doc.grand_total > 0).
+		frappe.throw(
+			_("Workflow condition {0!r} uses unsupported syntax. "
+			  "Only simple field comparisons are allowed: "
+			  "doc.field_name == 'value' (joined by and/or).").format(condition_script),
+			title=_("Invalid Workflow Condition"),
 		)
 
 	def on_update(self):
@@ -329,15 +323,19 @@ class CustomSalesOrder(SalesOrder):
 				title=_("Critical QC Failure"),
 			)
 
-		# GF-4 fix: Allow "N/A" as a valid result so technicians can skip irrelevant checks
-		incomplete = [row.check_name for row in checklist
-					  if not row.result or (hasattr(row, 'is_mandatory') and row.is_mandatory
-											and str(row.result).strip().upper() == "N/A")]
+		# N/A is a valid result for all items — technicians use it to mark checks
+		# that do not apply to this repair (e.g. camera check on a screen-only repair).
+		# Only truly blank results indicate an unanswered checklist item.
+		incomplete = [
+			row.check_name for row in checklist
+			if not row.result or str(row.result).strip() == ""
+		]
 		if incomplete:
 			frappe.throw(
 				_("QC Checklist incomplete. The following checks have no result: {0}").format(
 					", ".join(incomplete)
-				)
+				),
+				title=_("QC Incomplete"),
 			)
 
 

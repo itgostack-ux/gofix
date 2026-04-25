@@ -145,12 +145,24 @@ class SparePartsUsage(Document):
 			)
 
 	def on_submit(self):
-		"""On submit: create stock entry only if consumed."""
+		"""On submit: create stock entry only if consumed and approved."""
 		if self.part_status == "Consumed":
+			# High-value parts require manager approval before stock is debited
+			if self.get("requires_approval") and self.get("approval_status") not in (
+				"Approved",
+				"Not Required",
+			):
+				frappe.throw(
+					_("Spare part {0} requires manager approval before consumption. "
+					  "Current approval status: {1}.").format(
+						frappe.bold(self.spare_part_item),
+						frappe.bold(self.get("approval_status") or "Pending"),
+					),
+					title=_("Approval Required"),
+				)
 			self.create_stock_entry()
 		self.update_spare_parts_count()
 		self.sync_to_service_request()
-		# GF-14 fix: Create audit trail for parts consumption
 		self._log_parts_consumption()
 
 	def sync_to_service_request(self):

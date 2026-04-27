@@ -197,14 +197,11 @@ frappe.ui.form.on('Service Request', {
 	},
 	
 	device_item: function(frm) {
-		// Fetch device item details
+		// Fetch device item details — use server API so variant brand falls back to template
 		if (frm.doc.device_item) {
 			frappe.call({
-				method: 'frappe.client.get',
-				args: {
-					doctype: 'Item',
-					name: frm.doc.device_item
-				},
+				method: 'gofix.gofix_services.doctype.service_request.service_request.get_device_item_details',
+				args: { item_code: frm.doc.device_item },
 				callback: function(r) {
 					if (r.message) {
 						frm.set_value('device_item_name', r.message.item_name);

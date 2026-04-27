@@ -219,10 +219,22 @@ class QuickIntake {
 		this._setup_link_field("#qi-device-item", "Item", (item) => {
 			w.find("#qi-device-item-code").val(item.value);
 			w.find("#qi-device-item").val(item.description || item.value);
-			w.find("#qi-brand").val(item.brand || "");
 			self.form_data.device_item = item.value;
 			self.form_data.device_item_name = item.description || item.value;
-			self.form_data.brand = item.brand || "";
+
+			if (item.brand) {
+				w.find("#qi-brand").val(item.brand);
+				self.form_data.brand = item.brand;
+			} else {
+				// Variant items may not carry brand — fetch from server with template fallback
+				frappe.xcall(
+					'gofix.gofix_services.doctype.service_request.service_request.get_device_item_details',
+					{ item_code: item.value }
+				).then(details => {
+					w.find("#qi-brand").val(details.brand || "");
+					self.form_data.brand = details.brand || "";
+				});
+			}
 		});
 
 		this._setup_link_field("#qi-issue-category", "Issue Category", (item) => {
@@ -354,6 +366,8 @@ class QuickIntake {
 			this.form_data.contact_number = row.data("phone");
 			this.form_data.email = row.data("email");
 			el.hide();
+			// Show classification badges
+			this._show_customer_classification(row.data("customer"));
 		});
 	}
 
@@ -387,6 +401,32 @@ class QuickIntake {
 			this.show_success(result.name);
 		} catch (e) {
 			this.wrapper.find("#qi-submit").prop("disabled", false).html('<i class="fa fa-check"></i> Create Service Request');
+		}
+	}
+
+	async _show_customer_classification(customer) {
+		try {
+			const clf = await frappe.xcall(`${QI_API}.get_customer_classification`, { customer });
+			const ct_color = clf.customer_type === 'B2B' ? '#3b82f6' : '#64748b';
+			const vt_colors = { 'New': '#3b82f6', 'Regular': '#16a34a', 'VIP': '#7c3aed' };
+			const vt_color = vt_colors[clf.visit_type] || '#64748b';
+			const prior_label = clf.prior_count === 0
+				? 'First visit'
+				: `${clf.prior_count} prior visit${clf.prior_count > 1 ? 's' : ''}`;
+
+			this.wrapper.find('#qi-customer-badge').html(`
+				<span style="display:inline-block;padding:2px 10px;border-radius:10px;font-size:11px;font-weight:600;
+						background:${ct_color}22;color:${ct_color};border:1px solid ${ct_color}66;margin-right:6px;">
+					${clf.customer_type}
+				</span>
+				<span style="display:inline-block;padding:2px 10px;border-radius:10px;font-size:11px;font-weight:600;
+						background:${vt_color}22;color:${vt_color};border:1px solid ${vt_color}66;margin-right:6px;">
+					${clf.visit_type} Customer
+				</span>
+				<span style="font-size:11px;color:#94a3b8;">${prior_label}</span>
+			`);
+		} catch(e) {
+			// Non-blocking — classification display failure should not prevent intake
 		}
 	}
 

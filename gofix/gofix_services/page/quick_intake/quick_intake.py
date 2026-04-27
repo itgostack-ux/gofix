@@ -1,9 +1,13 @@
 # Copyright (c) 2026, GoFix and contributors
 # Quick Intake — Backend for POS-style rapid walk-in registration
 
+import re
 import frappe
 from frappe import _
 from frappe.utils import today, flt
+
+_GSTIN_RE = re.compile(r'^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$')
+_VIP_THRESHOLD = 10
 
 
 @frappe.whitelist()
@@ -63,7 +67,7 @@ def search_serial(serial_no) -> dict:
 		"found": True,
 		"item_code": sn.item_code,
 		"item_name": sn.item_name,
-		"brand": frappe.db.get_value("Item", sn.item_code, "brand") or "",
+		"brand": _get_brand(sn.item_code),
 		"warranty_status": "Under Warranty" if warranty_info.get("warranty_covered") else "Out of Warranty",
 		"warranty_plan": (warranty_info.get("covering_plan") or {}).get("warranty_plan", ""),
 		"warranty_expiry": str((warranty_info.get("covering_plan") or {}).get("end_date", "")),
@@ -95,6 +99,47 @@ def search_customer(query) -> list:
 		}, fields=["name as customer", "customer_name"], limit=10)
 
 	return results
+
+
+def _get_brand(item_code: str) -> str:
+	"""Return brand for an item, falling back to the variant template's brand."""
+	brand = frappe.db.get_value("Item", item_code, "brand") or ""
+	if not brand:
+		template = frappe.db.get_value("Item", item_code, "variant_of")
+		if template:
+			brand = frappe.db.get_value("Item", template, "brand") or ""
+	return brand
+
+
+@frappe.whitelist()
+def get_customer_classification(customer: str) -> dict:
+	"""Return customer_type (B2B/B2C) and visit_type (New/Regular/VIP) for display.
+
+	Mirrors the logic in ServiceRequest.detect_customer_type() /
+	detect_visit_type() so the POS operator sees the same classification
+	before the SR is saved.
+	"""
+	gstin = frappe.db.get_value("Customer", customer, "gstin") or ""
+	customer_type = "B2B" if _GSTIN_RE.match(gstin.strip().upper()) else "B2C"
+
+	prior_count = frappe.db.count(
+		"Service Request",
+		filters={"customer": customer, "docstatus": ["<", 2]},
+	)
+
+	if prior_count == 0:
+		visit_type = "New"
+	elif prior_count < _VIP_THRESHOLD:
+		visit_type = "Regular"
+	else:
+		visit_type = "VIP"
+
+	return {
+		"customer_type": customer_type,
+		"visit_type": visit_type,
+		"prior_count": prior_count,
+		"gstin": gstin,
+	}
 
 
 @frappe.whitelist()

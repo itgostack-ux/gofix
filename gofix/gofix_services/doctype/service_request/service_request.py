@@ -1555,6 +1555,21 @@ def complete_item_replacement(service_request, replacement_serial_no=None, compl
 	}
 
 @frappe.whitelist()
+def get_device_item_details(item_code: str) -> dict:
+	"""Return item_name and brand for a device item.
+
+	Variant items often don't have 'brand' set directly — it lives only on
+	the template.  This function falls back to the template brand so the
+	Service Request and Quick Intake always show the correct brand.
+	"""
+	item = frappe.get_cached_doc("Item", item_code)
+	brand = item.brand or ""
+	if not brand and item.variant_of:
+		brand = frappe.db.get_value("Item", item.variant_of, "brand") or ""
+	return {"item_name": item.item_name, "brand": brand}
+
+
+@frappe.whitelist()
 def get_warehouse_state(warehouse) -> dict:
 	"""Get state details from warehouse address
 	

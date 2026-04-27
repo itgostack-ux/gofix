@@ -1,0 +1,23 @@
+{
+ "actions": [],
+ "creation": "2026-04-27 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "istable": 1,
+ "field_order": ["item_code","item_name","col1","standard_qty","unit_cost","total_cost"],
+ "fields": [
+  {"fieldname": "item_code",   "fieldtype": "Link",    "label": "Item Code",     "options": "Item",  "reqd": 1, "in_list_view": 1},
+  {"fieldname": "item_name",   "fieldtype": "Data",    "label": "Item Name",     "fetch_from": "item_code.item_name", "read_only": 1, "in_list_view": 1},
+  {"fieldname": "col1",        "fieldtype": "Column Break"},
+  {"fieldname": "standard_qty","fieldtype": "Float",   "label": "Standard Qty",  "reqd": 1, "default": "1", "in_list_view": 1},
+  {"fieldname": "unit_cost",   "fieldtype": "Currency","label": "Unit Cost",     "reqd": 1, "in_list_view": 1},
+  {"fieldname": "total_cost",  "fieldtype": "Currency","label": "Total Cost",    "read_only": 1, "in_list_view": 1}
+ ],
+ "idx": 0,
+ "links": [],
+ "modified": "2026-04-27 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "GoFix Services",
+ "name": "GoFix Repair Cost Template Item",
+ "owner": "Administrator"
+}

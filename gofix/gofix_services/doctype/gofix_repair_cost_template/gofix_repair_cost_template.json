@@ -1,0 +1,41 @@
+{
+ "actions": [],
+ "autoname": "field:template_name",
+ "creation": "2026-04-27 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "template_name","repair_category","col_break_1","device_type","is_active",
+  "section_break_cost","estimated_parts_cost","estimated_labor_cost_ph2",
+  "section_break_items","items"
+ ],
+ "fields": [
+  {"fieldname": "template_name",         "fieldtype": "Data",     "label": "Template Name",         "reqd": 1, "in_list_view": 1},
+  {"fieldname": "repair_category",       "fieldtype": "Data",     "label": "Repair Category",       "in_list_view": 1, "in_standard_filter": 1},
+  {"fieldname": "col_break_1",           "fieldtype": "Column Break"},
+  {"fieldname": "device_type",           "fieldtype": "Data",     "label": "Device Type",           "in_list_view": 1, "in_standard_filter": 1},
+  {"fieldname": "is_active",             "fieldtype": "Check",    "label": "Is Active",             "default": "1"},
+  {"fieldname": "section_break_cost",    "fieldtype": "Section Break", "label": "Cost Estimates"},
+  {"fieldname": "estimated_parts_cost",  "fieldtype": "Currency", "label": "Estimated Parts Cost"},
+  {"fieldname": "estimated_labor_cost_ph2","fieldtype": "Currency","label": "Estimated Labour Cost (Phase 2)"},
+  {"fieldname": "section_break_items",   "fieldtype": "Section Break", "label": "Parts List"},
+  {"fieldname": "items",                 "fieldtype": "Table",    "label": "Parts",                 "options": "GoFix Repair Cost Template Item"}
+ ],
+ "idx": 0,
+ "is_submittable": 0,
+ "links": [],
+ "modified": "2026-04-27 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "GoFix Services",
+ "name": "GoFix Repair Cost Template",
+ "naming_rule": "By fieldname",
+ "owner": "Administrator",
+ "permissions": [
+  {"role": "System Manager", "read": 1, "write": 1, "create": 1, "delete": 1, "print": 1, "share": 1},
+  {"role": "All",            "read": 1}
+ ],
+ "sort_field": "template_name",
+ "sort_order": "ASC",
+ "title_field": "template_name",
+ "track_changes": 1
+}

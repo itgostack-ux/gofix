@@ -16,6 +16,7 @@ class ServiceRequest(Document):
 	
 	def validate(self):
 		self.detect_customer_type()
+		self.detect_visit_type()
 		self.check_open_requests()
 		self.fetch_customer_details()
 		# Fetch warehouse details - especially state for GST
@@ -155,6 +156,36 @@ class ServiceRequest(Document):
 		"""
 		gstin = (self.gstin or '').strip().upper()
 		self.customer_type = 'B2B' if self._GSTIN_RE.match(gstin) else 'B2C'
+
+	# VIP threshold — customers with this many or more prior service requests
+	_VIP_THRESHOLD = 10
+
+	def detect_visit_type(self):
+		"""Auto-classify customer lifecycle tier (industry-standard CRM segmentation).
+
+		New     — first visit, no prior Service Requests in system.
+		Regular — returning customer (1 – (_VIP_THRESHOLD-1) prior requests).
+		VIP     — high-value loyal customer (_VIP_THRESHOLD+ prior requests).
+
+		This mirrors the 'Customer Classification' concept in SAP SD / Oracle CX /
+		Microsoft Dynamics and is kept separate from customer_type (B2B/B2C) which
+		drives tax treatment.
+		"""
+		if not self.customer:
+			self.visit_type = 'New'
+			return
+
+		prior_count = frappe.db.count(
+			'Service Request',
+			filters={'customer': self.customer, 'name': ['!=', self.name or '']}
+		)
+
+		if prior_count == 0:
+			self.visit_type = 'New'
+		elif prior_count < self._VIP_THRESHOLD:
+			self.visit_type = 'Regular'
+		else:
+			self.visit_type = 'VIP'
 
 	def check_open_requests(self):
 		"""Check for open service requests for this customer"""
@@ -816,18 +847,12 @@ class ServiceRequest(Document):
 					frappe.throw(_("Referral Code has expired on {0}").format(
 						frappe.format(self.referral_expiry_date, {"fieldtype": "Date"})))
 			
-			# Referral codes typically only for new customers
-			if self.customer:
-				prev = frappe.get_all(
-					"Service Request",
-					filters={"customer": self.customer, "name": ["!=", self.name or ""]},
-					limit=1,
+			# Referral codes are for new customers only — warn if returning customer
+			if self.visit_type and self.visit_type != 'New':
+				frappe.msgprint(
+					_('Warning: Referral Code is generally applicable for NEW customers only'),
+					indicator='orange', alert=True,
 				)
-				if prev:
-					frappe.msgprint(
-						_("Warning: Referral Code is generally applicable for NEW customers only"),
-						indicator="orange", alert=True,
-					)
 
 	def validate_mandatory_fields(self):
 		"""Validate mandatory fields based on Delphi requirements - only for submission"""

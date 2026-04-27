@@ -11,6 +11,7 @@
   "customer",
   "customer_name",
   "customer_type",
+  "visit_type",
   "contact_number",
   "alternate_contact",
   "column_break_customer",
@@ -190,9 +191,18 @@
   },
   {
    "fieldname": "customer_type",
-   "fieldtype": "Data",
+   "fieldtype": "Select",
    "label": "Customer Type",
+   "options": "B2B\nB2C",
    "read_only": 1
+  },
+  {
+   "fieldname": "visit_type",
+   "fieldtype": "Select",
+   "label": "Visit Type",
+   "options": "New\nRegular\nVIP",
+   "read_only": 1,
+   "description": "Auto-classified: New = first visit, Regular = returning, VIP = 10+ visits"
   },
   {
    "fieldname": "contact_number",

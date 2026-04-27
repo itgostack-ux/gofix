@@ -423,11 +423,16 @@ function set_status_indicator(frm) {
 		frm.page.set_indicator(__(frm.doc.status), color_map[frm.doc.status] || 'gray');
 	}
 	
-	// Additional indicator for customer type
-	if (frm.doc.customer_type === 'NEW') {
-		frm.dashboard.add_indicator(__('New Customer'), 'blue');
-	} else if (frm.doc.customer_type === 'REGULAR') {
-		frm.dashboard.add_indicator(__('Regular Customer'), 'green');
+	// ── Customer type badge (B2B / B2C — tax classification) ─────────────
+	const ct_colors = { 'B2B': 'blue', 'B2C': 'gray' };
+	if (frm.doc.customer_type) {
+		frm.dashboard.add_indicator(__(frm.doc.customer_type), ct_colors[frm.doc.customer_type] || 'gray');
+	}
+
+	// ── Visit type badge (New / Regular / VIP — lifecycle classification) ─
+	const vt_colors = { 'New': 'blue', 'Regular': 'green', 'VIP': 'purple' };
+	if (frm.doc.visit_type) {
+		frm.dashboard.add_indicator(__(frm.doc.visit_type + ' Customer'), vt_colors[frm.doc.visit_type] || 'gray');
 	}
 	
 	// Warranty status indicator

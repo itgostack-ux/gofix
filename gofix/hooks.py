@@ -74,10 +74,12 @@ after_migrate = [
 
 permission_query_conditions = {
 	"Service Request": "gofix.security.get_service_request_query",
+	"Job Assignment":  "gofix.security.get_job_assignment_query",
 }
 
 has_permission = {
 	"Service Request": "gofix.security.has_service_request_permission",
+	"Job Assignment":  "gofix.security.has_job_assignment_permission",
 }
 
 override_doctype_class = {

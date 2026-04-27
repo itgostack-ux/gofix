@@ -150,16 +150,8 @@ frappe.ui.form.on('Service Request', {
 			}
 		);
 
-		// Filter serial no based on selected device item
-		frm.set_query('serial_no', function() {
-			if (frm.doc.device_item) {
-				return {
-					filters: {
-						'item_code': frm.doc.device_item
-					}
-				};
-			}
-		});
+		// Serial No / IMEI is a free-text Data field — no link filter needed.
+		// Users can enter any IMEI (including new devices not yet in the system).
 
 		// ── Issue → Solution → Spare cascade filters ──────────────
 		setup_cascade_filters(frm);
@@ -190,7 +182,10 @@ frappe.ui.form.on('Service Request', {
 						if (r.message.pan && !frm.doc.pan) {
 							frm.set_value('pan', r.message.pan);
 						}
-						
+
+						// Auto-set B2B / B2C based on GSTIN
+						_set_b2b_b2c_from_gstin(frm, r.message.gstin);
+
 						// Check for open requests
 						if (!frm.is_new()) {
 							show_open_requests(frm);
@@ -226,79 +221,47 @@ frappe.ui.form.on('Service Request', {
 	},
 	
 	serial_no: function(frm) {
-		// Fetch warranty details from serial no via ch_item_master warranty API
-		if (frm.doc.serial_no) {
-			frappe.call({
-				method: 'frappe.client.get',
-				args: {
-					doctype: 'Serial No',
-					name: frm.doc.serial_no
-				},
-				callback: function(r) {
-					if (r.message) {
-						// Validate serial belongs to device item
-						if (frm.doc.device_item && r.message.item_code !== frm.doc.device_item) {
-							frappe.msgprint(__('Serial No {0} does not belong to Item {1}', 
-								[frm.doc.serial_no, frm.doc.device_item]));
-							frm.set_value('serial_no', '');
-							return;
-						}
+		// serial_no is a free-text Data field — user may enter an IMEI not yet in the system.
+		// Use the quick-intake search_serial API which returns found=false gracefully.
+		const imei = (frm.doc.serial_no || '').trim();
+		if (!imei) return;
 
-						// Try CH Sold Plan warranty lookup
-						frappe.call({
-							method: 'ch_item_master.ch_item_master.warranty_api.check_warranty',
-							args: {
-								serial_no: frm.doc.serial_no,
-								company: frm.doc.company
-							},
-							callback: function(wr) {
-								if (wr.message && wr.message.warranty_covered) {
-									frm.set_value('warranty_status', 'Under Warranty');
-									let plan = wr.message.covering_plan || {};
-									frm.set_value('warranty_plan', plan.warranty_plan || '');
-									frm.set_value('warranty_plan_name', plan.plan_title || '');
-									frm.set_value('warranty_deductible', plan.deductible_amount || 0);
-									frm.set_value('warranty_expiry_date', plan.end_date || '');
-								} else {
-									// Fallback to Serial No warranty_expiry_date
-									frm.set_value('warranty_plan', '');
-									frm.set_value('warranty_plan_name', '');
-									frm.set_value('warranty_deductible', 0);
-									if (r.message.warranty_expiry_date) {
-										frm.set_value('warranty_expiry_date', r.message.warranty_expiry_date);
-										let today = frappe.datetime.get_today();
-										if (r.message.warranty_expiry_date >= today) {
-											frm.set_value('warranty_status', 'Under Warranty');
-										} else {
-											frm.set_value('warranty_status', 'Out of Warranty');
-										}
-									} else {
-										frm.set_value('warranty_status', 'No Warranty');
-									}
-								}
-							},
-							error: function() {
-								// ch_item_master not available — basic Serial No fallback
-								frm.set_value('warranty_plan', '');
-								frm.set_value('warranty_plan_name', '');
-								frm.set_value('warranty_deductible', 0);
-								if (r.message.warranty_expiry_date) {
-									frm.set_value('warranty_expiry_date', r.message.warranty_expiry_date);
-									let today = frappe.datetime.get_today();
-									if (r.message.warranty_expiry_date >= today) {
-										frm.set_value('warranty_status', 'Under Warranty');
-									} else {
-										frm.set_value('warranty_status', 'Out of Warranty');
-									}
-								} else {
-									frm.set_value('warranty_status', 'No Warranty');
-								}
-							}
-						});
-					}
-				}
-			});
-		}
+		frappe.xcall('gofix.gofix_services.page.quick_intake.quick_intake.search_serial', {
+			serial_no: imei
+		}).then(result => {
+			if (!result.found) {
+				// Unknown IMEI — new device, no warranty data available yet
+				frm.set_value('warranty_status', 'No Warranty');
+				frm.set_value('warranty_plan', '');
+				frm.set_value('warranty_plan_name', '');
+				frm.set_value('warranty_deductible', 0);
+				frm.set_value('warranty_expiry_date', '');
+				frappe.show_alert({ message: __('IMEI not in system — no warranty info. It will be registered on submission.'), indicator: 'orange' });
+				return;
+			}
+
+			// Known serial — validate it belongs to the selected device item
+			if (frm.doc.device_item && result.item_code !== frm.doc.device_item) {
+				frappe.msgprint(__('Serial No {0} belongs to {1}, not {2}. Please verify.',
+					[imei, result.item_code, frm.doc.device_item]));
+				frm.set_value('serial_no', '');
+				return;
+			}
+
+			// Auto-fill device if not set
+			if (!frm.doc.device_item && result.item_code) {
+				frm.set_value('device_item', result.item_code);
+			}
+
+			// Warranty
+			frm.set_value('warranty_status', result.warranty_status || 'No Warranty');
+			frm.set_value('warranty_plan', result.warranty_plan || '');
+			frm.set_value('warranty_expiry_date', result.warranty_expiry || '');
+		});
+	},
+
+	gstin: function(frm) {
+		_set_b2b_b2c_from_gstin(frm, frm.doc.gstin);
 	},
 	
 	walkin_status: function(frm) {
@@ -834,6 +797,17 @@ frappe.ui.form.on('SR Spare Line', {
 function calculate_spare_line_amount(cdt, cdn) {
 	let row = locals[cdt][cdn];
 	frappe.model.set_value(cdt, cdn, 'amount', flt(row.qty) * flt(row.rate));
+}
+
+// ── B2B / B2C helper ──────────────────────────────────────────────────────
+const _GSTIN_RE = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/;
+
+function _set_b2b_b2c_from_gstin(frm, gstin) {
+	const val = (gstin || '').trim().toUpperCase();
+	const b2b_b2c = _GSTIN_RE.test(val) ? 'B2B' : 'B2C';
+	if (frm.doc.customer_type !== b2b_b2c) {
+		frm.set_value('customer_type', b2b_b2c);
+	}
 }
 
 // ── Not Repairable Flow ──────────────────────────────────────────────────────

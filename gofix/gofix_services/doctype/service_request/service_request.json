@@ -352,9 +352,8 @@
   },
   {
    "fieldname": "serial_no",
-   "fieldtype": "Link",
-   "label": "Serial No / IMEI",
-   "options": "Serial No"
+   "fieldtype": "Data",
+   "label": "Serial No / IMEI"
   },
   {
    "fetch_from": "device_item.brand",

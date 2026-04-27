@@ -143,18 +143,18 @@ class ServiceRequest(Document):
 				except Exception:
 					pass  # Skip fallback if company address not found
 
+	_GSTIN_RE = __import__('re').compile(
+		r'^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$'
+	)
+
 	def detect_customer_type(self):
-		"""Detect if customer is NEW or REGULAR based on previous service requests"""
-		if self.customer and not self.customer_type:
-			# Check if customer has any previous service requests
-			previous_requests = frappe.get_all("Service Request",
-				filters={"customer": self.customer, "name": ["!=", self.name]},
-				limit=1)
-			
-			if previous_requests:
-				self.customer_type = "REGULAR"
-			else:
-				self.customer_type = "NEW"
+		"""Auto-classify B2B / B2C based on GSTIN presence.
+
+		B2B  = customer provided a valid 15-character GSTIN.
+		B2C  = no GSTIN (retail / individual customer).
+		"""
+		gstin = (self.gstin or '').strip().upper()
+		self.customer_type = 'B2B' if self._GSTIN_RE.match(gstin) else 'B2C'
 
 	def check_open_requests(self):
 		"""Check for open service requests for this customer"""
@@ -213,8 +213,17 @@ class ServiceRequest(Document):
 				self.warranty_status = "No Warranty"
 			return
 
-		# Validate serial no belongs to the device item
+		# For walk-in repairs the device's IMEI may not yet be registered in
+		# the Serial No table (first-time customer).  Skip validation and
+		# warranty fetch gracefully — the serial can be registered later.
+		if not frappe.db.exists("Serial No", self.serial_no):
+			if not self.warranty_status:
+				self.warranty_status = "No Warranty"
+			return
+
 		serial = frappe.get_doc("Serial No", self.serial_no)
+
+		# Validate serial belongs to the selected device item (only if serial is known)
 		if self.device_item and serial.item_code != self.device_item:
 			frappe.throw(_("Serial No {0} does not belong to Item {1}").format(
 				self.serial_no, self.device_item))
@@ -808,9 +817,17 @@ class ServiceRequest(Document):
 						frappe.format(self.referral_expiry_date, {"fieldtype": "Date"})))
 			
 			# Referral codes typically only for new customers
-			if self.customer_type == "REGULAR":
-				frappe.msgprint(_("Warning: Referral Code is generally applicable for NEW customers only"), 
-					indicator="orange", alert=True)
+			if self.customer:
+				prev = frappe.get_all(
+					"Service Request",
+					filters={"customer": self.customer, "name": ["!=", self.name or ""]},
+					limit=1,
+				)
+				if prev:
+					frappe.msgprint(
+						_("Warning: Referral Code is generally applicable for NEW customers only"),
+						indicator="orange", alert=True,
+					)
 
 	def validate_mandatory_fields(self):
 		"""Validate mandatory fields based on Delphi requirements - only for submission"""

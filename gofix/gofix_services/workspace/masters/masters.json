@@ -1,7 +1,8 @@
 {
+ "app": "gofix",
  "charts": [],
  "content": "[{\"type\":\"header\",\"data\":{\"text\":\"Masters\",\"col\":12}},{\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Walkin Source\",\"col\":3}},{\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Issue Category\",\"col\":3}},{\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Withdrawal Reason\",\"col\":3}}]",
- "creation": "2025-12-05 11:00:00.000000",
+ "creation": "2025-12-05 11:00:00",
  "custom_blocks": [],
  "docstatus": 0,
  "doctype": "Workspace",
@@ -41,18 +42,39 @@
    "link_type": "DocType",
    "onboard": 0,
    "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "QA Test Run",
+   "link_count": 0,
+   "link_to": "Buyback QA Test Run",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "SLA Log",
+   "link_count": 0,
+   "link_to": "Buyback SLA Log",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
   }
  ],
- "modified": "2025-12-05 11:00:00.000000",
+ "modified": "2026-04-29 01:56:52.626753",
  "modified_by": "Administrator",
  "module": "GoFix Services",
  "name": "Masters",
+ "number_cards": [],
  "owner": "Administrator",
  "parent_page": "GoFix",
  "public": 1,
  "quick_lists": [],
  "roles": [],
- "sequence_id": 17.0,
+ "sequence_id": 15.2,
  "shortcuts": [
   {
    "color": "Grey",
@@ -76,5 +98,6 @@
    "type": "DocType"
   }
  ],
- "title": "Masters"
+ "title": "Masters",
+ "type": "Workspace"
 }

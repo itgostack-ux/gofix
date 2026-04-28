@@ -1,7 +1,8 @@
 {
+ "app": "gofix",
  "charts": [],
  "content": "[{\"type\":\"header\",\"data\":{\"text\":\"Services\",\"col\":12}},{\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Service Request\",\"col\":3}},{\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Job Assignment\",\"col\":3}},{\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Spare Parts\",\"col\":3}}]",
- "creation": "2025-12-05 11:00:00.000000",
+ "creation": "2025-12-05 11:00:00",
  "custom_blocks": [],
  "docstatus": 0,
  "doctype": "Workspace",
@@ -12,16 +13,6 @@
  "is_hidden": 0,
  "label": "Services",
  "links": [
-  {
-   "hidden": 0,
-   "is_query_report": 0,
-   "label": "Job Tracker",
-   "link_count": 0,
-   "link_to": "job-tracker",
-   "link_type": "Page",
-   "onboard": 0,
-   "type": "Link"
-  },
   {
    "hidden": 0,
    "is_query_report": 0,
@@ -51,18 +42,29 @@
    "link_type": "DocType",
    "onboard": 0,
    "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Delivery Claim",
+   "link_count": 0,
+   "link_to": "CH Delivery Claim",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
   }
  ],
- "modified": "2025-12-05 11:00:00.000000",
+ "modified": "2026-04-29 01:56:52.648234",
  "modified_by": "Administrator",
  "module": "GoFix Services",
  "name": "Services",
+ "number_cards": [],
  "owner": "Administrator",
  "parent_page": "GoFix",
  "public": 1,
  "quick_lists": [],
  "roles": [],
- "sequence_id": 16.0,
+ "sequence_id": 15.1,
  "shortcuts": [
   {
    "color": "Blue",
@@ -92,5 +94,6 @@
    "type": "DocType"
   }
  ],
- "title": "Services"
+ "title": "Services",
+ "type": "Workspace"
 }

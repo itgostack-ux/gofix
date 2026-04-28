@@ -1454,10 +1454,12 @@ def complete_qc(sr_name, qc_result) -> dict:
 		if sr.decision != "Completed":
 			frappe.db.set_value("Service Request", sr_name, "decision", "Completed", update_modified=True)
 			frappe.db.set_value("Service Request", sr_name, "status", "Completed", update_modified=False)
-		frappe.db.set_value("Service Request", sr_name, "workflow_state", "Completed", update_modified=False)
+		if frappe.db.has_column("Service Request", "workflow_state"):
+			frappe.db.set_value("Service Request", sr_name, "workflow_state", "Completed", update_modified=False)
 	else:
 		so.db_set("workflow_state", "QC Fail", update_modified=False)
-		frappe.db.set_value("Service Request", sr_name, "workflow_state", "In Service", update_modified=False)
+		if frappe.db.has_column("Service Request", "workflow_state"):
+			frappe.db.set_value("Service Request", sr_name, "workflow_state", "In Service", update_modified=False)
 
 	frappe.db.commit()
 

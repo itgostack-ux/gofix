@@ -168,7 +168,16 @@ def test_service_request_workflow():
 	frappe.db.commit()
 	print(f"✅ Service Request created: {sr.name}")
 	print(f"   Status: {sr.status}, Decision: {sr.decision}")
-	
+
+	# Simulate diagnosis completion (ops hub fields)
+	frappe.db.set_value("Service Request", sr.name, {
+		"analysis_confirmed": 1,
+		"repairability_status": "Repairable",
+		"estimate_approval_pending": 0,
+	}, update_modified=False)
+	frappe.db.commit()
+	print("✅ Diagnosis confirmed (analysis_confirmed=1, repairability=Repairable)")
+
 	# Accept Service Request
 	print("\n2️⃣  Accepting Service Request...")
 	from gofix.gofix_services.doctype.service_request.service_request import accept_service_request

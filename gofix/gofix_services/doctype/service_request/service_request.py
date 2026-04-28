@@ -396,6 +396,8 @@ class ServiceRequest(Document):
 		"""Sync decision field to status for consistency"""
 		if self.decision:
 			self.status = self.decision
+			if self.meta.has_field("workflow_state"):
+				self.workflow_state = self.decision
 	
 	def on_update_after_submit(self):
 		"""Handle post-submission updates - mainly for Accept/Reject"""
@@ -1324,6 +1326,16 @@ def generate_barcode_manual(name) -> dict:
 	
 	return doc.serial_no
 
+
+def _safe_set_sr_workflow_state(doc, value):
+	"""Backward-compatible workflow_state setter for Service Request.
+
+	Some sites do not have a `workflow_state` column on Service Request.
+	Guard writes to avoid SQL 1054 errors.
+	"""
+	if frappe.db.has_column("Service Request", "workflow_state"):
+		doc.db_set("workflow_state", value, update_modified=False)
+
 @frappe.whitelist()
 def accept_service_request(service_request) -> dict:
 	"""Accept Service Request and create Service Order
@@ -1345,7 +1357,7 @@ def accept_service_request(service_request) -> dict:
 	doc.db_set("accepted_by", frappe.session.user, update_modified=False)
 	doc.db_set("accepted_datetime", frappe.utils.now(), update_modified=False)
 	doc.db_set("walkin_status", "Accepted", update_modified=False)  # Customer left device
-	doc.db_set("workflow_state", "Accepted", update_modified=False)
+	_safe_set_sr_workflow_state(doc, "Accepted")
 	
 	# Create Service Order
 	doc.reload()
@@ -1353,7 +1365,7 @@ def accept_service_request(service_request) -> dict:
 	
 	# Update status
 	doc.db_set("status", "In Service", update_modified=False)
-	doc.db_set("workflow_state", "In Service", update_modified=False)
+	_safe_set_sr_workflow_state(doc, "In Service")
 	
 	# Log intake → analysis transition for ops timeline
 	try:
@@ -1380,7 +1392,7 @@ def reject_service_request(service_request, rejection_reason) -> bool:
 	doc.db_set("rejection_reason", rejection_reason, update_modified=False)
 	doc.db_set("status", "Rejected", update_modified=False)
 	doc.db_set("walkin_status", None, update_modified=False)  # Clear walk-in status
-	doc.db_set("workflow_state", "Rejected", update_modified=False)
+	_safe_set_sr_workflow_state(doc, "Rejected")
 	
 	return True
 

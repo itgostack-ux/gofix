@@ -301,7 +301,8 @@ def quick_accept(service_request) -> dict:
 	if sr.docstatus == 0:
 		sr.decision = "Accepted"
 		sr.walkin_status = "Accepted"
-		sr.workflow_state = "Accepted"
+		if sr.meta.has_field("workflow_state"):
+			sr.workflow_state = "Accepted"
 		sr.save()
 		sr.submit()
 	else:
@@ -309,6 +310,7 @@ def quick_accept(service_request) -> dict:
 		sr.db_set("decision", "Accepted", update_modified=True)
 		sr.db_set("walkin_status", "Accepted", update_modified=False)
 		sr.db_set("status", "Accepted", update_modified=False)
-		sr.db_set("workflow_state", "Accepted", update_modified=False)
+		if frappe.db.has_column("Service Request", "workflow_state"):
+			sr.db_set("workflow_state", "Accepted", update_modified=False)
 
 	return {"message": _("Request accepted"), "name": sr.name}

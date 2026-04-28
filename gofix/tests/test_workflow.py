@@ -24,46 +24,51 @@ def test_complete_workflow():
 		return None, None, None
 	customer_name = customer[0].name
 	
-	# Get warehouse
-	warehouse = frappe.get_list("Warehouse", filters={"company": "El Shaddai Solutions Ltd"}, limit=1)
+	# Get warehouse (use default company)
+	company = frappe.defaults.get_global_default("company")
+	warehouse = frappe.get_list("Warehouse", filters={"company": company, "is_group": 0}, limit=1)
 	if not warehouse:
-		print("❌ No warehouses found. Using default.")
-		warehouse_name = "Stores - EL"
-	else:
-		warehouse_name = warehouse[0].name
-	
+		print("❌ No warehouses found.")
+		return None, None, None
+	warehouse_name = warehouse[0].name
+
 	# Get or create a device item
 	device_item = frappe.get_list("Item", filters={"is_stock_item": 0}, limit=1)
 	if not device_item:
 		print("❌ No non-stock items found. Please create items first.")
 		return None, None, None
 	device_item_code = device_item[0].name
-	
+
+	contact = frappe.db.get_value("Customer", customer_name, "mobile_no") or "9999999999"
+	source_wh = warehouse_name
+
 	sr = frappe.new_doc("Service Request")
 	sr.customer = customer_name
+	sr.company = company
+	sr.contact_number = contact
+	sr.source_warehouse = source_wh
 	sr.device_item = device_item_code
-	sr.walkin_source = "Walk-In"
-	sr.device_brand = "Samsung"
-	sr.device_model = "Galaxy S21"
-	sr.imei_serial_no = "TEST-IMEI-" + str(frappe.utils.random_string(10))
 	sr.issue_description = "Cracked screen, touch not working"
-	sr.device_condition = "Damaged"
-	sr.device_condition_desc = "Screen cracked in top left corner, touch responsive in most areas"
-	sr.password_pattern = "1234"
-	sr.backup_status = "Yes"
-	sr.accessories_received = "Charger, Case"
+	sr.product_condition_desc = "Minor scratches, screen cracked"
+	sr.backup_info = "Customer confirmed backup completed"
 	sr.estimated_cost = 5000
-	sr.received_by = frappe.session.user
-	sr.warehouse = warehouse_name
-	sr.insert()
+	sr.priority = "Medium"
+	sr.insert(ignore_permissions=True)
 	sr.submit()
+	# Simulate diagnosis completion
+	frappe.db.set_value("Service Request", sr.name, {
+		"analysis_confirmed": 1,
+		"repairability_status": "Repairable",
+		"estimate_approval_pending": 0,
+	}, update_modified=False)
+	frappe.db.commit()
 	print(f"✅ Service Request created: {sr.name}")
 	print(f"   Status: {sr.status}, Decision: {sr.decision}")
 	
 	# Step 2: Accept Service Request (Creates Service Order)
 	print("\nSTEP 2: Accepting Service Request (creates Service Order)...")
-	sr.decision = "Accepted"
-	sr.save()
+	from gofix.gofix_services.doctype.service_request.service_request import accept_service_request
+	accept_service_request(sr.name)
 	sr.reload()
 	
 	if sr.service_order:
@@ -97,7 +102,7 @@ def test_complete_workflow():
 			emp.first_name = "Test"
 			emp.last_name = "Technician"
 			emp.employee_name = "Test Technician"
-			emp.company = "El Shaddai Solutions Ltd"
+			emp.company = frappe.defaults.get_global_default("company")
 			emp.insert(ignore_permissions=True)
 			employee_id = emp.name
 		else:

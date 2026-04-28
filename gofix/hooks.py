@@ -57,7 +57,11 @@ app_include_css = ["/assets/gofix/css/gofix.css", "/assets/gofix/css/gogizmo_app
 app_include_js = "/assets/gofix/js/gogizmo_app_switcher.js"
 
 doctype_list_js = {
-    "Sales Order": "public/js/sales_order_list.js"
+    "Sales Order": "public/js/sales_order_list.js",
+}
+
+doctype_js = {
+    "Material Request": "public/js/material_request_gofix.js",
 }
 
 after_install = "gofix.setup.install.after_install"

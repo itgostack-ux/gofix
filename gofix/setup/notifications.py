@@ -6,19 +6,23 @@ import frappe
 NOTIFICATIONS = [
     {
         "name": "GoFix - Device Received",
-        "subject": "Your device has been received - {{ doc.name }}",
+        "subject": "GoFix | Device Received | {{ doc.name }}",
         "document_type": "Service Request",
         "event": "Value Change",
         "value_changed": "decision",
         "condition": 'doc.decision == "Accepted"',
         "message": (
-            "Dear {{ doc.customer_name }},\n\n"
-            "Your device has been received at our service centre.\n\n"
-            "Service Request: {{ doc.name }}\n"
-            "Device: {{ doc.device_item_name or '' }}\n"
-            "Estimated Cost: ₹{{ doc.estimated_cost or 0 }}\n"
-            "Expected Completion: {{ doc.expected_completion_date or 'TBD' }}\n\n"
-            "Thank you for choosing GoFix."
+            "<div style='font-family:Segoe UI,Arial,sans-serif;max-width:680px;border:1px solid #e5e7eb;border-radius:10px;overflow:hidden'>"
+            "<div style='background:#0f172a;color:#fff;padding:12px 16px;font-weight:600'>GoFix Services</div>"
+            "<div style='padding:16px'>"
+            "<p>Dear {{ doc.customer_name }},</p>"
+            "<p>Your device has been received at our service centre.</p>"
+            "<p><b>Service Request:</b> {{ doc.name }}<br>"
+            "<b>Device:</b> {{ doc.device_item_name or '' }}<br>"
+            "<b>Estimated Cost:</b> ₹{{ doc.estimated_cost or 0 }}<br>"
+            "<b>Expected Completion:</b> {{ doc.expected_completion_date or 'TBD' }}</p>"
+            "<p><a href='{{ frappe.utils.get_url_to_form(\"Service Request\", doc.name) }}' style='background:#0b57d0;color:#fff;text-decoration:none;padding:10px 14px;border-radius:6px;display:inline-block;font-weight:600'>Open Service Request</a></p>"
+            "</div></div>"
         ),
         "channel": "Email",
         "send_to_all_assignees": 0,
@@ -26,18 +30,20 @@ NOTIFICATIONS = [
     },
     {
         "name": "GoFix - Repair Complete Pickup",
-        "subject": "Your device is ready for pickup - {{ doc.name }}",
+        "subject": "GoFix | Repair Complete | {{ doc.name }}",
         "document_type": "Service Request",
         "event": "Value Change",
         "value_changed": "decision",
         "condition": 'doc.decision == "Completed"',
         "message": (
-            "Dear {{ doc.customer_name }},\n\n"
-            "Great news! Your device repair is complete and ready for pickup.\n\n"
-            "Service Request: {{ doc.name }}\n"
-            "Device: {{ doc.device_item_name or '' }}\n\n"
-            "Please collect your device at your earliest convenience.\n\n"
-            "Thank you for choosing GoFix."
+            "<div style='font-family:Segoe UI,Arial,sans-serif;max-width:680px;border:1px solid #e5e7eb;border-radius:10px;overflow:hidden'>"
+            "<div style='background:#0f172a;color:#fff;padding:12px 16px;font-weight:600'>GoFix Services</div>"
+            "<div style='padding:16px'>"
+            "<p>Dear {{ doc.customer_name }},</p>"
+            "<p>Great news. Your device repair is complete and ready for pickup.</p>"
+            "<p><b>Service Request:</b> {{ doc.name }}<br><b>Device:</b> {{ doc.device_item_name or '' }}</p>"
+            "<p><a href='{{ frappe.utils.get_url_to_form(\"Service Request\", doc.name) }}' style='background:#0b57d0;color:#fff;text-decoration:none;padding:10px 14px;border-radius:6px;display:inline-block;font-weight:600'>Open Service Request</a></p>"
+            "</div></div>"
         ),
         "channel": "Email",
         "send_to_all_assignees": 0,
@@ -45,20 +51,20 @@ NOTIFICATIONS = [
     },
     {
         "name": "GoFix - Unclaimed Device Reminder",
-        "subject": "Reminder: Please collect your device - {{ doc.name }}",
+        "subject": "GoFix | Reminder: Device Awaiting Pickup | {{ doc.name }}",
         "document_type": "Service Request",
         "event": "Value Change",
         "value_changed": "unclaimed_flag",
         "condition": "doc.unclaimed_flag == 1",
         "message": (
-            "Dear {{ doc.customer_name }},\n\n"
-            "This is a reminder that your device is still awaiting collection "
-            "at our service centre.\n\n"
-            "Service Request: {{ doc.name }}\n"
-            "Device: {{ doc.device_item_name or '' }}\n\n"
-            "Please collect your device as soon as possible. Devices unclaimed "
-            "for extended periods may be subject to storage policies.\n\n"
-            "Thank you,\nGoFix Services"
+            "<div style='font-family:Segoe UI,Arial,sans-serif;max-width:680px;border:1px solid #e5e7eb;border-radius:10px;overflow:hidden'>"
+            "<div style='background:#0f172a;color:#fff;padding:12px 16px;font-weight:600'>GoFix Services</div>"
+            "<div style='padding:16px'>"
+            "<p>Dear {{ doc.customer_name }},</p>"
+            "<p>This is a reminder that your device is still awaiting collection at our service centre.</p>"
+            "<p><b>Service Request:</b> {{ doc.name }}<br><b>Device:</b> {{ doc.device_item_name or '' }}</p>"
+            "<p><a href='{{ frappe.utils.get_url_to_form(\"Service Request\", doc.name) }}' style='background:#0b57d0;color:#fff;text-decoration:none;padding:10px 14px;border-radius:6px;display:inline-block;font-weight:600'>Open Service Request</a></p>"
+            "</div></div>"
         ),
         "channel": "Email",
         "send_to_all_assignees": 0,
@@ -66,18 +72,22 @@ NOTIFICATIONS = [
     },
     {
         "name": "GoFix - Pickup Scheduled",
-        "subject": "Pickup scheduled for your device - {{ doc.name }}",
+        "subject": "GoFix | Pickup Scheduled | {{ doc.name }}",
         "document_type": "Service Request",
         "event": "Value Change",
         "value_changed": "pickup_scheduled_datetime",
         "condition": "doc.pickup_scheduled_datetime",
         "message": (
-            "Dear {{ doc.customer_name }},\n\n"
-            "Your device pickup has been scheduled.\n\n"
-            "Service Request: {{ doc.name }}\n"
-            "Pickup Date & Time: {{ doc.pickup_scheduled_datetime }}\n"
-            "Pickup Address: {{ doc.pickup_address or '' }}\n\n"
-            "Our team will contact you if any coordination is needed."
+            "<div style='font-family:Segoe UI,Arial,sans-serif;max-width:680px;border:1px solid #e5e7eb;border-radius:10px;overflow:hidden'>"
+            "<div style='background:#0f172a;color:#fff;padding:12px 16px;font-weight:600'>GoFix Services</div>"
+            "<div style='padding:16px'>"
+            "<p>Dear {{ doc.customer_name }},</p>"
+            "<p>Your device pickup has been scheduled.</p>"
+            "<p><b>Service Request:</b> {{ doc.name }}<br>"
+            "<b>Pickup Date & Time:</b> {{ doc.pickup_scheduled_datetime }}<br>"
+            "<b>Pickup Address:</b> {{ doc.pickup_address or '' }}</p>"
+            "<p><a href='{{ frappe.utils.get_url_to_form(\"Service Request\", doc.name) }}' style='background:#0b57d0;color:#fff;text-decoration:none;padding:10px 14px;border-radius:6px;display:inline-block;font-weight:600'>Open Service Request</a></p>"
+            "</div></div>"
         ),
         "channel": "Email",
         "send_to_all_assignees": 0,
@@ -85,18 +95,22 @@ NOTIFICATIONS = [
     },
     {
         "name": "GoFix - Return Dispatched",
-        "subject": "Your repaired device is on the way - {{ doc.name }}",
+        "subject": "GoFix | Return Dispatched | {{ doc.name }}",
         "document_type": "Service Request",
         "event": "Value Change",
         "value_changed": "return_dispatched_date",
         "condition": "doc.return_dispatched_date",
         "message": (
-            "Dear {{ doc.customer_name }},\n\n"
-            "Your repaired device has been dispatched.\n\n"
-            "Service Request: {{ doc.name }}\n"
-            "Courier: {{ doc.return_courier_name or 'Store Delivery' }}\n"
-            "Tracking: {{ doc.return_tracking_number or 'Will be shared shortly' }}\n\n"
-            "Thank you for choosing GoFix."
+            "<div style='font-family:Segoe UI,Arial,sans-serif;max-width:680px;border:1px solid #e5e7eb;border-radius:10px;overflow:hidden'>"
+            "<div style='background:#0f172a;color:#fff;padding:12px 16px;font-weight:600'>GoFix Services</div>"
+            "<div style='padding:16px'>"
+            "<p>Dear {{ doc.customer_name }},</p>"
+            "<p>Your repaired device has been dispatched.</p>"
+            "<p><b>Service Request:</b> {{ doc.name }}<br>"
+            "<b>Courier:</b> {{ doc.return_courier_name or 'Store Delivery' }}<br>"
+            "<b>Tracking:</b> {{ doc.return_tracking_number or 'Will be shared shortly' }}</p>"
+            "<p><a href='{{ frappe.utils.get_url_to_form(\"Service Request\", doc.name) }}' style='background:#0b57d0;color:#fff;text-decoration:none;padding:10px 14px;border-radius:6px;display:inline-block;font-weight:600'>Open Service Request</a></p>"
+            "</div></div>"
         ),
         "channel": "Email",
         "send_to_all_assignees": 0,
@@ -104,17 +118,20 @@ NOTIFICATIONS = [
     },
     {
         "name": "GoFix - Return Delivered",
-        "subject": "Delivery confirmed - {{ doc.name }}",
+        "subject": "GoFix | Delivery Confirmed | {{ doc.name }}",
         "document_type": "Service Request",
         "event": "Value Change",
         "value_changed": "return_delivered_date",
         "condition": "doc.return_delivered_date",
         "message": (
-            "Dear {{ doc.customer_name }},\n\n"
-            "We have marked your service request as delivered successfully.\n\n"
-            "Service Request: {{ doc.name }}\n"
-            "Delivered On: {{ doc.return_delivered_date }}\n\n"
-            "If you need any further help, simply reply to this email or visit your nearest GoFix store."
+            "<div style='font-family:Segoe UI,Arial,sans-serif;max-width:680px;border:1px solid #e5e7eb;border-radius:10px;overflow:hidden'>"
+            "<div style='background:#0f172a;color:#fff;padding:12px 16px;font-weight:600'>GoFix Services</div>"
+            "<div style='padding:16px'>"
+            "<p>Dear {{ doc.customer_name }},</p>"
+            "<p>We have marked your service request as delivered successfully.</p>"
+            "<p><b>Service Request:</b> {{ doc.name }}<br><b>Delivered On:</b> {{ doc.return_delivered_date }}</p>"
+            "<p><a href='{{ frappe.utils.get_url_to_form(\"Service Request\", doc.name) }}' style='background:#0b57d0;color:#fff;text-decoration:none;padding:10px 14px;border-radius:6px;display:inline-block;font-weight:600'>Open Service Request</a></p>"
+            "</div></div>"
         ),
         "channel": "Email",
         "send_to_all_assignees": 0,
@@ -126,12 +143,24 @@ NOTIFICATIONS = [
 def create_notifications():
     """Create/update GoFix notification records.  Safe to run on every migrate."""
     for notif in NOTIFICATIONS:
-        if frappe.db.exists("Notification", notif["name"]):
+        recipients = notif.get("recipients", [])
+        notif_fields = dict(notif)
+        notif_fields.pop("recipients", None)
+
+        existing = frappe.db.exists("Notification", notif["name"])
+        if existing:
+            doc = frappe.get_doc("Notification", notif["name"])
+            doc.update(notif_fields)
+            doc.set("recipients", [])
+            for r in recipients:
+                doc.append("recipients", r)
+            doc.enabled = 1
+            doc.save(ignore_permissions=True)
+            print(f"Updated Notification: {notif['name']}")
             continue
 
-        recipients = notif.pop("recipients", [])
         doc = frappe.new_doc("Notification")
-        doc.update(notif)
+        doc.update(notif_fields)
         doc.enabled = 1
         for r in recipients:
             doc.append("recipients", r)

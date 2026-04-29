@@ -299,12 +299,16 @@ class ServiceRequest(Document):
 		customer_name = self.get("customer_name") or "Customer"
 
 		subject = f"Service Request {self.name} — Status Update: {new_status}"
+		sr_url = frappe.utils.get_url_to_form("Service Request", self.name)
 		message = (
-			f"Dear {customer_name},<br><br>"
-			f"Your service request <b>{self.name}</b> for <b>{self.get('item_name', 'your device')}</b> "
-			f"has been updated to: <b>{new_status}</b>.<br><br>"
-			f"Previous status: {old_status}<br><br>"
-			f"Thank you for choosing GoFix Services."
+			"<div style='font-family:Segoe UI,Arial,sans-serif;max-width:680px;border:1px solid #e5e7eb;border-radius:10px;overflow:hidden'>"
+			"<div style='background:#0f172a;color:#ffffff;padding:12px 16px;font-weight:600'>GoFix Services</div>"
+			"<div style='padding:16px'>"
+			f"<p>Dear {frappe.utils.escape_html(customer_name)},</p>"
+			f"<p>Your service request <b>{self.name}</b> for <b>{frappe.utils.escape_html(self.get('item_name', 'your device'))}</b> has been updated to: <b>{frappe.utils.escape_html(new_status)}</b>.</p>"
+			f"<p><b>Previous Status:</b> {frappe.utils.escape_html(old_status or 'N/A')}</p>"
+			f"<p><a href='{sr_url}' style='background:#0b57d0;color:#ffffff;text-decoration:none;padding:10px 14px;border-radius:6px;display:inline-block;font-weight:600'>Open Service Request</a></p>"
+			"</div></div>"
 		)
 
 		if customer_email:

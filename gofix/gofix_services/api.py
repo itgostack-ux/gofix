@@ -197,15 +197,20 @@ def _send_delivery_otp(so, otp):
 
 	if customer_email:
 		try:
+			so_url = frappe.utils.get_url_to_form("Sales Order", so.name)
 			frappe.sendmail(
 				recipients=[customer_email],
-				subject=f"GoFix Device Collection OTP — {so.name}",
+				subject=f"GoFix Services | Device Collection OTP | {so.name}",
 				message=(
-					f"Dear {customer_name},<br><br>"
-					f"Your OTP for device collection is: <b>{otp}</b><br><br>"
-					f"Please share this with the store executive when collecting your device.<br>"
-					f"Service Order: {so.name}<br><br>"
-					f"Thank you for choosing GoFix."
+					"<div style='font-family:Segoe UI,Arial,sans-serif;max-width:680px;border:1px solid #e5e7eb;border-radius:10px;overflow:hidden'>"
+					"<div style='background:#0f172a;color:#ffffff;padding:12px 16px;font-weight:600'>GoFix Services</div>"
+					"<div style='padding:16px'>"
+					f"<p>Dear {frappe.utils.escape_html(customer_name or 'Customer')},</p>"
+					f"<p>Your OTP for device collection is: <span style='font-size:22px;font-weight:700;letter-spacing:4px'>{otp}</span></p>"
+					f"<p>Please share this OTP with the store executive at handover.</p>"
+					f"<p><b>Service Order:</b> {so.name}</p>"
+					f"<p><a href='{so_url}' style='background:#0b57d0;color:#ffffff;text-decoration:none;padding:10px 14px;border-radius:6px;display:inline-block;font-weight:600'>Open Service Order</a></p>"
+					"</div></div>"
 				),
 				reference_doctype="Sales Order",
 				reference_name=so.name,
@@ -297,18 +302,22 @@ def _send_estimate_notification(so, send_via):
 
 	if send_via in ("Email", "WhatsApp") and customer_email:
 		try:
+			so_url = frappe.utils.get_url_to_form("Sales Order", so.name)
 			frappe.sendmail(
 				recipients=[customer_email],
-				subject=f"GoFix Repair Estimate — {so.name}",
+				subject=f"GoFix Services | Repair Estimate | {so.name}",
 				message=(
-					f"Dear {customer_name},<br><br>"
-					f"Your repair estimate is ready:<br><br>"
-					f"<b>Device:</b> {getattr(so, 'device_model', '') or 'N/A'}<br>"
-					f"<b>Issue:</b> {getattr(so, 'issue_description', '') or 'N/A'}<br>"
+					"<div style='font-family:Segoe UI,Arial,sans-serif;max-width:680px;border:1px solid #e5e7eb;border-radius:10px;overflow:hidden'>"
+					"<div style='background:#0f172a;color:#ffffff;padding:12px 16px;font-weight:600'>GoFix Services</div>"
+					"<div style='padding:16px'>"
+					f"<p>Dear {frappe.utils.escape_html(customer_name or 'Customer')},</p>"
+					"<p>Your repair estimate is ready:</p>"
+					f"<p><b>Device:</b> {frappe.utils.escape_html(getattr(so, 'device_model', '') or 'N/A')}<br>"
+					f"<b>Issue:</b> {frappe.utils.escape_html(getattr(so, 'issue_description', '') or 'N/A')}<br>"
 					f"<b>Estimated Cost:</b> ₹{total:,.2f}<br>"
-					f"<b>Valid Until:</b> {so.estimate_expiry_date or 'N/A'}<br><br>"
-					f"Please reply to approve or reject this estimate.<br><br>"
-					f"Thank you for choosing GoFix."
+					f"<b>Valid Until:</b> {so.estimate_expiry_date or 'N/A'}</p>"
+					f"<p><a href='{so_url}' style='background:#0b57d0;color:#ffffff;text-decoration:none;padding:10px 14px;border-radius:6px;display:inline-block;font-weight:600'>Open Service Order</a></p>"
+					"</div></div>"
 				),
 				reference_doctype="Sales Order",
 				reference_name=so.name,

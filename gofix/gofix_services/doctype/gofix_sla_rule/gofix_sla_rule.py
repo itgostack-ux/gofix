@@ -115,16 +115,21 @@ def _send_sla_alert(sr_name, sla, level, elapsed):
 			recipients.append(email_addr)
 		if recipients:
 			try:
+				sr_url = frappe.utils.get_url_to_form("Service Request", sr_name)
 				frappe.sendmail(
 					recipients=list(set(recipients)),
-					subject=f"GoFix SLA Breach Level {level}: {sr_name}",
+					subject=f"GoFix Services | SLA Breach Level {level} | {sr_name}",
 					message=(
-						f"<b>SLA Breach Alert — Level {level}</b><br><br>"
-						f"Service Request: <b>{sr_name}</b><br>"
-						f"Elapsed: <b>{elapsed:.1f} hours</b><br>"
-						f"Target: <b>{sla.target_hours} hours</b><br>"
-						f"SLA Rule: {sla.name}<br><br>"
-						f"Please take immediate action."
+						"<div style='font-family:Segoe UI,Arial,sans-serif;max-width:680px;border:1px solid #e5e7eb;border-radius:10px;overflow:hidden'>"
+						"<div style='background:#7f1d1d;color:#ffffff;padding:12px 16px;font-weight:600'>GoFix Services - SLA Escalation</div>"
+						"<div style='padding:16px'>"
+						f"<p><b>SLA Breach Alert - Level {level}</b></p>"
+						f"<p><b>Service Request:</b> {sr_name}<br>"
+						f"<b>Elapsed:</b> {elapsed:.1f} hours<br>"
+						f"<b>Target:</b> {sla.target_hours} hours<br>"
+						f"<b>SLA Rule:</b> {sla.name}</p>"
+						f"<p><a href='{sr_url}' style='background:#0b57d0;color:#ffffff;text-decoration:none;padding:10px 14px;border-radius:6px;display:inline-block;font-weight:600'>Open Service Request</a></p>"
+						"</div></div>"
 					),
 					reference_doctype="Service Request",
 					reference_name=sr_name,

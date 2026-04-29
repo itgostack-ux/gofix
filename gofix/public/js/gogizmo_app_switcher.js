@@ -14,9 +14,8 @@
 		// group: operations
 		{ key: "ch-pos-app",        label: "POS",              icon: "fa-shopping-cart",  group: "operations", color: "#3b82f6" },
 		{ key: "gofix-ops-hub",     label: "GoFix",            icon: "fa-wrench",         group: "operations", color: "#10b981" },
-		{ key: "operations-hub",    label: "Ops Hub",          icon: "fa-cogs",           group: "operations", color: "#f59e0b" },
 		{ key: "purchase-hub",      label: "Purchase",         icon: "fa-shopping-bag",   group: "operations", color: "#4f46e5" },
-		{ key: "stock-hub",         label: "Stock Hub",        icon: "fa-cubes",          group: "operations", color: "#059669" },
+		{ key: "stock-hub",         label: "Stock",            icon: "fa-cubes",          group: "operations", color: "#059669" },
 		{ key: "logistics-hub",     label: "Logistics",        icon: "fa-map-signs",      group: "operations", color: "#d97706" },
 		{ key: "scheme-hub",         label: "Schemes",           icon: "fa-tags",           group: "operations", color: "#0891b2" },
 		// group: dashboards

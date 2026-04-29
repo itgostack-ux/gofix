@@ -10,7 +10,6 @@ import frappe
 SWITCHER_PAGES = [
 	"ch-pos-app",
 	"gofix-ops-hub",
-	"operations-hub",
 	"purchase-hub",
 	"stock-hub",
 	"logistics-hub",

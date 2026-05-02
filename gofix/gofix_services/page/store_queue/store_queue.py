@@ -291,7 +291,17 @@ def get_request_detail(sr_name) -> dict:
 
 @frappe.whitelist()
 def quick_accept(service_request) -> dict:
-	"""Quick-accept a draft SR from the store queue (sets decision=Accepted)."""
+	"""Quick-accept an SR from Store Queue and ensure Service Order is created.
+
+	Historically this API only flipped decision/walk-in flags, which left some
+	requests accepted but without a linked Service Order.
+
+	Now this API delegates to canonical `accept_service_request` inside a DB
+	savepoint:
+	  - On success: SR becomes accepted/in-service + Service Order is linked.
+	  - On prerequisite failure (analysis/repairability/estimate approval):
+	    rollback to pre-accept state and return an explicit blocked reason.
+	"""
 	sr = frappe.get_doc("Service Request", service_request)
 	frappe.has_permission("Service Request", doc=sr, ptype="write", throw=True)
 
@@ -299,18 +309,33 @@ def quick_accept(service_request) -> dict:
 		frappe.throw(_("Can only accept Draft requests. Current: {0}").format(sr.decision), title=_("Validation Error"))
 
 	if sr.docstatus == 0:
-		sr.decision = "Accepted"
-		sr.walkin_status = "Accepted"
-		if sr.meta.has_field("workflow_state"):
-			sr.workflow_state = "Accepted"
 		sr.save()
 		sr.submit()
-	else:
-		sr.flags.ignore_validate_update_after_submit = True
-		sr.db_set("decision", "Accepted", update_modified=True)
-		sr.db_set("walkin_status", "Accepted", update_modified=False)
-		sr.db_set("status", "Accepted", update_modified=False)
-		if frappe.db.has_column("Service Request", "workflow_state"):
-			sr.db_set("workflow_state", "Accepted", update_modified=False)
 
-	return {"message": _("Request accepted"), "name": sr.name}
+	# Canonical accept flow creates SO + sets final status/workflow correctly.
+	from gofix.gofix_services.doctype.service_request.service_request import accept_service_request
+	savepoint = "quick_accept_so"
+	frappe.db.savepoint(savepoint)
+	try:
+		so_name = accept_service_request(sr.name)
+	except frappe.ValidationError as e:
+		# Roll back any partial decision/status db_set done inside accept API.
+		frappe.db.rollback(save_point=savepoint)
+		sr.reload()
+		return {
+			"ok": False,
+			"name": sr.name,
+			"service_order": "",
+			"blocked": True,
+			"message": str(e),
+		}
+	except Exception:
+		frappe.db.rollback(save_point=savepoint)
+		raise
+
+	return {
+		"ok": True,
+		"message": _("Request accepted"),
+		"name": sr.name,
+		"service_order": so_name,
+	}

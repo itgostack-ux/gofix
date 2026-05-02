@@ -147,22 +147,77 @@ def get_sr_detail(sr_name) -> dict:
 	}
 
 
+# @frappe.whitelist()
+# def create_assignment(service_request, engineer, job_type="Repair", estimated_hours=None) -> dict:
+# 	"""Quick-assign a service engineer to a Service Request."""
+# 	frappe.has_permission("Job Assignment", "create", throw=True)
+
+# 	# GF-12 fix: Check technician workload before assigning
+# 	from gofix.gofix_services.doctype.job_assignment.job_assignment import get_technician_workload
+# 	workload = get_technician_workload(engineer)
+# 	if workload["open_count"] >= 10:
+# 		frappe.msgprint(
+# 			_("Warning: {0} already has {1} open jobs").format(engineer, workload["open_count"]),
+# 			indicator="orange",
+# 			alert=True,
+# 		)
+
+# 	from frappe.utils import nowdate
+# 	ja = frappe.new_doc("Job Assignment")
+# 	ja.service_request = service_request
+# 	ja.assignment_date = nowdate()
+# 	ja.service_engineer = engineer
+# 	ja.assignment_type = "Technician Assignment"
+# 	ja.job_type = job_type
+# 	ja.assignment_status = "Open"
+# 	if estimated_hours:
+# 		ja.estimated_hours = float(estimated_hours)
+# 	ja.flags.ignore_permissions = True
+# 	ja.insert()
+# 	ja.submit()
+# 	return {"name": ja.name, "status": "created"}
+
+
+
+
+
+
+
 @frappe.whitelist()
 def create_assignment(service_request, engineer, job_type="Repair", estimated_hours=None) -> dict:
 	"""Quick-assign a service engineer to a Service Request."""
+
 	frappe.has_permission("Job Assignment", "create", throw=True)
 
-	# GF-12 fix: Check technician workload before assigning
-	from gofix.gofix_services.doctype.job_assignment.job_assignment import get_technician_workload
+	if not frappe.db.exists("Service Request", service_request):
+		frappe.throw(_("Service Request {0} not found").format(service_request))
+
+	if not frappe.db.exists("Employee", engineer) and not frappe.db.exists("User", engineer):
+		frappe.throw(_("Engineer {0} not found").format(engineer))
+
+	from gofix.gofix_services.doctype.job_assignment.job_assignment import (
+		get_technician_workload,
+	)
+
 	workload = get_technician_workload(engineer)
-	if workload["open_count"] >= 10:
+
+	if workload.get("open_count", 0) >= 10:
 		frappe.msgprint(
-			_("Warning: {0} already has {1} open jobs").format(engineer, workload["open_count"]),
+			_("Warning: {0} already has {1} open jobs").format(
+				engineer, workload.get("open_count", 0)
+			),
 			indicator="orange",
 			alert=True,
 		)
 
-	from frappe.utils import nowdate
+	current_user = frappe.session.user
+
+	if not current_user or current_user == "Guest":
+		current_user = "Administrator"
+
+	if not frappe.db.exists("User", current_user):
+		current_user = "Administrator"
+
 	ja = frappe.new_doc("Job Assignment")
 	ja.service_request = service_request
 	ja.assignment_date = nowdate()
@@ -170,12 +225,27 @@ def create_assignment(service_request, engineer, job_type="Repair", estimated_ho
 	ja.assignment_type = "Technician Assignment"
 	ja.job_type = job_type
 	ja.assignment_status = "Open"
+
+	
+	ja.assigned_by = current_user
+
 	if estimated_hours:
-		ja.estimated_hours = float(estimated_hours)
-	ja.flags.ignore_permissions = True
-	ja.insert()
+		try:
+			ja.estimated_hours = float(estimated_hours)
+		except Exception:
+			pass
+
+	ja.insert(ignore_permissions=True)
 	ja.submit()
-	return {"name": ja.name, "status": "created"}
+
+	frappe.db.commit()
+
+	return {
+		"name": ja.name,
+		"status": "created",
+		"assigned_by": current_user,
+	}
+
 
 
 def _default_columns():

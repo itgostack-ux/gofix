@@ -211,10 +211,10 @@ class ServiceRequest(Document):
 				)
 
 	def fetch_customer_details(self):
-		"""Fetch customer contact details and addresses"""
+		"""Fetch customer contact details and billing address"""
 		if self.customer:
 			customer = frappe.get_doc("Customer", self.customer)
-			
+
 			# Fetch primary contact if not provided
 			if not self.contact_number or not self.email:
 				contacts = frappe.get_all("Dynamic Link",
@@ -225,13 +225,54 @@ class ServiceRequest(Document):
 					},
 					fields=["parent"],
 					limit=1)
-				
+
 				if contacts:
 					contact = frappe.get_doc("Contact", contacts[0].parent)
 					if not self.contact_number and contact.mobile_no:
 						self.contact_number = contact.mobile_no
 					if not self.email and contact.email_id:
 						self.email = contact.email_id
+
+			# Populate billing address from customer's active billing address
+			self._fetch_billing_address_from_customer(customer)
+
+	def _fetch_billing_address_from_customer(self, customer=None):
+		"""Populate billing_address_display, billing_gstin, billing_state_name,
+		billing_state_code from the customer's active CH Customer Address row.
+		Only overwrites if the field is empty (preserves manual edits).
+		"""
+		if not self.meta.has_field("billing_address_display"):
+			return  # custom fields not yet installed
+
+		if customer is None:
+			if not self.customer:
+				return
+			customer = frappe.get_doc("Customer", self.customer)
+
+		billing_addr = _get_active_address(customer, "Billing")
+		if not billing_addr:
+			return
+
+		lines = [
+			billing_addr.address_line1,
+			billing_addr.address_line2,
+			", ".join(filter(None, [billing_addr.city, billing_addr.state, billing_addr.pincode])),
+		]
+		display = "\n".join(l for l in lines if l)
+
+		self.billing_address_display = display
+		if billing_addr.gstin:
+			self.billing_gstin = billing_addr.gstin
+		if billing_addr.state:
+			self.billing_state_name = billing_addr.state
+		if billing_addr.state_code:
+			self.billing_state_code = billing_addr.state_code
+
+		# Mirror to shipping when same_as_billing
+		if self.meta.has_field("same_as_billing"):
+			if self.get("same_as_billing") or self.get("same_as_billing") is None:
+				if self.meta.has_field("shipping_address_display"):
+					self.shipping_address_display = display
 
 	def fetch_warranty_from_serial(self):
 		"""Fetch warranty status from CH Sold Plan via ch_item_master warranty API.
@@ -1626,6 +1667,48 @@ def get_warehouse_state(warehouse) -> dict:
 		frappe.log_error(f"Error fetching warehouse state: {str(e)}")
 	
 	return {}
+
+
+def _get_active_address(customer_doc, address_type="Billing"):
+	"""Return the first active CH Customer Address row for the given type.
+
+	address_type = "Billing" or "Shipping".
+	A row with type "Both" satisfies either query.
+	Returns None if no active address is found or the custom field doesn't exist.
+	"""
+	billing_addresses = customer_doc.get("billing_addresses") or []
+	for addr in billing_addresses:
+		if not addr.get("is_active"):
+			continue
+		row_type = addr.get("address_type") or "Billing"
+		if row_type == "Both" or row_type == address_type:
+			return addr
+	return None
+
+
+@frappe.whitelist()
+def get_customer_billing_address(customer):
+	"""Return the active Billing CH Customer Address for *customer*.
+
+	Called from the SR form JS after customer is selected.
+	Returns a plain dict with address fields, or None if not set.
+	"""
+	if not customer:
+		return None
+	customer_doc = frappe.get_doc("Customer", customer)
+	addr = _get_active_address(customer_doc, "Billing")
+	if not addr:
+		return None
+	return {
+		"address_line1": addr.address_line1,
+		"address_line2": addr.address_line2 or "",
+		"city": addr.city,
+		"state": addr.state or "",
+		"state_code": addr.state_code or "",
+		"pincode": addr.pincode or "",
+		"country": addr.country or "India",
+		"gstin": addr.gstin or "",
+	}
 
 
 def flag_unclaimed_devices(days_threshold=15):

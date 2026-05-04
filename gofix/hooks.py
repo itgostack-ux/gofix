@@ -62,6 +62,7 @@ doctype_list_js = {
 
 doctype_js = {
     "Material Request": "public/js/material_request_gofix.js",
+    "Customer": "public/js/customer_gofix.js",
 }
 
 after_install = "gofix.setup.install.after_install"
@@ -74,6 +75,7 @@ after_migrate = [
     "gofix.setup.sales_invoice_custom_fields.create_sales_invoice_custom_fields",
     "gofix.setup.competitive_ops_fields.create_competitive_ops_fields",
     "gofix.setup.material_request_custom_fields.create_material_request_custom_fields",
+    "gofix.setup.customer_address_fields.create_customer_address_fields",
 ]
 
 permission_query_conditions = {
@@ -110,6 +112,9 @@ doc_events = {
 	"Service Request": {
 		"on_update": "gofix.gofix_services.whatsapp_notifications.on_service_request_update",
 		"on_update_after_submit": "gofix.gofix_services.doctype.service_request.service_request.ensure_service_order_on_accept",
+	},
+	"Customer": {
+		"validate": "gofix.gofix_services.customer_address.validate_single_active_address",
 	},
 }
 

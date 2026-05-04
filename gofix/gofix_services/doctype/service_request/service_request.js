@@ -186,6 +186,9 @@ frappe.ui.form.on('Service Request', {
 						// Auto-set B2B / B2C based on GSTIN
 						_set_b2b_b2c_from_gstin(frm, r.message.gstin);
 
+						// Fetch active billing address
+						_fetch_customer_billing_address(frm);
+
 						// Check for open requests
 						if (!frm.is_new()) {
 							show_open_requests(frm);
@@ -308,7 +311,15 @@ frappe.ui.form.on('Service Request', {
 				}
 			});
 		}
-	}
+	},
+
+	same_as_billing: function(frm) {
+		if (frm.doc.same_as_billing) {
+			frm.set_value('shipping_address_display', frm.doc.billing_address_display || '');
+		} else {
+			frm.set_value('shipping_address_display', '');
+		}
+	},
 });
 
 // Service Items child table handlers
@@ -810,6 +821,41 @@ function _set_b2b_b2c_from_gstin(frm, gstin) {
 	if (frm.doc.customer_type !== b2b_b2c) {
 		frm.set_value('customer_type', b2b_b2c);
 	}
+}
+
+// ── Billing Address helper ─────────────────────────────────────────────────
+function _fetch_customer_billing_address(frm) {
+	if (!frm.doc.customer) return;
+	frappe.xcall(
+		'gofix.gofix_services.doctype.service_request.service_request.get_customer_billing_address',
+		{ customer: frm.doc.customer }
+	).then(function(addr) {
+		if (!addr) return;
+
+		const lines = [
+			addr.address_line1,
+			addr.address_line2,
+			[addr.city, addr.state, addr.pincode].filter(Boolean).join(', '),
+			addr.country,
+		].filter(Boolean);
+		const display = lines.join('\n');
+
+		frm.set_value('billing_address_display', display);
+		frm.set_value('billing_gstin', addr.gstin || '');
+		frm.set_value('billing_state_name', addr.state || '');
+		frm.set_value('billing_state_code', addr.state_code || '');
+
+		// If GSTIN is set on billing address, override the form's GSTIN
+		if (addr.gstin) {
+			frm.set_value('gstin', addr.gstin);
+			_set_b2b_b2c_from_gstin(frm, addr.gstin);
+		}
+
+		// Mirror to shipping if same_as_billing
+		if (frm.doc.same_as_billing || frm.doc.same_as_billing === undefined) {
+			frm.set_value('shipping_address_display', display);
+		}
+	});
 }
 
 // ── Not Repairable Flow ──────────────────────────────────────────────────────

@@ -19,6 +19,14 @@
   "gstin",
   "pan",
   "company",
+  "section_billing_address",
+  "billing_address_display",
+  "billing_gstin",
+  "billing_state_name",
+  "billing_state_code",
+  "col_break_shipping",
+  "same_as_billing",
+  "shipping_address_display",
   "section_store_location",
   "source_warehouse",
   "current_location",
@@ -248,6 +256,54 @@
    "options": "Company",
    "remember_last_selected_value": 1,
    "reqd": 1
+  },
+  {
+   "fieldname": "section_billing_address",
+   "fieldtype": "Section Break",
+   "label": "Billing & Shipping Address"
+  },
+  {
+   "fieldname": "billing_address_display",
+   "fieldtype": "Small Text",
+   "label": "Billing Address",
+   "read_only": 1,
+   "description": "Auto-populated from customer's active billing address"
+  },
+  {
+   "fieldname": "billing_gstin",
+   "fieldtype": "Data",
+   "label": "Billing GSTIN",
+   "read_only": 1
+  },
+  {
+   "fieldname": "billing_state_name",
+   "fieldtype": "Data",
+   "label": "Billing State",
+   "read_only": 1
+  },
+  {
+   "fieldname": "billing_state_code",
+   "fieldtype": "Data",
+   "label": "Billing State Code",
+   "length": 2,
+   "read_only": 1
+  },
+  {
+   "fieldname": "col_break_shipping",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "1",
+   "fieldname": "same_as_billing",
+   "fieldtype": "Check",
+   "label": "Shipping Same as Billing"
+  },
+  {
+   "depends_on": "eval:!doc.same_as_billing",
+   "fieldname": "shipping_address_display",
+   "fieldtype": "Small Text",
+   "label": "Shipping Address",
+   "read_only": 1
   },
   {
    "collapsible": 1,

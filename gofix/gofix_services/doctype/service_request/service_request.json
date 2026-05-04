@@ -198,6 +198,24 @@
    "read_only": 1
   },
   {
+   "fieldname": "ch_customer_id",
+   "fieldtype": "Int",
+   "label": "Customer ID",
+   "fetch_from": "customer.ch_customer_id",
+   "read_only": 1,
+   "search_index": 1,
+   "no_copy": 0,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "ch_membership_id",
+   "fieldtype": "Data",
+   "label": "Membership ID",
+   "fetch_from": "customer.ch_membership_id",
+   "read_only": 1,
+   "no_copy": 0
+  },
+  {
    "fieldname": "customer_type",
    "fieldtype": "Select",
    "label": "Customer Type",

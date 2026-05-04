@@ -61,7 +61,8 @@ def get_data(filters):
 	where = " AND ".join(conditions) if conditions else "1=1"
 
 	# All service requests grouped by serial_no
-	sr_data = frappe.db.sql(f"""
+	sr_data = frappe.db.sql(
+		"""
 		SELECT
 			sr.serial_no,
 			sr.device_item,
@@ -81,9 +82,12 @@ def get_data(filters):
 		WHERE sr.serial_no IS NOT NULL
 			AND sr.serial_no != ''
 			AND sr.docstatus < 2
-			AND {where}
-		ORDER BY sr.serial_no, sr.service_date DESC
-	""", values, as_dict=True)
+			AND """
+		+ where
+		+ " ORDER BY sr.serial_no, sr.service_date DESC",
+		values,
+		as_dict=True,
+	)
 
 	if not sr_data:
 		return []

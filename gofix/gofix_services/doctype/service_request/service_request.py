@@ -19,6 +19,7 @@ class ServiceRequest(Document):
 		self.detect_visit_type()
 		self.check_open_requests()
 		self.fetch_customer_details()
+		self._sync_customer_id()
 		# Fetch warehouse details - especially state for GST
 		if self.source_warehouse:
 			self.fetch_warehouse_details()
@@ -413,6 +414,21 @@ class ServiceRequest(Document):
 		if self.get("actual_completion_date") and self.service_date:
 			if getdate(self.get("actual_completion_date")) < getdate(self.service_date):
 				frappe.throw(_("Actual Completion Date cannot be before Service Request Date"), title=_("Service Request Error"))
+
+	def _sync_customer_id(self):
+		"""Populate ch_customer_id / ch_membership_id from Customer master."""
+		if not self.customer or (self.get("ch_customer_id") and self.get("ch_membership_id")):
+			return
+		cust = frappe.db.get_value(
+			"Customer", self.customer,
+			["ch_customer_id", "ch_membership_id"],
+			as_dict=True,
+		)
+		if cust:
+			if not self.get("ch_customer_id"):
+				self.ch_customer_id = cust.ch_customer_id
+			if not self.get("ch_membership_id"):
+				self.ch_membership_id = cust.ch_membership_id
 
 	def validate_withdrawal(self):
 		"""Validate withdrawal reason is provided if status is withdrawn"""

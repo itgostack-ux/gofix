@@ -395,11 +395,19 @@ def get_ticket_detail(sr_name) -> dict:
 		],
 		order_by="assignment_date asc, creation asc",
 	)
+	# Batch-fetch employee names instead of one query per assignment
+	engineer_ids = list({a.service_engineer for a in assignments if a.service_engineer})
+	if engineer_ids:
+		emp_rows = frappe.db.sql(
+			"SELECT name, employee_name FROM `tabEmployee` WHERE name IN %(ids)s",
+			{"ids": tuple(engineer_ids)},
+			as_dict=True,
+		)
+		eng_name_map = {r.name: r.employee_name for r in emp_rows}
+	else:
+		eng_name_map = {}
 	for a in assignments:
-		if a.service_engineer:
-			a["engineer_display"] = frappe.db.get_value("Employee", a.service_engineer, "employee_name") or a.service_engineer
-		else:
-			a["engineer_display"] = ""
+		a["engineer_display"] = eng_name_map.get(a.service_engineer) or a.service_engineer or ""
 
 	# Fetch QC status from linked Service Order
 	qc_status = ""
@@ -738,24 +746,43 @@ def get_solutions_for_issue(issue_category) -> dict:
 		order_by="solution_name",
 	)
 
-	for sol in solutions:
-		if sol.minimum_grade:
-			grade = frappe.db.get_value(
-				"Technician Grade", sol.minimum_grade,
-				["grade_name", "grade_level"], as_dict=True,
-			)
-			sol["grade_display"] = f"L{grade.grade_level} — {grade.grade_name}" if grade else sol.minimum_grade
-		else:
-			sol["grade_display"] = "Any"
+	if not solutions:
+		return solutions
 
-		spares = []
-		if sol.requires_spare:
-			spares = frappe.get_all(
-				"Solution Spare Mapping",
-				filters={"repair_solution": sol.name, "is_active": 1},
-				fields=["spare_item", "item_name", "default_qty", "uom", "is_mandatory"],
-			)
-		sol["spares"] = spares
+	# Batch-fetch all technician grades needed
+	grade_ids = list({s.minimum_grade for s in solutions if s.minimum_grade})
+	grade_map = {}
+	if grade_ids:
+		grade_rows = frappe.db.sql(
+			"SELECT name, grade_name, grade_level FROM `tabTechnician Grade` WHERE name IN %(ids)s",
+			{"ids": tuple(grade_ids)},
+			as_dict=True,
+		)
+		grade_map = {r.name: r for r in grade_rows}
+
+	# Batch-fetch all spare mappings needed
+	sol_names_needing_spares = [s.name for s in solutions if s.requires_spare]
+	spares_by_sol = {}
+	if sol_names_needing_spares:
+		spare_rows = frappe.db.sql(
+			"""
+			SELECT repair_solution, spare_item, item_name, default_qty, uom, is_mandatory
+			FROM `tabSolution Spare Mapping`
+			WHERE repair_solution IN %(names)s AND is_active = 1
+			""",
+			{"names": tuple(sol_names_needing_spares)},
+			as_dict=True,
+		)
+		for sp in spare_rows:
+			spares_by_sol.setdefault(sp.repair_solution, []).append(sp)
+
+	for sol in solutions:
+		grade = grade_map.get(sol.minimum_grade)
+		if grade:
+			sol["grade_display"] = f"L{grade.grade_level} — {grade.grade_name}"
+		else:
+			sol["grade_display"] = "Any" if not sol.minimum_grade else sol.minimum_grade
+		sol["spares"] = spares_by_sol.get(sol.name, [])
 
 	return solutions
 
@@ -856,6 +883,45 @@ def save_solution_assignment(sr_name, solutions_json) -> dict:
 			"status": prow.get("status", "Pending"),
 		})
 
+	# Batch-fetch spare mappings + item prices for new auto-spare solutions upfront
+	new_sols_with_spares = [
+		sol for sol in solutions
+		if sol.get("auto_add_spares") and sol.get("repair_solution") not in preserved_solution_names
+	]
+	spare_mapping_by_sol = {}
+	spare_price_map = {}
+	spare_std_rate_map = {}
+	if new_sols_with_spares:
+		sol_ids = list({s.get("repair_solution") for s in new_sols_with_spares if s.get("repair_solution")})
+		if sol_ids:
+			all_spare_rows = frappe.db.sql(
+				"""
+				SELECT repair_solution, spare_item, item_name, default_qty, uom
+				FROM `tabSolution Spare Mapping`
+				WHERE repair_solution IN %(ids)s AND is_active = 1
+				""",
+				{"ids": tuple(sol_ids)},
+				as_dict=True,
+			)
+			for sp in all_spare_rows:
+				spare_mapping_by_sol.setdefault(sp.repair_solution, []).append(sp)
+
+			all_items = list({sp.spare_item for sp in all_spare_rows if sp.spare_item})
+			if all_items:
+				price_rows = frappe.db.sql(
+					"SELECT item_code, price_list_rate FROM `tabItem Price` WHERE item_code IN %(items)s AND selling = 1",
+					{"items": tuple(all_items)},
+					as_dict=True,
+				)
+				spare_price_map = {r.item_code: flt(r.price_list_rate) for r in price_rows}
+
+				rate_rows = frappe.db.sql(
+					"SELECT name, standard_rate FROM `tabItem` WHERE name IN %(items)s",
+					{"items": tuple(all_items)},
+					as_dict=True,
+				)
+				spare_std_rate_map = {r.name: flt(r.standard_rate) for r in rate_rows}
+
 	# Add new solutions (skip duplicates that are already preserved)
 	for sol in solutions:
 		if sol.get("repair_solution") in preserved_solution_names:
@@ -870,14 +936,8 @@ def save_solution_assignment(sr_name, solutions_json) -> dict:
 		})
 
 		if sol.get("auto_add_spares"):
-			for sp in frappe.get_all(
-				"Solution Spare Mapping",
-				filters={"repair_solution": sol.get("repair_solution"), "is_active": 1},
-				fields=["spare_item", "item_name", "default_qty", "uom"],
-			):
-				spare_rate = flt(
-					frappe.db.get_value("Item Price", {"item_code": sp.spare_item, "selling": 1}, "price_list_rate")
-				) or flt(frappe.db.get_value("Item", sp.spare_item, "standard_rate"))
+			for sp in spare_mapping_by_sol.get(sol.get("repair_solution"), []):
+				spare_rate = spare_price_map.get(sp.spare_item) or spare_std_rate_map.get(sp.spare_item, 0.0)
 				sr.append("spare_lines", {
 					"repair_solution": sol.get("repair_solution"),
 					"issue_category": sol.get("issue_category"),
@@ -887,8 +947,8 @@ def save_solution_assignment(sr_name, solutions_json) -> dict:
 					"uom": sp.uom,
 					"rate": spare_rate,
 					"amount": (sp.default_qty or 1) * spare_rate,
-				"status": "Pending",
-			})
+					"status": "Pending",
+				})
 
 	# ── Validate: every active issue must have ≥1 solution (Fix #1) ────
 	active_categories = {

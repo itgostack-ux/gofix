@@ -34,7 +34,7 @@
 
 	// Workspace slugs where the switcher should also appear
 	const SWITCHER_WORKSPACES = new Set([
-		"buyback", "gofix", "gogizmo-erp", "ch-core", "ch-item-master", "ch-vas",
+		"buyback", "gofix", "erp", "ch-core", "ch-item-master", "ch-vas",
 		"masters", "services",
 	]);
 

@@ -439,6 +439,7 @@ def process_advance_refund(service_request, amount=None, reason=None) -> dict:
 	pe.party_type = "Customer"
 	pe.party = sr.customer
 	pe.company = company
+	pe.mode_of_payment = erp_mode
 	pe.paid_from = company_account
 	pe.paid_to = company_account
 	pe.paid_amount = refund_amount

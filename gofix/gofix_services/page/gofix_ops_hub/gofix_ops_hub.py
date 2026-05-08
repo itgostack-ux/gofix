@@ -1234,7 +1234,9 @@ def add_spare_to_ticket(sr_name, spare_item, qty, rate=0, repair_solution=None) 
 	is_stock = cint(item.get("is_stock_item"))
 	in_stock = (avail["available_qty"] >= qty) if is_stock else True
 
-	status = "Reserved" if in_stock else "Awaiting Procurement"
+	# When spare is in stock it is being consumed immediately for this repair.
+	# "Awaiting Procurement" is set only when the part needs to be ordered first.
+	status = "Consumed" if in_stock else "Awaiting Procurement"
 
 	sr.flags.ignore_validate_update_after_submit = True
 	sr.flags.ignore_mandatory = True
@@ -1268,14 +1270,14 @@ def _get_spare_availability(item_code, warehouse) -> dict:
 		frappe.db.get_value("Bin", {"item_code": item_code, "warehouse": warehouse}, "actual_qty")
 	)
 
-	# Count already reserved across all SRs at this warehouse
+	# Count already committed (reserved or consumed) across all SRs at this warehouse
 	reserved_qty = flt(frappe.db.sql("""
 		SELECT COALESCE(SUM(sl.qty), 0)
 		FROM `tabSR Spare Line` sl
 		JOIN `tabService Request` sr ON sr.name = sl.parent
 		WHERE sl.spare_item = %(item)s
 		  AND sr.source_warehouse = %(wh)s
-		  AND sl.status = 'Reserved'
+		  AND sl.status IN ('Reserved', 'Consumed')
 		  AND sl.parenttype = 'Service Request'
 	""", {"item": item_code, "wh": warehouse})[0][0])
 

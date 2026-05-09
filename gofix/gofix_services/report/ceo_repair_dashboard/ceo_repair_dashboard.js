@@ -8,7 +8,10 @@ frappe.query_reports["CEO Repair Dashboard"] = {
 			label: __("Company"),
 			fieldtype: "Link",
 			options: "Company",
-			default: frappe.defaults.get_user_default("Company"),
+			default: "GoFix Services Pvt Ltd",
+			get_query: () => ({
+				filters: [["Company", "name", "like", "GoFix%"]]
+			}),
 		},
 		{
 			fieldname: "from_date",

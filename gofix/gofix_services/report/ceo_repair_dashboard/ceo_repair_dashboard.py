@@ -51,7 +51,7 @@ def get_columns():
 
 
 def get_data(filters):
-	conditions = "so.is_service_order = 1 AND so.docstatus = 1"
+	conditions = "so.is_service_order = 1 AND so.docstatus != 2"
 	values = {}
 
 	if filters:

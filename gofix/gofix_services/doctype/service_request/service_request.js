@@ -116,35 +116,37 @@ frappe.ui.form.on('Service Request', {
 			});
 		}
 		
-		// Filter device item to only show Devices item group
+		// Filter device item: stock items (Variant Template / Simple / Asset).
 		frm.set_query('device_item', function() {
 			return {
+				query: 'ch_item_master.ch_item_master.api.items_by_subcategory_nature',
 				filters: {
-					'item_group': ['in', ['Devices', 'Mobile Phones', 'Laptops', 'Tablets']],
-					'has_variants': 0
+					natures: ['Variant Template', 'Simple Auto-Named', 'Simple Custom-Named', 'Asset / Capital'],
+					is_stock_item: 1
 				}
 			};
 		});
 
-		// Filter service items to only show Services
+		// Service items: Service-nature items only (CH Sub Category.item_nature = 'Service').
 		frm.fields_dict.service_items && (
 			frm.fields_dict.service_items.grid.get_field('service_item').get_query = function() {
 				return {
-					filters: {
-						'item_group': ['in', ['Services', 'Repair Services', 'Installation', 'Consultation']],
-						'has_variants': 0
-					}
+					query: 'ch_item_master.ch_item_master.api.items_by_subcategory_nature',
+					filters: { natures: ['Service'], is_stock_item: 0 }
 				};
 			}
 		);
 
-		// Filter spare parts to only show Spare Parts
+		// Spare parts: any stock item (Variant / Simple). The legacy item_group
+		// filter is replaced by the nature filter so spare-parts can live in any
+		// stock-tracked sub-category.
 		frm.fields_dict.spare_parts && (
 			frm.fields_dict.spare_parts.grid.get_field('spare_part_item').get_query = function() {
 				return {
+					query: 'ch_item_master.ch_item_master.api.items_by_subcategory_nature',
 					filters: {
-						'item_group': ['in', ['Spare Parts', 'Mobile Parts', 'Laptop Parts', 'Tablet Parts']],
-						'has_variants': 0
+						natures: ['Variant Template', 'Simple Auto-Named', 'Simple Custom-Named'],
+						is_stock_item: 1
 					}
 				};
 			}

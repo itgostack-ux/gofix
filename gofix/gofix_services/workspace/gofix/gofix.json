@@ -246,6 +246,16 @@
   {
    "hidden": 0,
    "is_query_report": 0,
+   "label": "Repair Cost Template",
+   "link_count": 0,
+   "link_to": "GoFix Repair Cost Template",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
    "label": "Quick Pages",
    "link_count": 2,
    "link_type": "DocType",
@@ -350,9 +360,19 @@
    "link_type": "Page",
    "onboard": 1,
    "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Walk-in Conversion",
+   "link_count": 0,
+   "link_to": "Walk-in Conversion Report",
+   "link_type": "Report",
+   "onboard": 0,
+   "type": "Link"
   }
  ],
- "modified": "2026-04-16 12:18:19.655226",
+ "modified": "2026-05-11 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "GoFix Services",
  "name": "GoFix",

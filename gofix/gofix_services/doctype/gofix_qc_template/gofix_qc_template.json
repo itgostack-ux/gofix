@@ -1,4 +1,5 @@
 {
+ "allow_import": 1,
  "actions": [],
  "autoname": "field:template_name",
  "creation": "2025-01-01 00:00:00.000000",

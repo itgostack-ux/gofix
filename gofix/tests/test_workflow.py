@@ -180,3 +180,5 @@ if __name__ == "__main__":
 		print(f"Service Order:   http://erpnext.local:8000/app/sales-order/{so_name}")
 		print(f"Job Sheet:       http://erpnext.local:8000/app/job-assignment/{js_name}")
 		print("="*80 + "\n")
+
+run_all = test_complete_workflow

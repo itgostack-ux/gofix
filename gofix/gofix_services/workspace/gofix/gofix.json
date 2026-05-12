@@ -8,7 +8,7 @@
  "doctype": "Workspace",
  "for_user": "",
  "hide_custom": 0,
- "icon": "tool",
+ "icon": "support",
  "idx": 0,
  "is_hidden": 0,
  "label": "GoFix",
@@ -490,5 +490,6 @@
   }
  ],
  "title": "GoFix",
- "type": "Workspace"
+ "type": "Workspace",
+ "indicator_color": "red"
 }

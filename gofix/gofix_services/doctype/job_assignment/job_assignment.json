@@ -1,5 +1,6 @@
 {
  "actions": [],
+ "allow_import": 1,
  "allow_rename": 1,
  "autoname": "format:JA-{service_request}-{###}",
  "creation": "2024-12-05 10:30:00",

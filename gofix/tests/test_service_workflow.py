@@ -308,3 +308,5 @@ def test_service_request_workflow():
 
 if __name__ == "__main__":
 	test_service_request_workflow()
+
+run_all = test_service_request_workflow

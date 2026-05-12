@@ -7,7 +7,7 @@
  "doctype": "Workspace",
  "for_user": "",
  "hide_custom": 0,
- "icon": "tool",
+ "icon": "support",
  "idx": 0,
  "is_hidden": 0,
  "label": "GoFix",
@@ -23,5 +23,6 @@
  "roles": [],
  "sequence_id": 1,
  "shortcuts": [],
- "title": "GoFix"
+ "title": "GoFix",
+ "indicator_color": "red"
 }

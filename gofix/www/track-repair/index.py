@@ -4,6 +4,7 @@
 
 import frappe
 from frappe import _
+from frappe.rate_limiter import rate_limit
 from frappe.utils import flt, getdate, nowdate
 import hashlib
 import hmac
@@ -34,10 +35,47 @@ def get_context(context):
 	context.error = None if tracking_data else "not_found"
 
 
+def _client_ip() -> str:
+	try:
+		return frappe.local.request.remote_addr or "unknown"
+	except Exception:
+		return "unknown"
+
+
+def _check_lookup_lockout(scope: str) -> None:
+	"""Block (per IP, per scope) once 5 failed lookups occur in 1 hour.
+
+	Defence-in-depth on top of the @rate_limit decorator. Specifically counters
+	an attacker enumerating SR numbers via phone last-N attacks (C9).
+	"""
+	ip = _client_ip()
+	key = f"track_repair_fail:{ip}:{scope}"
+	fails = int(frappe.cache().get_value(key) or 0)
+	if fails >= 5:
+		frappe.throw(
+			_("Too many failed lookups from your network. Please try again later."),
+			frappe.PermissionError,
+			title=_("Rate Limit Exceeded"),
+		)
+
+
+def _record_lookup_failure(scope: str) -> None:
+	ip = _client_ip()
+	key = f"track_repair_fail:{ip}:{scope}"
+	fails = int(frappe.cache().get_value(key) or 0)
+	frappe.cache().set_value(key, fails + 1, expires_in_sec=3600)
+
+
+def _clear_lookup_failures(scope: str) -> None:
+	ip = _client_ip()
+	frappe.cache().delete_value(f"track_repair_fail:{ip}:{scope}")
+
+
 def _get_by_token(token):
 	"""Look up SR by tracking token (stored in SR or generated via HMAC)."""
 	# token = HMAC-SHA256(site_secret, sr_name)[:16]
 	# Try all recent SRs (this trades some perf for simplicity; at scale, store tokens)
+	_check_lookup_lockout("token")
 	sr_list = frappe.get_all(
 		"Service Request",
 		filters={"status": ["not in", ["Cancelled"]]},
@@ -51,23 +89,34 @@ def _get_by_token(token):
 		expected = hmac.new(
 			site_secret.encode(), sr.name.encode(), hashlib.sha256
 		).hexdigest()[:16]
-		if expected == token:
+		if hmac.compare_digest(expected, token or ""):
+			_clear_lookup_failures("token")
 			return _build_tracking_data(sr.name)
 
+	_record_lookup_failure("token")
 	return None
 
 
 def _get_by_phone(sr_name, phone_last4):
-	"""Verify SR exists and phone matches last 4 digits."""
+	"""Verify SR exists and phone last-6 digits match (last-4 is brute-forceable)."""
+	_check_lookup_lockout(f"phone:{sr_name}")
 	if not frappe.db.exists("Service Request", sr_name):
+		_record_lookup_failure(f"phone:{sr_name}")
 		return None
 
 	contact = frappe.db.get_value("Service Request", sr_name, "contact_number") or ""
 	clean_phone = "".join(c for c in contact if c.isdigit())
 
-	if clean_phone[-4:] != str(phone_last4).strip()[-4:]:
+	# Use last 6 digits (10^6 search space) and constant-time compare.
+	provided = "".join(c for c in str(phone_last4 or "") if c.isdigit())
+	if len(clean_phone) < 6 or len(provided) < 4:
+		_record_lookup_failure(f"phone:{sr_name}")
+		return None
+	if not hmac.compare_digest(clean_phone[-6:], provided[-6:].rjust(6, "0")):
+		_record_lookup_failure(f"phone:{sr_name}")
 		return None
 
+	_clear_lookup_failures(f"phone:{sr_name}")
 	return _build_tracking_data(sr_name)
 
 
@@ -143,6 +192,7 @@ def _build_tracking_data(sr_name):
 
 
 @frappe.whitelist(allow_guest=True)
+@rate_limit(limit=30, seconds=300, methods=["POST"], ip_based=True)
 def get_tracking_data(sr_name=None, phone_last4=None, token=None) -> dict:
 	"""Public API for AJAX tracking lookups."""
 	if token:
@@ -170,6 +220,7 @@ def generate_tracking_url(sr_name):
 
 
 @frappe.whitelist(allow_guest=True)
+@rate_limit(limit=10, seconds=300, methods=["POST"], ip_based=True)
 def customer_estimate_action(sr_name, version_number, action, remarks=None, token=None, phone_last4=None) -> dict:
 	"""Allow customer to approve/reject an estimate from the tracking page.
 

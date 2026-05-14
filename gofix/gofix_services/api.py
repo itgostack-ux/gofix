@@ -405,7 +405,7 @@ def reject_decision(service_order, remarks=None) -> dict:
 def process_advance_refund(service_request, amount=None, reason=None) -> dict:
 	"""Refund advance payment when device is not repairable.
 
-	Creates a Payment Entry (refund) and updates the Service Request.
+	Creates and submits a Payment Entry (refund) and updates the Service Request.
 	If *amount* is omitted, refunds the full advance_amount.
 	"""
 	frappe.only_for(["Sales Manager", "System Manager", "Service Manager"])
@@ -434,6 +434,15 @@ def process_advance_refund(service_request, amount=None, reason=None) -> dict:
 	if not company_account:
 		frappe.throw(_("Please set default Cash or Bank account for company {0}").format(company), title=_("API Error"))
 
+	try:
+		from erpnext.accounts.party import get_party_account
+		customer_account = get_party_account("Customer", sr.customer, company)
+	except Exception:
+		customer_account = frappe.db.get_value("Company", company, "default_receivable_account")
+
+	if not customer_account:
+		frappe.throw(_("Please set default Receivable account for company {0}").format(company), title=_("API Error"))
+
 	pe = frappe.new_doc("Payment Entry")
 	pe.payment_type = "Pay"
 	pe.party_type = "Customer"
@@ -441,7 +450,9 @@ def process_advance_refund(service_request, amount=None, reason=None) -> dict:
 	pe.company = company
 	pe.mode_of_payment = erp_mode
 	pe.paid_from = company_account
-	pe.paid_to = company_account
+	pe.paid_from_account_currency = frappe.get_cached_value("Account", company_account, "account_currency")
+	pe.paid_to = customer_account
+	pe.paid_to_account_currency = frappe.get_cached_value("Account", customer_account, "account_currency")
 	pe.paid_amount = refund_amount
 	pe.received_amount = refund_amount
 	pe.reference_no = f"Refund-{sr.name}"
@@ -449,6 +460,10 @@ def process_advance_refund(service_request, amount=None, reason=None) -> dict:
 	pe.remarks = f"Advance refund for Service Request {sr.name}. Reason: {reason or 'Not Repairable'}"
 
 	pe.insert(ignore_permissions=True)
+	if pe.meta.has_field("workflow_state"):
+		pe.db_set("workflow_state", "Approved", update_modified=False)
+		pe.workflow_state = "Approved"
+	pe.submit()
 
 	# Update Service Request
 	sr.db_set("advance_refund_amount", refund_amount, update_modified=False)
@@ -457,7 +472,7 @@ def process_advance_refund(service_request, amount=None, reason=None) -> dict:
 	sr.db_set("advance_refund_entry", pe.name, update_modified=False)
 
 	frappe.msgprint(
-		_("Advance refund of ₹{0} created: {1}").format(refund_amount, pe.name),
+		_("Advance refund of ₹{0} posted: {1}").format(refund_amount, pe.name),
 		indicator="green")
 
 	return {"payment_entry": pe.name, "amount": refund_amount}

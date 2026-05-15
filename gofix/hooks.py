@@ -48,7 +48,7 @@ add_to_apps_screen = [
 		"name": "gofix",
 		"logo": "/assets/gofix/icon.svg",
 		"title": "GoFix",
-		"route": "/desk/gofix-services",
+		"route": "/GoFix",
 		"has_permission": "gofix.gofix.utils.has_app_permission"
 	}
 ]

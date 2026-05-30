@@ -70,8 +70,8 @@ def _pf_exists(name):
 def _try_render(doctype, doc_name, print_format):
     """Attempt to render a print format. Returns (html_or_none, error_or_none)."""
     try:
-        from frappe.utils.print_format import get_print
-        html = get_print(doctype, doc_name, print_format=print_format)
+        # frappe.get_print is the correct API in Frappe v15
+        html = frappe.get_print(doctype, doc_name, print_format=print_format)
         return html, None
     except Exception as e:
         return None, str(e)

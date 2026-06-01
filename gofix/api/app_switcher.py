@@ -12,7 +12,7 @@ SWITCHER_PAGES = [
 	"gofix-ops-hub",
 	"purchase-hub",
 	"stock-hub",
-	"logistics-hub",
+	"logistics-control-tower",
     "scheme-hub",
 	"ceo-command-center",
 	"finance-dashboard",

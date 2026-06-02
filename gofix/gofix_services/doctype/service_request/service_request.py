@@ -33,6 +33,7 @@ class ServiceRequest(Document):
 		self.sync_decision_to_status()
 		self._validate_serial_substitution()
 		self._validate_service_discount()
+		self._validate_warranty_claim_cap()
 		self._detect_repeat_complaint()
 
 	def before_save(self):
@@ -1273,6 +1274,88 @@ class ServiceRequest(Document):
 
 		if not self.discount_exception_request:
 			self._create_service_discount_exception()
+
+	# ── Warranty Plan Claim Cap (#18) ────────────────────────────────
+
+	def _validate_warranty_claim_cap(self):
+		"""Block submission if claims for this serial/plan exceed plan limits.
+
+		Reads ``max_claims`` (lifetime cap) and ``claims_per_year`` (annual
+		cap) from the linked CH Warranty Plan and counts prior submitted
+		Service Requests for the same serial under the same plan. The cap
+		applies only when ``warranty_status`` is "Under Warranty" — out-of-
+		warranty repairs are not gated by the plan.
+
+		Reuse-first: uses the canonical fields already stored on
+		CH Warranty Plan (``max_claims``, ``claims_per_year``) — no new
+		schema. Skips silently when the plan cannot be resolved or limits
+		are unset (0 = unlimited per the field's own description).
+		"""
+		if (self.warranty_status or "").strip() != "Under Warranty":
+			return
+		if not self.warranty_plan or not self.serial_no:
+			return
+
+		try:
+			plan = frappe.get_cached_doc("CH Warranty Plan", self.warranty_plan)
+		except frappe.DoesNotExistError:
+			return
+
+		max_claims = int(plan.get("max_claims") or 0)
+		claims_per_year = int(plan.get("claims_per_year") or 0)
+		if not max_claims and not claims_per_year:
+			return  # Unlimited — nothing to enforce.
+
+		# Count prior submitted, non-cancelled SRs for this serial under
+		# the same plan, excluding the current document.
+		base_filters = {
+			"serial_no": self.serial_no,
+			"warranty_plan": self.warranty_plan,
+			"warranty_status": "Under Warranty",
+			"docstatus": 1,
+			"name": ["!=", self.name or ""],
+		}
+
+		if max_claims:
+			lifetime_count = frappe.db.count("Service Request", base_filters)
+			if lifetime_count >= max_claims:
+				frappe.throw(
+					_(
+						"Warranty plan <b>{0}</b> allows a maximum of <b>{1}</b> "
+						"lifetime claim(s) on serial <b>{2}</b>. {3} prior claim(s) "
+						"already submitted — please raise a Service Discount exception "
+						"or convert this to an out-of-warranty repair."
+					).format(plan.plan_name or self.warranty_plan, max_claims,
+						self.serial_no, lifetime_count),
+					title=_("Warranty Claim Cap Reached"),
+				)
+
+		if claims_per_year:
+			from frappe.utils import add_months, getdate, nowdate
+			# Anniversary window: last 12 months from today.
+			window_start = add_months(getdate(nowdate()), -12)
+			annual_filters = dict(base_filters)
+			annual_filters["transaction_date"] = [">=", window_start]
+			# Service Request uses ``received_datetime``/``creation`` as
+			# the timestamp; fall back to creation when available.
+			if frappe.get_meta("Service Request").has_field("received_datetime"):
+				annual_filters.pop("transaction_date", None)
+				annual_filters["received_datetime"] = [">=", window_start]
+			else:
+				annual_filters.pop("transaction_date", None)
+				annual_filters["creation"] = [">=", window_start]
+
+			annual_count = frappe.db.count("Service Request", annual_filters)
+			if annual_count >= claims_per_year:
+				frappe.throw(
+					_(
+						"Warranty plan <b>{0}</b> allows a maximum of <b>{1}</b> "
+						"claim(s) per policy year on serial <b>{2}</b>. {3} claim(s) "
+						"already submitted in the last 12 months."
+					).format(plan.plan_name or self.warranty_plan, claims_per_year,
+						self.serial_no, annual_count),
+					title=_("Annual Warranty Claim Cap Reached"),
+				)
 
 	def _create_service_discount_exception(self):
 		"""Create a CH Exception Request for service discount."""

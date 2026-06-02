@@ -2,6 +2,7 @@
  "actions": [],
  "allow_import": 1,
  "allow_rename": 1,
+ "autoname": "field:state_name",
  "creation": "2024-05-21 11:38:28.011329",
  "doctype": "DocType",
  "engine": "InnoDB",

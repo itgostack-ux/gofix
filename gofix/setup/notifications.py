@@ -137,6 +137,31 @@ NOTIFICATIONS = [
         "send_to_all_assignees": 0,
         "recipients": [{"receiver_by_document_field": "email"}],
     },
+    {
+        "name": "GoFix - Inter-Store Transfer Initiated",
+        "subject": "GoFix | Device Transfer | {{ doc.name }}",
+        "document_type": "Service Request",
+        "event": "Value Change",
+        "value_changed": "transferred_to_store",
+        "condition": "doc.transferred_to_store",
+        "message": (
+            "<div style='font-family:Segoe UI,Arial,sans-serif;max-width:680px;border:1px solid #e5e7eb;border-radius:10px;overflow:hidden'>"
+            "<div style='background:#0f172a;color:#fff;padding:12px 16px;font-weight:600'>GoFix Services</div>"
+            "<div style='padding:16px'>"
+            "<p>Dear {{ doc.customer_name }},</p>"
+            "<p>Your device is being transferred to a service centre that can complete the repair.</p>"
+            "<p><b>Service Request:</b> {{ doc.name }}<br>"
+            "<b>From:</b> {{ doc.source_warehouse or '' }}<br>"
+            "<b>To:</b> {{ doc.transferred_to_store }}<br>"
+            "<b>Transfer Status:</b> {{ doc.transfer_status or 'In Transit' }}</p>"
+            "<p>We will keep you informed as the device moves through transit. No action is required from your side.</p>"
+            "<p><a href='{{ frappe.utils.get_url_to_form(\"Service Request\", doc.name) }}' style='background:#0b57d0;color:#fff;text-decoration:none;padding:10px 14px;border-radius:6px;display:inline-block;font-weight:600'>Open Service Request</a></p>"
+            "</div></div>"
+        ),
+        "channel": "Email",
+        "send_to_all_assignees": 0,
+        "recipients": [{"receiver_by_document_field": "email"}],
+    },
 ]
 
 

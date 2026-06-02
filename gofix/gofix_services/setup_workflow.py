@@ -28,6 +28,10 @@ def setup_service_order_workflow():
     print("=" * 70 + "\n")
     
     try:
+        # Step 0: Ensure required custom roles
+        print("Step 0: Ensuring custom roles...")
+        ensure_custom_roles()
+
         # Step 1: Create workflow states
         print("Step 1: Creating Workflow States...")
         create_workflow_states()
@@ -62,11 +66,95 @@ def setup_service_order_workflow():
         raise
 
 
+def ensure_custom_roles():
+    """Idempotently create custom roles required by the workflow.
+
+    Currently registers:
+      - GoGizmo Head — final approver for escalated Service Orders.
+    """
+    roles = ["GoGizmo Head"]
+    for role_name in roles:
+        if frappe.db.exists("Role", role_name):
+            print(f"  ○ Role exists: {role_name}")
+            continue
+        role = frappe.get_doc({
+            "doctype": "Role",
+            "role_name": role_name,
+            "desk_access": 1,
+            "is_custom": 1,
+        })
+        role.insert(ignore_permissions=True)
+        print(f"  ✓ Created role: {role_name}")
+    frappe.db.commit()
+
+
+def _ensure_workflow_state_and_actions():
+    """Create the global Frappe Workflow State and Workflow Action Master
+    rows required by the Service Order Workflow.
+
+    These are global registries shared across all workflows in Frappe; the
+    Workflow Document State.state and Workflow Transition.action fields
+    are Link-typed and Workflow.save() validates them up-front.
+    """
+    workflow_states = [
+        ("Draft", "Primary"),
+        ("Pending Approval", "Warning"),
+        ("GoGizmo Head Approval", "Warning"),
+        ("Approved", "Success"),
+        ("In Progress", "Info"),
+        ("Completed", "Success"),
+        ("Cancelled", "Danger"),
+    ]
+    for state_name, style in workflow_states:
+        if not frappe.db.exists("Workflow State", state_name):
+            frappe.get_doc({
+                "doctype": "Workflow State",
+                "workflow_state_name": state_name,
+                "style": style,
+            }).insert(ignore_permissions=True)
+
+    workflow_actions = [
+        "Submit for Approval", "Cancel", "Approve", "Reject",
+        "Escalate to GoGizmo Head", "Final Approve", "Send Back",
+        "Start Work", "Complete",
+    ]
+    for action_name in workflow_actions:
+        if not frappe.db.exists("Workflow Action Master", action_name):
+            frappe.get_doc({
+                "doctype": "Workflow Action Master",
+                "workflow_action_name": action_name,
+            }).insert(ignore_permissions=True)
+    frappe.db.commit()
+
+
+def ensure_custom_roles():
+    """Idempotently create custom roles required by the workflow.
+
+    Currently registers:
+      - GoGizmo Head — final approver for escalated Service Orders.
+    """
+    roles = ["GoGizmo Head"]
+    for role_name in roles:
+        if frappe.db.exists("Role", role_name):
+            print(f"  ○ Role exists: {role_name}")
+            continue
+        role = frappe.get_doc({
+            "doctype": "Role",
+            "role_name": role_name,
+            "desk_access": 1,
+            "is_custom": 1,
+        })
+        role.insert(ignore_permissions=True)
+        print(f"  ✓ Created role: {role_name}")
+    frappe.db.commit()
+
+
 def create_workflow_states():
     """Create the workflow states"""
     states = [
         {"state_name": "Draft"},
         {"state_name": "Pending Approval"},
+        {"state_name": "GoGizmo Head Approval"},
         {"state_name": "Approved"},
         {"state_name": "In Progress"},
         {"state_name": "Completed"},
@@ -78,8 +166,20 @@ def create_workflow_states():
     
     for state_data in states:
         state_name = state_data["state_name"]
-        if frappe.db.exists("Service Order State", state_name):
-            print(f"  ○ State exists: {state_name}")
+        existing = frappe.db.get_value(
+            "Service Order State", {"state_name": state_name}, "name"
+        )
+        if existing:
+            # The doctype now autonames by `field:state_name`; legacy rows
+            # may still carry random hashes. Normalise so Service Order
+            # Transition Links resolve correctly.
+            if existing != state_name:
+                frappe.rename_doc(
+                    "Service Order State", existing, state_name, force=True
+                )
+                print(f"  ↻ Renamed state '{existing}' → '{state_name}'")
+            else:
+                print(f"  ○ State exists: {state_name}")
             exists += 1
         else:
             state = frappe.get_doc({
@@ -104,12 +204,6 @@ def create_workflow_transitions():
             "action": "Submit for Approval",
             "allowed_role": "Sales User"
         },
-        {
-            "from_state": "Draft",
-            "to_state": "Cancelled",
-            "action": "Cancel",
-            "allowed_role": "Sales Manager"
-        },
         # From Pending Approval
         {
             "from_state": "Pending Approval",
@@ -117,19 +211,35 @@ def create_workflow_transitions():
             "action": "Approve",
             "allowed_role": "Sales Manager"
         },
+        # GoGizmo Head escalation gate (Phase J #22): high-value or
+        # exception-flagged orders take a second approval hop after the
+        # Sales Manager queue. The Sales Manager initiates the escalation;
+        # only GoGizmo Head can finalise the approval/rejection.
+        {
+            "from_state": "Pending Approval",
+            "to_state": "GoGizmo Head Approval",
+            "action": "Escalate to GoGizmo Head",
+            "allowed_role": "Sales Manager"
+        },
+        {
+            "from_state": "GoGizmo Head Approval",
+            "to_state": "Approved",
+            "action": "Final Approve",
+            "allowed_role": "GoGizmo Head"
+        },
+        {
+            "from_state": "GoGizmo Head Approval",
+            "to_state": "Draft",
+            "action": "Send Back",
+            "allowed_role": "GoGizmo Head"
+        },
         {
             "from_state": "Pending Approval",
             "to_state": "Draft",
             "action": "Reject",
             "allowed_role": "Sales Manager"
         },
-        {
-            "from_state": "Pending Approval",
-            "to_state": "Cancelled",
-            "action": "Cancel",
-            "allowed_role": "Sales Manager"
-        },
-        # From Approved
+        # From Approved (post-submit)
         {
             "from_state": "Approved",
             "to_state": "In Progress",
@@ -250,6 +360,12 @@ def create_workflow_document():
 
 def add_workflow_states_and_transitions(workflow):
     """Add states and transitions to workflow document"""
+
+    # Pre-create the global Frappe Workflow State / Workflow Action Master
+    # rows that are referenced by Workflow Document State.state and
+    # Workflow Transition.action — both are Link fields and the Workflow
+    # save() validates them eagerly.
+    _ensure_workflow_state_and_actions()
     
     # Define workflow states with their properties
     state_config = {
@@ -263,9 +379,14 @@ def add_workflow_states_and_transitions(workflow):
             "allow_edit": "Sales Manager",
             "state_style": "Warning"
         },
+        "GoGizmo Head Approval": {
+            "doc_status": "0",
+            "allow_edit": "GoGizmo Head",
+            "state_style": "Warning"
+        },
         "Approved": {
             "doc_status": "1",
-            "allow_edit": None,
+            "allow_edit": "Sales Manager",
             "state_style": "Success"
         },
         "In Progress": {
@@ -275,12 +396,12 @@ def add_workflow_states_and_transitions(workflow):
         },
         "Completed": {
             "doc_status": "1",
-            "allow_edit": None,
+            "allow_edit": "Sales Manager",
             "state_style": "Success"
         },
         "Cancelled": {
             "doc_status": "2",
-            "allow_edit": None,
+            "allow_edit": "Sales Manager",
             "state_style": "Danger"
         }
     }

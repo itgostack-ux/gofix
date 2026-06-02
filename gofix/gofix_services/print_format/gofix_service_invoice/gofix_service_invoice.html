@@ -302,6 +302,13 @@
       <td colspan="2" class="totals-value">{{ frappe.utils.fmt_money(doc.rounding_adjustment, currency=doc.currency) }}</td>
     </tr>
     {%- endif -%}
+    {# #1 — Advance Adjusted (when an advance PE was allocated against the SI). #}
+    {%- if doc.custom_advance_adjusted -%}
+    <tr>
+      <td colspan="2" class="totals-label">Less: Advance Adjusted</td>
+      <td colspan="2" class="totals-value">– {{ frappe.utils.fmt_money(doc.custom_advance_adjusted, currency=doc.currency) }}</td>
+    </tr>
+    {%- endif -%}
     <tr class="grand-row">
       <td colspan="2"><b>GRAND TOTAL</b></td>
       <td colspan="2"><b>{{ frappe.utils.fmt_money(doc.grand_total or 0, currency=doc.currency) }}</b></td>

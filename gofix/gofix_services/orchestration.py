@@ -182,6 +182,7 @@ def _calculate_estimate(sr):
 				brand=sr.brand,
 				warranty_status=sr.warranty_status,
 				company=sr.company,
+				warranty_plan=sr.get("warranty_plan"),
 			)
 			if result.get("estimate_total"):
 				return (

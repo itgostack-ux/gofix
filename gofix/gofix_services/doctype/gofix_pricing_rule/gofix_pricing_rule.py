@@ -69,11 +69,27 @@ def get_pricing_rule(issue_category=None, repair_solution=None, brand=None,
 
 def calculate_estimate_from_rules(issue_categories, solutions, brand=None,
                                   item_group=None, warranty_status=None,
-                                  company=None):
+                                  company=None, warranty_plan=None):
 	"""Calculate a full estimate using pricing rules.
 
 	Returns dict with labor_total, spare_total, estimate_total, line_details.
+
+	#20 — In-house warranty plan branch:
+	When the supplied ``warranty_plan`` has ``is_inhouse`` enabled, the
+	repair is performed in-house under a service-bundle plan and the
+	estimate is capped at zero parts/labor — the customer is billed only
+	for applicable GST on the plan's nominal service value (which is
+	calculated by the caller from the plan's pricing). The line details
+	still record the matched pricing rule for audit.
 	"""
+	# #20 — Resolve in-house flag once. Skip silently when plan can't be
+	# resolved so legacy callers without warranty_plan keep working.
+	is_inhouse_plan = False
+	if warranty_plan:
+		is_inhouse_plan = bool(
+			frappe.db.get_value("CH Warranty Plan", warranty_plan, "is_inhouse")
+		)
+
 	labor_total = 0
 	spare_total = 0
 	line_details = []
@@ -93,6 +109,19 @@ def calculate_estimate_from_rules(issue_categories, solutions, brand=None,
 
 		labor = 0
 		spare = 0
+
+		# #20 — In-house plan: zero out parts/labor, customer pays GST only.
+		if is_inhouse_plan:
+			line_details.append({
+				"repair_solution": sol_name,
+				"issue_category": sol_issue,
+				"labor": 0,
+				"spare": 0,
+				"total": 0,
+				"pricing_rule": rule.name if rule else None,
+				"inhouse": 1,
+			})
+			continue
 
 		if rule:
 			# Determine labor rate
@@ -143,4 +172,5 @@ def calculate_estimate_from_rules(issue_categories, solutions, brand=None,
 		"spare_total": spare_total,
 		"estimate_total": labor_total + spare_total,
 		"line_details": line_details,
+		"is_inhouse": 1 if is_inhouse_plan else 0,
 	}

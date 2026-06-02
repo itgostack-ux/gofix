@@ -1252,6 +1252,40 @@ def add_spare_to_ticket(sr_name, spare_item, qty, rate=0, repair_solution=None) 
 	})
 
 	sr.save()
+
+	# P1 FIX: Create Material Issue SE for consumed spare
+	if status == "Consumed":
+		_spare_dict = {
+			"item_code": spare_item,
+			"qty": qty,
+			"warehouse": warehouse,
+			"serial_no": None,
+			"doctype": "SR Spare Line",
+			"name": sr.spare_lines[-1].name if sr.spare_lines else None,
+		}
+		so_name = sr.service_order
+		try:
+			_se = frappe.new_doc("Stock Entry")
+			_se.stock_entry_type = "Material Issue"
+			_se.purpose = "Material Issue"
+			_se.company = frappe.db.get_value("Sales Order", so_name, "company") if so_name else (sr.company or frappe.defaults.get_user_default("Company"))
+			_se.posting_date = frappe.utils.today()
+			_se.custom_gofix_service_order = so_name
+			_se_item = _se.append("items", {
+				"item_code": _spare_dict.get("item_code"),
+				"qty": flt(_spare_dict.get("qty", 1)),
+				"s_warehouse": _spare_dict.get("warehouse") or (frappe.db.get_value("Sales Order", so_name, "set_warehouse") if so_name else warehouse),
+			})
+			if _spare_dict.get("serial_no"):
+				_se_item.serial_no = _spare_dict.get("serial_no")
+			_se.flags.ignore_permissions = True
+			_se.insert()
+			_se.submit()
+			if _spare_dict.get("name"):
+				frappe.db.set_value(_spare_dict.get("doctype") or "SR Spare Line", _spare_dict.get("name"), "custom_stock_entry", _se.name)
+		except Exception:
+			frappe.log_error(frappe.get_traceback(), f"Spare SE failed for {_spare_dict.get('item_code')} on {so_name}")
+
 	return {"ok": True, "status": status, "available_qty": avail["available_qty"]}
 
 

@@ -1929,15 +1929,15 @@ def mark_not_repairable(sr_name, status="Not Repairable", reason="") -> dict:
 		filters={"service_request": sr_name, "docstatus": 1,
 				 "assignment_status": ["in", ["Open", "In Progress"]]},
 		pluck="name")
+	# P2-14: do NOT swallow JA cancellation errors silently — a stuck assignment
+	# leaves the technician with a ghost job. Surface the failure so the caller
+	# can decide (retry / manual intervention / abort the NR transition).
 	for ja_name in open_jobs:
-		try:
-			ja = frappe.get_doc("Job Assignment", ja_name)
-			ja.flags.ignore_validate_update_after_submit = True
-			ja.assignment_status = "Cancelled"
-			ja.repair_outcome = status
-			ja.save()
-		except Exception:
-			frappe.log_error(frappe.get_traceback(), f"Not Repairable: JA cancel failed for {ja_name}")
+		ja = frappe.get_doc("Job Assignment", ja_name)
+		ja.flags.ignore_validate_update_after_submit = True
+		ja.assignment_status = "Cancelled"
+		ja.repair_outcome = status
+		ja.save()
 
 	_log_ops_stage(sr_name, current_stage, "closed")
 

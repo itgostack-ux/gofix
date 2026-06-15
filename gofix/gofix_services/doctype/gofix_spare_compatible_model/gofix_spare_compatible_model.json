@@ -1,0 +1,62 @@
+{
+ "actions": [],
+ "creation": "2026-06-12 12:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "device_model",
+  "device_model_name",
+  "column_break_1",
+  "device_brand",
+  "compatibility_note"
+ ],
+ "fields": [
+  {
+   "fieldname": "device_model",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Device Model",
+   "options": "Item",
+   "reqd": 1,
+   "search_index": 1,
+   "description": "Device item this spare part fits"
+  },
+  {
+   "fetch_from": "device_model.item_name",
+   "fieldname": "device_model_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Model Name",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fetch_from": "device_model.brand",
+   "fieldname": "device_brand",
+   "fieldtype": "Data",
+   "label": "Brand",
+   "read_only": 1
+  },
+  {
+   "fieldname": "compatibility_note",
+   "fieldtype": "Data",
+   "label": "Note"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-06-12 12:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "GoFix Services",
+ "name": "GoFix Spare Compatible Model",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

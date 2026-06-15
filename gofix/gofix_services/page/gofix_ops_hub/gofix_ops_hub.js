@@ -1533,7 +1533,10 @@ class GoFixOpsHub {
 					title: __("Add Spare Part"),
 					fields: [
 						{ fieldname: "spare_item", label: __("Spare Part"), fieldtype: "Link", options: "Item", reqd: 1,
-							get_query: () => ({ filters: { item_group: ["descendants of (inclusive)", "Spare Parts"], has_variants: 0 } }),
+							get_query: () => ({
+								query: "gofix.gofix_services.api.get_compatible_spare_items",
+								filters: { device_item: d.device_item || "", item_group: "Spare Parts" }
+							}),
 							change: () => {
 								const item = dlg.get_value("spare_item");
 								if (item && warehouse) {

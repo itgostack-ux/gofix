@@ -76,6 +76,7 @@ after_migrate = [
     "gofix.setup.competitive_ops_fields.create_competitive_ops_fields",
     "gofix.setup.material_request_custom_fields.create_material_request_custom_fields",
     "gofix.setup.customer_address_fields.create_customer_address_fields",
+    "gofix.setup.item_custom_fields.create_item_custom_fields",
 ]
 
 permission_query_conditions = {

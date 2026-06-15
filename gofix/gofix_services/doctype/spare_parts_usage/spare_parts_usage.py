@@ -27,6 +27,7 @@ class SparePartsUsage(Document):
 	def validate(self):
 		"""Validate spare parts usage"""
 		self.validate_service_request()
+		self.validate_device_compatibility()
 		self.validate_barcode()
 		self.set_line_seq_no()
 		self.fetch_item_details()
@@ -44,6 +45,24 @@ class SparePartsUsage(Document):
 		service_request = frappe.get_doc("Service Request", self.service_request)
 		if service_request.status in ["Completed", "Invoiced", "Delivered", "Cancelled", "Rejected", "Withdrawn"]:
 			frappe.throw(_("Cannot add spare parts when Service Request is in status {0}").format(service_request.status), title=_("Spare Parts Usage Error"))
+
+	def validate_device_compatibility(self):
+		"""Block spares that are not compatible with the device being repaired.
+
+		Universal spares (no compatibility rows on the Item) are always allowed.
+		"""
+		if not self.spare_part_item or not self.service_request:
+			return
+
+		from gofix.gofix_services.api import is_spare_compatible_with_device
+
+		device_item = frappe.db.get_value("Service Request", self.service_request, "device_item")
+		if device_item and not is_spare_compatible_with_device(self.spare_part_item, device_item):
+			device_name = frappe.db.get_value("Service Request", self.service_request, "device_item_name") or device_item
+			frappe.throw(
+				_("Spare {0} is not compatible with device {1}.").format(self.spare_part_item, device_name),
+				title=_("Incompatible Spare"),
+			)
 
 	def validate_barcode(self):
 		"""Validate barcode uniqueness and availability"""

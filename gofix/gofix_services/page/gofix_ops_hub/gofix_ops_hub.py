@@ -1229,6 +1229,18 @@ def add_spare_to_ticket(sr_name, spare_item, qty, rate=0, repair_solution=None) 
 	sr = frappe.get_doc("Service Request", sr_name)
 	warehouse = sr.source_warehouse
 
+	# ── Compatibility guard ─────────────────────────────────────────────
+	# Block spares that are not compatible with the device being repaired.
+	from gofix.gofix_services.api import is_spare_compatible_with_device
+	if not is_spare_compatible_with_device(spare_item, sr.device_item):
+		frappe.throw(
+			_("Spare {0} is not compatible with device {1}.").format(
+				item.get("item_name") or spare_item,
+				sr.device_item_name or sr.device_item,
+			),
+			title=_("Incompatible Spare"),
+		)
+
 	# ── Availability check ──────────────────────────────────────────────
 	avail = _get_spare_availability(spare_item, warehouse)
 	is_stock = cint(item.get("is_stock_item"))

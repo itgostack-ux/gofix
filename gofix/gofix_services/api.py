@@ -3,7 +3,8 @@
 
 import frappe
 from frappe import _
-from frappe.utils import flt, now, today, add_days, random_string, getdate, get_datetime
+from frappe.utils import flt, cint, now, today, add_days, random_string, getdate, get_datetime
+import json
 import secrets
 
 
@@ -899,4 +900,105 @@ def get_mapped_spare_items(doctype, txt, searchfield, start, page_len, filters) 
 		as_list=True,
 		limit_page_length=page_len,
 		limit_start=start
+	)
+
+
+# ── Spare ↔ Device Model compatibility ─────────────────────────────────────
+# A spare Item can list the device models it fits via the "Compatible Device
+# Models" child table (custom field `gofix_compatible_models`). Semantics:
+#   • empty list   → universal spare, fits any device
+#   • non-empty    → spare is restricted to the listed device models only
+# This lets the repair flow only offer spares that match the device being
+# repaired, so technicians cannot pick the wrong part.
+
+def is_spare_compatible_with_device(spare_item, device_item) -> bool:
+	"""Return True if `spare_item` may be used on `device_item`.
+
+	Universal spares (no compatibility rows) are always compatible. When the
+	spare declares specific models, the device must be one of them.
+	"""
+	if not spare_item or not device_item:
+		return True
+
+	has_any = frappe.db.exists(
+		"GoFix Spare Compatible Model",
+		{"parent": spare_item, "parenttype": "Item"},
+	)
+	if not has_any:
+		return True
+
+	return bool(frappe.db.exists(
+		"GoFix Spare Compatible Model",
+		{"parent": spare_item, "parenttype": "Item", "device_model": device_item},
+	))
+
+
+@frappe.whitelist()
+def check_spare_compatibility(spare_item, device_item) -> dict:
+	"""Whitelisted wrapper so the client can verify compatibility before adding."""
+	return {"compatible": is_spare_compatible_with_device(spare_item, device_item)}
+
+
+@frappe.whitelist()
+def get_compatible_spare_items(doctype, txt, searchfield, start, page_len, filters) -> list:
+	"""Link-field query: return spare Items compatible with a given device.
+
+	Used as the `query` on spare-part Link fields in the repair flow. Filters:
+		device_item  — restrict to spares that fit this device (or are universal)
+		item_group   — restrict to a spare Item Group (descendants, inclusive)
+	"""
+	if isinstance(filters, str):
+		filters = json.loads(filters)
+	filters = filters or {}
+
+	device_item = filters.get("device_item")
+	item_group = filters.get("item_group")
+
+	conditions = ["i.has_variants = 0", "i.disabled = 0"]
+	values = {
+		"txt": f"%{txt}%" if txt else "%",
+		"start": cint(start),
+		"page_len": cint(page_len) or 20,
+	}
+	conditions.append("(i.name LIKE %(txt)s OR i.item_name LIKE %(txt)s)")
+
+	group_join = ""
+	if item_group:
+		node = frappe.db.get_value("Item Group", item_group, ["lft", "rgt"], as_dict=True)
+		if node:
+			group_join = (
+				"JOIN `tabItem Group` ig ON ig.name = i.item_group "
+				"AND ig.lft >= %(lft)s AND ig.rgt <= %(rgt)s"
+			)
+			values["lft"] = node.lft
+			values["rgt"] = node.rgt
+
+	if device_item:
+		values["device_item"] = device_item
+		# Universal spares (no rows) OR spares explicitly mapped to this device.
+		conditions.append(
+			"""(
+				NOT EXISTS (
+					SELECT 1 FROM `tabGoFix Spare Compatible Model` m
+					WHERE m.parent = i.name AND m.parenttype = 'Item'
+				)
+				OR EXISTS (
+					SELECT 1 FROM `tabGoFix Spare Compatible Model` m2
+					WHERE m2.parent = i.name AND m2.parenttype = 'Item'
+					  AND m2.device_model = %(device_item)s
+				)
+			)"""
+		)
+
+	where = " AND ".join(conditions)
+	return frappe.db.sql(
+		f"""
+		SELECT i.name, i.item_name
+		FROM `tabItem` i
+		{group_join}
+		WHERE {where}
+		ORDER BY i.item_name
+		LIMIT %(start)s, %(page_len)s
+		""",
+		values,
 	)

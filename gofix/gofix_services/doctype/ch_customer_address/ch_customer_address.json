@@ -12,6 +12,7 @@
   "address_line1",
   "address_line2",
   "city",
+  "city_name",
   "section_break_state",
   "state",
   "state_code",
@@ -62,10 +63,22 @@
   },
   {
    "fieldname": "city",
-   "fieldtype": "Data",
+   "fieldtype": "Link",
    "in_list_view": 1,
    "label": "City",
+   "options": "CH City",
+   "fetch_from": "pincode.city",
+   "link_filters": "[[\"CH City\",\"state\",\"=\",\"eval:doc.state\"]]",
    "reqd": 1
+  },
+  {
+   "fieldname": "city_name",
+   "fieldtype": "Data",
+   "label": "City Name",
+   "fetch_from": "city.city_name",
+   "hidden": 1,
+   "read_only": 1,
+   "description": "Display name of the selected city (auto-fetched from CH City master)"
   },
   {
    "fieldname": "section_break_state",
@@ -73,21 +86,25 @@
   },
   {
    "fieldname": "state",
-   "fieldtype": "Data",
+   "fieldtype": "Link",
    "in_list_view": 1,
-   "label": "State"
+   "label": "State",
+   "options": "CH State",
+   "fetch_from": "pincode.state"
   },
   {
    "fieldname": "state_code",
    "fieldtype": "Data",
    "label": "GST State Code",
    "length": 2,
+   "fetch_from": "state.state_code",
    "description": "2-digit GST state code, e.g. 33 for Tamil Nadu"
   },
   {
    "fieldname": "pincode",
-   "fieldtype": "Data",
-   "label": "Pincode"
+   "fieldtype": "Link",
+   "label": "Pincode",
+   "options": "CH Pincode"
   },
   {
    "fieldname": "col_break_2",

@@ -1,0 +1,2 @@
+[post_model_sync]
+gofix.patches.link_customer_address_state_city

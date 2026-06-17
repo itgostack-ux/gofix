@@ -1801,10 +1801,7 @@ def get_customer_billing_address(customer):
 	return {
 		"address_line1": addr.address_line1,
 		"address_line2": addr.address_line2 or "",
-		"city": addr.city,
-		"state": addr.state or "",
-		"state_code": addr.state_code or "",
-		"pincode": addr.pincode or "",
+                "city": addr.city_name or addr.city,
 		"country": addr.country or "India",
 		"gstin": addr.gstin or "",
 	}

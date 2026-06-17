@@ -85,7 +85,7 @@ function _refresh_address_summary(frm) {
 }
 
 function _fmt_addr(addr) {
-	return [addr.address_line1, addr.city, addr.state, addr.pincode]
+	return [addr.address_line1, addr.city_name || addr.city, addr.state, addr.pincode]
 		.filter(Boolean)
 		.join(", ");
 }

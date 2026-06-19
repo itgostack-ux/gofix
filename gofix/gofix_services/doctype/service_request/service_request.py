@@ -13,6 +13,14 @@ class ServiceRequest(Document):
 		self.set_warehouse_defaults()
 		self.set_received_by()
 		self._init_competitive_ops_fields()
+		self.ensure_tracking_token()
+
+	def ensure_tracking_token(self):
+		"""Assign a random public tracking token to new Service Requests."""
+		if not self.meta.has_field("tracking_token") or self.get("tracking_token"):
+			return
+		from gofix.tracking import make_tracking_token
+		self.tracking_token = make_tracking_token(existing_name=self.name)
 	
 	def validate(self):
 		self.detect_customer_type()

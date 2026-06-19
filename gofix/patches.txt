@@ -6,3 +6,4 @@
 # Patches added in this section will be executed after doctypes are migrated
 gofix.patches.cleanup_gofix_workspace
 gofix.patches.backfill_service_request_customer_ids
+gofix.patches.backfill_service_request_tracking_tokens

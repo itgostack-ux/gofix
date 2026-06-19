@@ -188,7 +188,7 @@ document.addEventListener("DOMContentLoaded", function() {
 		btn.disabled = true;
 		btn.textContent = action === "approve" ? "Approving…" : "Rejecting…";
 
-		fetch("/api/method/gofix.www.track_repair.index.customer_estimate_action", {
+		fetch("/api/method/gofix.tracking.customer_estimate_action", {
 			method: "POST",
 			headers: {"Content-Type": "application/json", "X-Frappe-CSRF-Token": "{{ frappe.session.csrf_token }}"},
 			body: JSON.stringify({

@@ -234,7 +234,7 @@ def notify_estimate_for_approval(service_request_name, version_number, estimate_
         return
 
     # Generate tracking URL for the customer
-    from gofix.www.track_repair.index import generate_tracking_url
+    from gofix.tracking import generate_tracking_url
     tracking_url = generate_tracking_url(service_request_name)
 
     template_key = "gofix_estimate_approval" if int(version_number) == 1 else "gofix_revised_estimate"
@@ -281,7 +281,7 @@ def notify_tracking_link(service_request_name):
     if not actual_template:
         return
 
-    from gofix.www.track_repair.index import generate_tracking_url
+    from gofix.tracking import generate_tracking_url
     tracking_url = generate_tracking_url(service_request_name)
 
     try:

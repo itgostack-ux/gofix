@@ -100,6 +100,7 @@
   "referral_expiry_date",
   "column_break_referral",
   "request_number",
+  "tracking_token",
   "is_barcode_generated",
   "section_service_items",
   "service_items",
@@ -728,6 +729,15 @@
    "fieldtype": "Data",
    "label": "Request Number",
    "description": "Request number from website/online appointment"
+  },
+  {
+   "fieldname": "tracking_token",
+   "fieldtype": "Data",
+   "hidden": 1,
+   "label": "Tracking Token",
+   "no_copy": 1,
+   "read_only": 1,
+   "unique": 1
   },
   {
    "default": "0",

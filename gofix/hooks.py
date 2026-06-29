@@ -53,8 +53,10 @@ add_to_apps_screen = [
 	}
 ]
 
-app_include_css = ["/assets/gofix/css/gofix.css", "/assets/gofix/css/gogizmo_app_switcher.css"]
-app_include_js = "/assets/gofix/js/gogizmo_app_switcher.js"
+# GoGizmo App Switcher top nav removed — it hid the top-right Desk controls and
+# caused navigation confusion. Navigate via the standard Desk sidebar/workspaces.
+app_include_css = ["/assets/gofix/css/gofix.css"]
+app_include_js = []
 
 doctype_list_js = {
     "Sales Order": "public/js/sales_order_list.js",

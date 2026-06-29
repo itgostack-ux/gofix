@@ -45,15 +45,14 @@ def notify_sla_breach(service_request_name: str):
     if not phone:
         return
 
-    settings = _get_settings()
-    if not settings:
+    if not _get_settings(doc.company):
         return
 
     from ch_item_master.ch_core.whatsapp import send_template_message
 
     send_template_message(
         phone=phone,
-        template_name=settings.gofix_sla_breach,
+        event="gofix_sla_breach",
         body_values={
             "1": doc.customer_name or "Customer",
             "2": doc.name,
@@ -62,29 +61,32 @@ def notify_sla_breach(service_request_name: str):
         customer_name=doc.customer_name,
         ref_doctype="Service Request",
         ref_name=doc.name,
+        company=doc.company,
     )
 
 
 # ── Private helpers ──────────────────────────────────────────────────
 
-def _get_settings():
-    try:
-        s = frappe.get_cached_doc("CH WhatsApp Settings")
-        return s if s.enabled else None
-    except frappe.DoesNotExistError:
-        return None
+def _get_settings(company=None):
+    """Per-company WhatsApp account (credentials) → global single. Enabled only."""
+    from ch_item_master.ch_core.whatsapp import get_whatsapp_settings
+    s = get_whatsapp_settings(company)
+    return s if (s and s.enabled) else None
+
+
+def _sr_company(service_request_name):
+    return frappe.db.get_value("Service Request", service_request_name, "company")
 
 
 def _notify_device_received(doc, phone, customer_name):
-    settings = _get_settings()
-    if not settings:
+    if not _get_settings(doc.company):
         return
 
     from ch_item_master.ch_core.whatsapp import send_template_message
 
     send_template_message(
         phone=phone,
-        template_name=settings.gofix_device_received,
+        event="gofix_device_received",
         body_values={
             "1": customer_name,
             "2": doc.name,
@@ -94,19 +96,19 @@ def _notify_device_received(doc, phone, customer_name):
         customer_name=customer_name,
         ref_doctype="Service Request",
         ref_name=doc.name,
+        company=doc.company,
     )
 
 
 def _notify_repair_completed(doc, phone, customer_name):
-    settings = _get_settings()
-    if not settings:
+    if not _get_settings(doc.company):
         return
 
     from ch_item_master.ch_core.whatsapp import send_template_message
 
     send_template_message(
         phone=phone,
-        template_name=settings.gofix_repair_completed,
+        event="gofix_repair_completed",
         body_values={
             "1": customer_name,
             "2": doc.name,
@@ -115,19 +117,19 @@ def _notify_repair_completed(doc, phone, customer_name):
         customer_name=customer_name,
         ref_doctype="Service Request",
         ref_name=doc.name,
+        company=doc.company,
     )
 
 
 def _notify_ready_for_delivery(doc, phone, customer_name):
-    settings = _get_settings()
-    if not settings:
+    if not _get_settings(doc.company):
         return
 
     from ch_item_master.ch_core.whatsapp import send_template_message
 
     send_template_message(
         phone=phone,
-        template_name=settings.gofix_ready_for_delivery,
+        event="gofix_ready_for_delivery",
         body_values={
             "1": customer_name,
             "2": doc.name,
@@ -136,16 +138,18 @@ def _notify_ready_for_delivery(doc, phone, customer_name):
         customer_name=customer_name,
         ref_doctype="Service Request",
         ref_name=doc.name,
+        company=doc.company,
     )
 
 
 def _notify_not_repairable(doc, phone, customer_name):
     """Notify customer that device is Not Repairable / BER."""
-    settings = _get_settings()
-    if not settings:
+    if not _get_settings(doc.company):
         return
 
-    template_name = getattr(settings, "gofix_not_repairable", None)
+    from ch_item_master.ch_core.whatsapp import get_template, send_template_message
+
+    template_name, _ = get_template(doc.company, "gofix_not_repairable")
     if not template_name:
         # Fallback: use generic status update template or SMS
         _fallback_sms(
@@ -156,14 +160,12 @@ def _notify_not_repairable(doc, phone, customer_name):
         return
 
     try:
-        from ch_item_master.ch_core.whatsapp import send_template_message
-
         status_label = doc.repairability_status or "Not Repairable"
         reason = doc.rejection_reason or doc.get("repairability_reason") or ""
 
         send_template_message(
             phone=phone,
-            template_name=template_name,
+            event="gofix_not_repairable",
             body_values={
                 "1": customer_name,
                 "2": doc.name,
@@ -174,6 +176,7 @@ def _notify_not_repairable(doc, phone, customer_name):
             customer_name=customer_name,
             ref_doctype="Service Request",
             ref_name=doc.name,
+            company=doc.company,
         )
     except Exception:
         frappe.log_error(
@@ -190,17 +193,20 @@ def send_whatsapp_template(template_name, to_number, params, ref_doctype="Servic
     Called from orchestration.py and other modules.
     Falls back to SMS if WhatsApp is not configured.
     """
-    settings = _get_settings()
-    if not settings:
+    sr_name = ref_name or params.get("sr_name", "")
+    company = _sr_company(sr_name) if sr_name else None
+    if not _get_settings(company):
         _fallback_sms(to_number, template_name, params)
         return
 
-    # Resolve template name from settings if it's a GoFix key
-    actual_template = getattr(settings, template_name, None) or template_name
+    from ch_item_master.ch_core.whatsapp import get_template, send_template_message
+
+    # Resolve via the per-company library (template_name is treated as an event
+    # key); fall back to the literal name when it isn't a registered event.
+    resolved, _ = get_template(company, template_name)
+    actual_template = resolved or template_name
 
     try:
-        from ch_item_master.ch_core.whatsapp import send_template_message
-
         # Build body_values from params
         body_values = {}
         i = 1
@@ -215,7 +221,8 @@ def send_whatsapp_template(template_name, to_number, params, ref_doctype="Servic
             body_values=body_values,
             customer_name=params.get("customer_name", ""),
             ref_doctype=ref_doctype,
-            ref_name=ref_name or params.get("sr_name", ""),
+            ref_name=sr_name,
+            company=company,
         )
     except Exception:
         frappe.log_error(frappe.get_traceback(), f"WhatsApp send failed: {template_name}")
@@ -229,27 +236,25 @@ def notify_estimate_for_approval(service_request_name, version_number, estimate_
     if not phone:
         return
 
-    settings = _get_settings()
-    if not settings:
+    if not _get_settings(doc.company):
         return
 
     # Generate tracking URL for the customer
     from gofix.tracking import generate_tracking_url
     tracking_url = generate_tracking_url(service_request_name)
 
-    template_key = "gofix_estimate_approval" if int(version_number) == 1 else "gofix_revised_estimate"
-    actual_template = getattr(settings, template_key, None)
+    from ch_item_master.ch_core.whatsapp import get_template, send_template_message
 
+    template_key = "gofix_estimate_approval" if int(version_number) == 1 else "gofix_revised_estimate"
+    actual_template, _ = get_template(doc.company, template_key)
     if not actual_template:
-        frappe.log_error(f"WhatsApp template '{template_key}' not configured in CH WhatsApp Settings")
+        frappe.log_error(f"WhatsApp template for '{template_key}' not configured for {doc.company}")
         return
 
     try:
-        from ch_item_master.ch_core.whatsapp import send_template_message
-
         send_template_message(
             phone=phone,
-            template_name=actual_template,
+            event=template_key,
             body_values={
                 "1": doc.customer_name or "Customer",
                 "2": doc.name,
@@ -261,6 +266,7 @@ def notify_estimate_for_approval(service_request_name, version_number, estimate_
             customer_name=doc.customer_name,
             ref_doctype="Service Request",
             ref_name=doc.name,
+            company=doc.company,
         )
     except Exception:
         frappe.log_error(frappe.get_traceback(), f"Estimate WhatsApp failed for {service_request_name}")
@@ -273,11 +279,12 @@ def notify_tracking_link(service_request_name):
     if not phone:
         return
 
-    settings = _get_settings()
-    if not settings:
+    if not _get_settings(doc.company):
         return
 
-    actual_template = getattr(settings, "gofix_tracking_link", None)
+    from ch_item_master.ch_core.whatsapp import get_template, send_template_message
+
+    actual_template, _ = get_template(doc.company, "gofix_tracking_link")
     if not actual_template:
         return
 
@@ -285,11 +292,9 @@ def notify_tracking_link(service_request_name):
     tracking_url = generate_tracking_url(service_request_name)
 
     try:
-        from ch_item_master.ch_core.whatsapp import send_template_message
-
         send_template_message(
             phone=phone,
-            template_name=actual_template,
+            event="gofix_tracking_link",
             body_values={
                 "1": doc.customer_name or "Customer",
                 "2": doc.name,
@@ -299,6 +304,7 @@ def notify_tracking_link(service_request_name):
             customer_name=doc.customer_name,
             ref_doctype="Service Request",
             ref_name=doc.name,
+            company=doc.company,
         )
     except Exception:
         frappe.log_error(frappe.get_traceback(), f"Tracking link WhatsApp failed for {service_request_name}")

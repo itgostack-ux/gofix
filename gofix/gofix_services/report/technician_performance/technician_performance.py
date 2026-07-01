@@ -5,6 +5,8 @@ import frappe
 from frappe import _
 from frappe.utils import flt
 
+from ch_erp15.ch_erp15.report_scope import scope_where_clause
+
 
 def execute(filters=None):
 	columns = get_columns()
@@ -37,6 +39,14 @@ def get_data(filters):
 		conditions += " AND ja.assignment_date <= %(to_date)s"
 		params["to_date"] = filters["to_date"]
 
+	# Tier 4: Job Assignment has no store/warehouse of its own — reach scope
+	# through the linked Sales Order (service order). LEFT JOIN keeps rows
+	# whose SO is missing only when the caller is a bypass user (scope is None);
+	# for scoped users, an absent SO fails the IN check and drops — fail-closed.
+	scope = scope_where_clause(warehouse_field="so.set_warehouse")
+	sr_join = "LEFT JOIN `tabSales Order` so ON so.name = ja.service_order" if scope else ""
+	scope_sql = f" AND {scope}" if scope else ""
+
 	query = f"""
 		SELECT
 			COALESCE(ja.service_engineer, ja.user, 'Unassigned') as technician,
@@ -46,8 +56,9 @@ def get_data(filters):
 			SUM(COALESCE(ja.actual_hours, 0)) as total_hours,
 			SUM(CASE WHEN ja.repair_outcome = 'Not Repairable' THEN 1 ELSE 0 END) as not_repairable
 		FROM `tabJob Assignment` ja
+		{sr_join}
 		WHERE ja.docstatus < 2
-		{conditions}
+		{conditions}{scope_sql}
 		GROUP BY COALESCE(ja.service_engineer, ja.user, 'Unassigned')
 		ORDER BY jobs_completed DESC
 	"""

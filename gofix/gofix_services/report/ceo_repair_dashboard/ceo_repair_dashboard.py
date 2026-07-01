@@ -6,6 +6,8 @@ import frappe
 from frappe import _
 from frappe.utils import flt
 
+from ch_erp15.ch_erp15.report_scope import scope_where_clause
+
 
 def execute(filters=None):
 	columns = get_columns()
@@ -64,6 +66,18 @@ def get_data(filters):
 		if filters.get("company"):
 			conditions += " AND so.company = %(company)s"
 			values["company"] = filters["company"]
+
+	# Tier 4: fail-closed scope. The report joins Sales Order (so) to Service
+	# Request (sr) so a scoped user sees rows whose SO warehouse OR SR endpoint
+	# is in scope. LEFT JOIN means SOs without an SR remain visible only if
+	# so.set_warehouse itself resolves — sr.* columns are NULL and drop out of
+	# the IN check, which is the desired fail-closed audit behaviour.
+	scope = scope_where_clause(
+		warehouse_field="so.set_warehouse",
+		extra_warehouse_fields=("sr.source_warehouse", "sr.transferred_to_store"),
+	)
+	if scope is not None:
+		conditions += f" AND {scope}"
 
 	data = frappe.db.sql("""
 		SELECT

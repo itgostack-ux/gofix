@@ -5,6 +5,8 @@ import frappe
 from frappe import _
 from frappe.utils import flt
 
+from ch_erp15.ch_erp15.report_scope import scope_where_clause
+
 
 def execute(filters=None):
 	columns = get_columns()
@@ -47,6 +49,11 @@ def get_data(filters):
 	if filters and filters.get("warehouse"):
 		conditions += " AND so.set_warehouse = %(warehouse)s"
 		params["warehouse"] = filters["warehouse"]
+
+	# Tier 4: fail-closed scope on Sales Order primary warehouse.
+	scope = scope_where_clause(warehouse_field="so.set_warehouse")
+	if scope is not None:
+		conditions += f" AND {scope}"
 
 	query = f"""
 		SELECT

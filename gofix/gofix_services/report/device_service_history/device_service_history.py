@@ -12,6 +12,8 @@ import frappe
 from frappe import _
 from frappe.utils import flt, getdate, nowdate, date_diff
 
+from ch_erp15.ch_erp15.report_scope import scope_where_clause
+
 
 def execute(filters=None):
 	columns = get_columns()
@@ -57,6 +59,14 @@ def get_data(filters):
 	if filters.get("to_date"):
 		conditions.append("sr.service_date <= %(to_date)s")
 		values["to_date"] = filters["to_date"]
+
+	# Tier 4: fail-closed scope on either Service Request warehouse endpoint.
+	scope = scope_where_clause(
+		warehouse_field="sr.source_warehouse",
+		extra_warehouse_fields=("sr.transferred_to_store",),
+	)
+	if scope is not None:
+		conditions.append(scope)
 
 	where = " AND ".join(conditions) if conditions else "1=1"
 

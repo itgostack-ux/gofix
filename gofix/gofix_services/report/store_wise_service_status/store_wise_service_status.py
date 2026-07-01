@@ -5,6 +5,11 @@ import frappe
 from frappe import _
 from frappe.utils import flt, now_datetime, time_diff_in_hours
 
+from ch_erp15.ch_erp15.report_scope import (
+	get_scoped_warehouses_or_none,
+	scope_where_clause,
+)
+
 
 def execute(filters=None):
 	columns = get_columns()
@@ -42,6 +47,14 @@ def get_data(filters):
 		conditions += " AND sr.service_date <= %(to_date)s"
 		params["to_date"] = filters["to_date"]
 
+	# Tier 4: fail-closed scope on either Service Request warehouse endpoint.
+	scope = scope_where_clause(
+		warehouse_field="sr.source_warehouse",
+		extra_warehouse_fields=("sr.transferred_to_store",),
+	)
+	if scope is not None:
+		conditions += f" AND {scope}"
+
 	query = f"""
 		SELECT
 			COALESCE(sr.source_warehouse, 'No Warehouse') as warehouse,
@@ -67,6 +80,11 @@ def get_data(filters):
 	from gofix.gofix_services.doctype.gofix_sla_rule.gofix_sla_rule import get_sla_rule
 
 	warehouses = [row.warehouse for row in data]
+	# Tier 4: intersect the aggregated warehouses with the caller's scope so the
+	# SLA-breach sweep can never widen scope beyond the outer report body.
+	scoped = get_scoped_warehouses_or_none()
+	if scoped is not None:
+		warehouses = [w for w in warehouses if w in scoped]
 	if warehouses:
 		open_srs = frappe.get_all("Service Request",
 			filters={

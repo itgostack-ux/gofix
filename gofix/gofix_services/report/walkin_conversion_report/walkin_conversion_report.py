@@ -17,6 +17,8 @@ import frappe
 from frappe import _
 from frappe.utils import flt, today
 
+from ch_erp15.ch_erp15.report_scope import scope_where_clause
+
 
 # ---------------------------------------------------------------------------
 # entry point
@@ -45,37 +47,20 @@ def _apply_defaults(filters):
 
 
 # ---------------------------------------------------------------------------
-# permission scope — based on CH Store user assignment
+# permission scope — delegates to the central Tier-4 helper. Fail-closed:
+#   * bypass roles → empty string (no filter appended).
+#   * scoped user with populated scope → " AND (sr.source_warehouse IN (...)
+#     OR sr.transferred_to_store IN (...))".
+#   * scoped user with an empty scope → " AND 1=0" (zero rows).
 # ---------------------------------------------------------------------------
 
 def _get_scope_sql():
-    """Return raw SQL fragment like ' AND sr.source_warehouse IN (...)'
-    or empty string for unrestricted access."""
-    user = frappe.session.user
-    if "System Manager" in frappe.get_roles(user):
-        return ""
-
-    try:
-        rows = frappe.db.sql(
-            """
-            SELECT DISTINCT cs.warehouse
-            FROM `tabCH Store` cs
-            INNER JOIN `tabCH Store User` su ON su.parent = cs.name
-            WHERE su.user = %s
-              AND cs.disabled = 0
-              AND cs.warehouse IS NOT NULL
-              AND cs.warehouse != ''
-            """,
-            user,
-            as_dict=True,
-        )
-        if rows:
-            wh_list = ", ".join(frappe.db.escape(r.warehouse) for r in rows)
-            return f" AND sr.source_warehouse IN ({wh_list})"
-    except Exception:
-        pass
-
-    return ""
+    """Return raw SQL fragment prefixed with ' AND ' or empty string."""
+    clause = scope_where_clause(
+        warehouse_field="sr.source_warehouse",
+        extra_warehouse_fields=("sr.transferred_to_store",),
+    )
+    return f" AND {clause}" if clause else ""
 
 
 # ---------------------------------------------------------------------------

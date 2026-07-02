@@ -51,14 +51,15 @@
   },
   {
    "fieldname": "address_line1",
-   "fieldtype": "Data",
+   "fieldtype": "Small Text",
    "in_list_view": 1,
    "label": "Address Line 1",
-   "reqd": 1
+   "reqd": 1,
+   "description": "Full street address. Small Text (no 140-char cap) so long, unnormalised imported addresses land without truncation. City / state / pincode belong in their own fields below."
   },
   {
    "fieldname": "address_line2",
-   "fieldtype": "Data",
+   "fieldtype": "Small Text",
    "label": "Address Line 2"
   },
   {

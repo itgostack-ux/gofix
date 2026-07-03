@@ -1,0 +1,864 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>GoFix — Self Check-In</title>
+<style>
+	*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+	:root {
+		--bg:         #0d1117;
+		--surface:    #161b22;
+		--card:       #1f2937;
+		--card-hover: #263243;
+		--card-sel:   #3a1f30;
+		--border:     #30363d;
+		--border-sel: #e91e8c;
+		--accent:     #e91e8c;
+		--accent2:    #ff4db8;
+		--accent-dim: rgba(233,30,140,0.15);
+		--text:       #e6edf3;
+		--muted:      #8b949e;
+		--success:    #3fb950;
+		--warning:    #f9a825;
+		--danger:     #f85149;
+		--radius:     16px;
+		--radius-sm:  10px;
+		--shadow:     0 8px 32px rgba(0,0,0,0.4);
+		--trans:      0.22s ease;
+	}
+	html, body {
+		height: 100%;
+		background: var(--bg);
+		color: var(--text);
+		font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif;
+		font-size: 16px;
+		line-height: 1.5;
+		-webkit-font-smoothing: antialiased;
+	}
+	#app {
+		min-height: 100vh;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+	}
+	.kiosk-header {
+		width: 100%;
+		padding: 14px 20px;
+		background: var(--surface);
+		border-bottom: 1px solid var(--border);
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		position: sticky;
+		top: 0;
+		z-index: 10;
+	}
+	.kiosk-brand {
+		font-size: 1.15rem;
+		font-weight: 700;
+		letter-spacing: 0.04em;
+	}
+	.kiosk-brand span { color: var(--accent); }
+	.store-pill {
+		background: var(--accent-dim);
+		color: var(--accent2);
+		border: 1px solid rgba(233,30,140,0.3);
+		padding: 4px 14px;
+		border-radius: 99px;
+		font-size: 0.78rem;
+		font-weight: 600;
+		max-width: 220px;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.wizard {
+		width: 100%;
+		max-width: 560px;
+		padding: 24px 18px 40px;
+		flex: 1;
+	}
+	.progress-track {
+		display: flex;
+		align-items: center;
+		gap: 0;
+		margin-bottom: 16px;
+	}
+	.step-dot {
+		width: 8px; height: 8px;
+		border-radius: 50%;
+		background: var(--border);
+		flex-shrink: 0;
+		transition: var(--trans);
+	}
+	.step-dot.active { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+	.step-dot.done   { background: var(--success); }
+	.step-line { flex: 1; height: 2px; background: var(--border); transition: var(--trans); }
+	.step-line.done { background: var(--success); }
+	.progress-label {
+		text-align: center;
+		font-size: 0.72rem;
+		color: var(--muted);
+		margin-bottom: 22px;
+		letter-spacing: 0.06em;
+		text-transform: uppercase;
+	}
+	.step { display: none; }
+	.step.active { display: block; }
+	.step-title {
+		font-size: 1.5rem;
+		font-weight: 700;
+		margin-bottom: 6px;
+	}
+	.step-subtitle {
+		font-size: 0.95rem;
+		color: var(--muted);
+		margin-bottom: 24px;
+	}
+	.field {
+		margin-bottom: 18px;
+	}
+	.field label {
+		display: block;
+		font-size: 0.85rem;
+		color: var(--muted);
+		margin-bottom: 6px;
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
+	}
+	.field input, .field select, .field textarea {
+		width: 100%;
+		padding: 14px 16px;
+		background: var(--card);
+		border: 1.5px solid var(--border);
+		border-radius: var(--radius-sm);
+		color: var(--text);
+		font-size: 1rem;
+		font-family: inherit;
+		transition: var(--trans);
+	}
+	.field input:focus, .field select:focus, .field textarea:focus {
+		outline: none;
+		border-color: var(--accent);
+		box-shadow: 0 0 0 3px var(--accent-dim);
+	}
+	.field textarea {
+		min-height: 80px;
+		resize: vertical;
+	}
+	.tile-grid {
+		display: grid;
+		grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+		gap: 10px;
+		margin-bottom: 8px;
+	}
+	.tile {
+		position: relative;
+		padding: 18px 14px;
+		background: var(--card);
+		border: 1.5px solid var(--border);
+		border-radius: var(--radius-sm);
+		color: var(--text);
+		cursor: pointer;
+		text-align: center;
+		user-select: none;
+		transition: var(--trans);
+	}
+	.tile:hover { background: var(--card-hover); }
+	.tile.selected {
+		background: var(--card-sel);
+		border-color: var(--border-sel);
+		box-shadow: 0 0 0 3px var(--accent-dim);
+	}
+	.tile .icon {
+		font-size: 1.6rem;
+		margin-bottom: 6px;
+	}
+	.tile .label {
+		font-size: 0.95rem;
+		font-weight: 600;
+	}
+	.tile.selected::after {
+		content: "✓";
+		position: absolute;
+		top: 6px; right: 8px;
+		color: var(--accent2);
+		font-weight: 700;
+	}
+	.selected-count {
+		font-size: 0.85rem;
+		color: var(--muted);
+		text-align: right;
+		margin-top: -4px;
+		margin-bottom: 12px;
+	}
+	.actions {
+		display: flex;
+		gap: 10px;
+		margin-top: 26px;
+	}
+	.btn {
+		flex: 1;
+		padding: 15px 18px;
+		border: none;
+		border-radius: var(--radius-sm);
+		font-size: 1rem;
+		font-weight: 600;
+		cursor: pointer;
+		transition: var(--trans);
+		font-family: inherit;
+	}
+	.btn-primary {
+		background: var(--accent);
+		color: white;
+	}
+	.btn-primary:hover { background: var(--accent2); }
+	.btn-primary:disabled { background: #4a2637; color: rgba(255,255,255,0.4); cursor: not-allowed; }
+	.btn-secondary {
+		background: transparent;
+		color: var(--muted);
+		border: 1.5px solid var(--border);
+	}
+	.btn-secondary:hover { color: var(--text); border-color: var(--muted); }
+	.review-list {
+		background: var(--card);
+		border: 1px solid var(--border);
+		border-radius: var(--radius-sm);
+		padding: 14px 18px;
+		margin-bottom: 20px;
+	}
+	.review-row {
+		display: flex;
+		justify-content: space-between;
+		padding: 8px 0;
+		border-bottom: 1px solid var(--border);
+		font-size: 0.95rem;
+		gap: 12px;
+	}
+	.review-row:last-child { border-bottom: none; }
+	.review-label { color: var(--muted); flex-shrink: 0; }
+	.review-value { color: var(--text); text-align: right; font-weight: 500; }
+	.error-msg {
+		color: var(--danger);
+		font-size: 0.85rem;
+		margin-top: 6px;
+	}
+	.token-display {
+		text-align: center;
+		background: linear-gradient(135deg, var(--accent), var(--accent2));
+		padding: 32px 20px;
+		border-radius: var(--radius);
+		box-shadow: var(--shadow);
+		margin-bottom: 24px;
+	}
+	.token-display .token-label {
+		font-size: 0.82rem;
+		color: rgba(255,255,255,0.85);
+		text-transform: uppercase;
+		letter-spacing: 0.1em;
+		margin-bottom: 8px;
+	}
+	.token-display .token-number {
+		font-size: 3.6rem;
+		font-weight: 800;
+		color: white;
+		letter-spacing: 0.05em;
+	}
+	.token-display .queue-position {
+		margin-top: 12px;
+		color: rgba(255,255,255,0.9);
+		font-size: 0.9rem;
+	}
+	.wa-status {
+		text-align: center;
+		font-size: 0.85rem;
+		color: var(--muted);
+		margin-bottom: 20px;
+	}
+	.wa-status .ok  { color: var(--success); }
+	.wa-status .warn { color: var(--warning); }
+	.summary-note {
+		background: rgba(233,30,140,0.08);
+		border: 1px solid rgba(233,30,140,0.2);
+		padding: 12px 14px;
+		border-radius: var(--radius-sm);
+		color: var(--accent2);
+		font-size: 0.88rem;
+		margin-bottom: 20px;
+	}
+	.error-page {
+		max-width: 520px;
+		text-align: center;
+		margin: 60px auto;
+		padding: 24px;
+	}
+	.error-page h2 { color: var(--danger); margin-bottom: 10px; }
+	.error-page p { color: var(--muted); }
+	.spinner {
+		display: inline-block;
+		width: 18px; height: 18px;
+		border: 2px solid rgba(255,255,255,0.3);
+		border-top-color: white;
+		border-radius: 50%;
+		animation: spin 0.8s linear infinite;
+		vertical-align: middle;
+	}
+	@keyframes spin { to { transform: rotate(360deg); } }
+	@media (max-width: 480px) {
+		.tile-grid { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); }
+		.token-display .token-number { font-size: 2.8rem; }
+	}
+</style>
+</head>
+<body>
+<div id="app">
+	{% if not store_param %}
+	<div class="error-page">
+		<h2>Store not specified</h2>
+		<p>Ask the store manager to open this page with the store code, e.g.
+		<code>/gofix-token?store=AKG</code>.</p>
+	</div>
+	{% elif not store_resolved %}
+	<div class="error-page">
+		<h2>Store not configured</h2>
+		<p>&ldquo;<strong>{{ store_param }}</strong>&rdquo; is not set up for GoFix.
+		Please check the store code and try again.</p>
+	</div>
+	{% else %}
+	<header class="kiosk-header">
+		<div class="kiosk-brand">Go<span>Fix</span></div>
+		<div class="store-pill" id="store-pill">{{ store_resolved.store_name or store_resolved.warehouse }}</div>
+	</header>
+	<main class="wizard">
+		<div class="progress-track" id="progress"></div>
+		<div class="progress-label" id="progress-label">Step 1 of 5</div>
+
+		<!-- Step 1: Customer info -->
+		<section class="step" data-step="1">
+			<h1 class="step-title">Welcome!</h1>
+			<p class="step-subtitle">Let's start with a couple of details.</p>
+			<div class="field">
+				<label for="in-name">Your name</label>
+				<input id="in-name" type="text" autocomplete="name" placeholder="e.g. Priya" maxlength="140">
+			</div>
+			<div class="field">
+				<label for="in-phone">Mobile number</label>
+				<input id="in-phone" type="tel" inputmode="numeric" pattern="[0-9]*" placeholder="10-digit mobile" maxlength="14">
+				<div class="error-msg" id="err-phone" style="display:none"></div>
+			</div>
+			<div class="actions">
+				<button class="btn btn-primary" id="btn-next-1">Continue</button>
+			</div>
+		</section>
+
+		<!-- Step 2: Visit reason -->
+		<section class="step" data-step="2">
+			<h1 class="step-title">How can we help?</h1>
+			<p class="step-subtitle">Pick the reason for your visit.</p>
+			<div class="tile-grid" id="visit-grid"></div>
+			<div class="actions">
+				<button class="btn btn-secondary" data-back="1">Back</button>
+				<button class="btn btn-primary" id="btn-next-2" disabled>Continue</button>
+			</div>
+		</section>
+
+		<!-- Step 3: Device (only for repair visits) -->
+		<section class="step" data-step="3">
+			<h1 class="step-title">Which device?</h1>
+			<p class="step-subtitle">Pick the device type, then tell us the brand and model.</p>
+			<div class="tile-grid" id="device-grid"></div>
+			<div id="brand-block" style="display:none">
+				<div class="field">
+					<label for="in-brand">Brand</label>
+					<select id="in-brand"><option value="">— Choose brand —</option></select>
+				</div>
+				<div class="field">
+					<label for="in-model">Model (optional)</label>
+					<input id="in-model" type="text" placeholder="e.g. Galaxy S23, iPhone 15" maxlength="140">
+				</div>
+				<div class="field" id="other-device-block" style="display:none">
+					<label for="in-other-device">What device is it?</label>
+					<input id="in-other-device" type="text" placeholder="Describe your device" maxlength="140">
+				</div>
+			</div>
+			<div class="actions">
+				<button class="btn btn-secondary" data-back="2">Back</button>
+				<button class="btn btn-primary" id="btn-next-3" disabled>Continue</button>
+			</div>
+		</section>
+
+		<!-- Step 4: Symptoms -->
+		<section class="step" data-step="4">
+			<h1 class="step-title">What's the issue?</h1>
+			<p class="step-subtitle">Pick up to 3 symptoms. Not sure? Tap the last option.</p>
+			<div class="tile-grid" id="symptom-grid"></div>
+			<div class="selected-count" id="symptom-count">0 selected</div>
+			<div class="field" id="other-notes-block" style="display:none">
+				<label for="in-notes">Additional notes (optional)</label>
+				<textarea id="in-notes" placeholder="Tell us more if you'd like" maxlength="500"></textarea>
+			</div>
+			<div class="actions">
+				<button class="btn btn-secondary" data-back="3">Back</button>
+				<button class="btn btn-primary" id="btn-next-4" disabled>Continue</button>
+			</div>
+		</section>
+
+		<!-- Step 5: Review -->
+		<section class="step" data-step="5">
+			<h1 class="step-title">Almost done!</h1>
+			<p class="step-subtitle">Review your details before generating the token.</p>
+			<div class="review-list" id="review-list"></div>
+			<div class="summary-note">
+				A confirmation SMS/WhatsApp will be sent to your registered mobile number.
+			</div>
+			<div class="error-msg" id="err-submit" style="display:none"></div>
+			<div class="actions">
+				<button class="btn btn-secondary" id="btn-back-review">Back</button>
+				<button class="btn btn-primary" id="btn-submit">Generate Token</button>
+			</div>
+		</section>
+
+		<!-- Step 6: Confirmation -->
+		<section class="step" data-step="6">
+			<h1 class="step-title" style="text-align:center">You're checked in!</h1>
+			<div class="token-display">
+				<div class="token-label">Your Token</div>
+				<div class="token-number" id="out-token">—</div>
+				<div class="queue-position" id="out-queue"></div>
+			</div>
+			<div class="wa-status" id="out-wa"></div>
+			<div class="actions">
+				<button class="btn btn-primary" id="btn-done">Done — Next Customer</button>
+			</div>
+		</section>
+	</main>
+	{% endif %}
+</div>
+
+{% if store_resolved %}
+<script>
+(function() {
+	const STORE_PARAM  = {{ store_param | tojson }};
+	const STORE_INFO   = {{ store_resolved | tojson }};
+	const CSRF_TOKEN   = {{ csrf_token | tojson }};
+	const TOTAL_STEPS  = 5;  // shown on the progress bar (confirmation is step 6 but drawn separately)
+
+	const state = {
+		step: 1,
+		config: null,
+		form: {
+			customer_name: "",
+			customer_phone: "",
+			visit_reason: "",
+			is_repair_visit: false,
+			device_type: "",
+			device_brand: "",
+			device_model: "",
+			other_device_hint: "",
+			selected_issues: [],
+			additional_notes: "",
+		},
+		result: null,
+	};
+
+	// ------ Helpers -----------------------------------------------------
+
+	function $(sel, root) { return (root || document).querySelector(sel); }
+	function $$(sel, root) { return Array.from((root || document).querySelectorAll(sel)); }
+
+	function api(method, args) {
+		const body = new URLSearchParams();
+		Object.entries(args || {}).forEach(([k, v]) => {
+			if (v === undefined || v === null) return;
+			body.append(k, typeof v === "object" ? JSON.stringify(v) : String(v));
+		});
+		return fetch("/api/method/" + method, {
+			method: "POST",
+			headers: {
+				"Content-Type": "application/x-www-form-urlencoded",
+				"X-Frappe-CSRF-Token": CSRF_TOKEN,
+				"X-Requested-With": "XMLHttpRequest",
+			},
+			body: body.toString(),
+			credentials: "same-origin",
+		}).then(async (res) => {
+			const text = await res.text();
+			let json;
+			try { json = JSON.parse(text); } catch (_e) { json = { _server_messages: text }; }
+			if (!res.ok || json.exc || json.exception) {
+				let msg = "";
+				if (json._server_messages) {
+					try {
+						const raw = JSON.parse(json._server_messages);
+						const parts = raw.map((m) => { try { return JSON.parse(m).message; } catch (_e) { return m; } });
+						msg = parts.join("\n");
+					} catch (_e) { msg = json._server_messages; }
+				}
+				throw new Error(msg || json.exception || "Request failed. Please try again.");
+			}
+			return json.message;
+		});
+	}
+
+	function renderProgress() {
+		const track = $("#progress");
+		if (!track) return;
+		track.innerHTML = "";
+		for (let i = 1; i <= TOTAL_STEPS; i++) {
+			const dot = document.createElement("div");
+			dot.className = "step-dot" + (i < state.step ? " done" : "") + (i === state.step ? " active" : "");
+			track.appendChild(dot);
+			if (i < TOTAL_STEPS) {
+				const line = document.createElement("div");
+				line.className = "step-line" + (i < state.step ? " done" : "");
+				track.appendChild(line);
+			}
+		}
+		$("#progress-label").textContent = state.step > TOTAL_STEPS ? "All done" : `Step ${state.step} of ${TOTAL_STEPS}`;
+	}
+
+	function showStep(step) {
+		state.step = step;
+		$$(".step").forEach((s) => s.classList.toggle("active", Number(s.dataset.step) === step));
+		renderProgress();
+		if (step === 5) renderReview();
+		window.scrollTo({ top: 0, behavior: "smooth" });
+	}
+
+	function normalizePhone(raw) {
+		return String(raw || "").replace(/\D+/g, "").replace(/^0+/, "").replace(/^91/, "").slice(0, 10);
+	}
+
+	// ------ Bootstrap ---------------------------------------------------
+
+	function boot() {
+		api("gofix.api.token_api.get_tablet_config", { store: STORE_PARAM })
+			.then((cfg) => {
+				state.config = cfg;
+				$("#store-pill").textContent = cfg.store.name || cfg.store.warehouse;
+				bindStep1();
+				renderVisitReasons();
+				renderDeviceTypes();
+				showStep(1);
+			})
+			.catch((err) => {
+				alert("Cannot load store configuration: " + err.message);
+			});
+	}
+
+	// ------ Step 1 ------------------------------------------------------
+
+	function bindStep1() {
+		$("#btn-next-1").addEventListener("click", () => {
+			const name = $("#in-name").value.trim();
+			const phone = normalizePhone($("#in-phone").value);
+			$("#err-phone").style.display = "none";
+			if (!name) { $("#in-name").focus(); return; }
+			if (phone.length !== 10) {
+				$("#err-phone").textContent = "Please enter a 10-digit mobile number.";
+				$("#err-phone").style.display = "block";
+				$("#in-phone").focus();
+				return;
+			}
+			if (!/^[6-9]/.test(phone)) {
+				$("#err-phone").textContent = "Mobile number should start with 6, 7, 8 or 9.";
+				$("#err-phone").style.display = "block";
+				return;
+			}
+			state.form.customer_name = name;
+			state.form.customer_phone = "+91" + phone;
+			showStep(2);
+		});
+	}
+
+	// ------ Step 2 ------------------------------------------------------
+
+	function renderVisitReasons() {
+		const grid = $("#visit-grid");
+		grid.innerHTML = "";
+		state.config.visit_reasons.forEach((vr) => {
+			const tile = document.createElement("div");
+			tile.className = "tile";
+			tile.dataset.value = vr.name;
+			tile.dataset.repair = vr.is_repair ? "1" : "0";
+			tile.innerHTML = `<div class="label">${escapeHtml(vr.name)}</div>`;
+			tile.addEventListener("click", () => {
+				$$("#visit-grid .tile").forEach((t) => t.classList.remove("selected"));
+				tile.classList.add("selected");
+				state.form.visit_reason = vr.name;
+				state.form.is_repair_visit = !!vr.is_repair;
+				$("#btn-next-2").disabled = false;
+			});
+			grid.appendChild(tile);
+		});
+		$("#btn-next-2").addEventListener("click", () => {
+			if (state.form.is_repair_visit) {
+				showStep(3);
+			} else {
+				// Non-repair: skip device + symptoms straight to review
+				state.form.device_type = "";
+				state.form.device_brand = "";
+				state.form.device_model = "";
+				state.form.selected_issues = [];
+				state.form.additional_notes = "";
+				showStep(5);
+			}
+		});
+	}
+
+	// ------ Step 3 (Device) ---------------------------------------------
+
+	function renderDeviceTypes() {
+		const grid = $("#device-grid");
+		grid.innerHTML = "";
+		state.config.device_types.forEach((dt) => {
+			const tile = document.createElement("div");
+			tile.className = "tile";
+			tile.innerHTML = `
+				<div class="icon">${escapeHtml(dt.icon || "🔧")}</div>
+				<div class="label">${escapeHtml(dt.name)}</div>
+			`;
+			tile.addEventListener("click", () => {
+				$$("#device-grid .tile").forEach((t) => t.classList.remove("selected"));
+				tile.classList.add("selected");
+				state.form.device_type = dt.name;
+				populateBrands(dt.name);
+				$("#brand-block").style.display = "block";
+				$("#other-device-block").style.display = dt.name === "Other" ? "block" : "none";
+				$("#btn-next-3").disabled = false;
+			});
+			grid.appendChild(tile);
+		});
+		$("#btn-next-3").addEventListener("click", () => {
+			state.form.device_brand = $("#in-brand").value;
+			state.form.device_model = $("#in-model").value.trim();
+			state.form.other_device_hint = $("#in-other-device").value.trim();
+			renderSymptoms(state.form.device_type);
+			showStep(4);
+		});
+	}
+
+	function populateBrands(deviceType) {
+		const sel = $("#in-brand");
+		sel.innerHTML = '<option value="">— Choose brand —</option>';
+		const brands = (state.config.brands_by_device[deviceType] || []);
+		brands.forEach((b) => {
+			const opt = document.createElement("option");
+			opt.value = b.name;
+			opt.textContent = b.name;
+			sel.appendChild(opt);
+		});
+	}
+
+	// ------ Step 4 (Symptoms) -------------------------------------------
+
+	function renderSymptoms(deviceType) {
+		const grid = $("#symptom-grid");
+		grid.innerHTML = "";
+		state.form.selected_issues = [];
+		$("#symptom-count").textContent = "0 selected";
+		$("#btn-next-4").disabled = true;
+		$("#other-notes-block").style.display = "none";
+
+		const rules = state.config.rules || { max_issues: 3, expert_check_exclusive: true };
+		const symptoms = (state.config.symptoms_by_device[deviceType] || []);
+		symptoms.forEach((s) => {
+			const tile = document.createElement("div");
+			tile.className = "tile";
+			tile.dataset.name = s.name;
+			tile.dataset.expert = s.is_expert_check ? "1" : "0";
+			tile.dataset.other = s.is_other ? "1" : "0";
+			tile.innerHTML = `<div class="label">${escapeHtml(s.name)}</div>`;
+			tile.addEventListener("click", () => toggleSymptom(tile, s, rules));
+			grid.appendChild(tile);
+		});
+	}
+
+	function toggleSymptom(tile, s, rules) {
+		const current = state.form.selected_issues.slice();
+		const already = current.some((x) => x.name === s.name);
+
+		if (already) {
+			state.form.selected_issues = current.filter((x) => x.name !== s.name);
+			tile.classList.remove("selected");
+		} else {
+			// Expert-check exclusivity: selecting it clears all others; selecting
+			// any other symptom clears the expert-check tile.
+			if (s.is_expert_check) {
+				state.form.selected_issues = [{ name: s.name, is_expert_check: true, is_other: false }];
+				$$("#symptom-grid .tile").forEach((t) => t.classList.remove("selected"));
+				tile.classList.add("selected");
+			} else {
+				// Drop any expert-check row if present.
+				const withoutExpert = current.filter((x) => !x.is_expert_check);
+				if (withoutExpert.length !== current.length) {
+					$$("#symptom-grid .tile[data-expert='1']").forEach((t) => t.classList.remove("selected"));
+				}
+				if (withoutExpert.length >= rules.max_issues) {
+					// Silently ignore — the count text is the affordance.
+					return;
+				}
+				withoutExpert.push({ name: s.name, is_expert_check: false, is_other: !!s.is_other });
+				state.form.selected_issues = withoutExpert;
+				tile.classList.add("selected");
+			}
+		}
+
+		const count = state.form.selected_issues.length;
+		$("#symptom-count").textContent = `${count} selected` + (count === rules.max_issues ? " (max)" : "");
+		$("#btn-next-4").disabled = count === 0;
+
+		// Reveal notes textarea when "Other" is picked.
+		const hasOther = state.form.selected_issues.some((x) => x.is_other);
+		$("#other-notes-block").style.display = hasOther ? "block" : "none";
+	}
+
+	$("#btn-next-4").addEventListener("click", () => {
+		state.form.additional_notes = $("#in-notes").value.trim();
+		showStep(5);
+	});
+
+	// ------ Step 5 (Review) ---------------------------------------------
+
+	function renderReview() {
+		const rows = [];
+		const f = state.form;
+		rows.push(["Name", f.customer_name]);
+		rows.push(["Mobile", f.customer_phone]);
+		rows.push(["Visit reason", f.visit_reason]);
+		if (f.is_repair_visit) {
+			rows.push(["Device", f.device_type + (f.other_device_hint ? ` — ${f.other_device_hint}` : "")]);
+			if (f.device_brand) rows.push(["Brand", f.device_brand]);
+			if (f.device_model) rows.push(["Model", f.device_model]);
+			const symptomText = f.selected_issues.map((x) => x.name).join(", ");
+			if (symptomText) rows.push(["Symptoms", symptomText]);
+			if (f.additional_notes) rows.push(["Notes", f.additional_notes]);
+		}
+		const list = $("#review-list");
+		list.innerHTML = rows.map(([k, v]) => `
+			<div class="review-row">
+				<div class="review-label">${escapeHtml(k)}</div>
+				<div class="review-value">${escapeHtml(v || "—")}</div>
+			</div>
+		`).join("");
+	}
+
+	$("#btn-back-review").addEventListener("click", () => {
+		showStep(state.form.is_repair_visit ? 4 : 2);
+	});
+
+	$("#btn-submit").addEventListener("click", submitToken);
+
+	function submitToken() {
+		const btn = $("#btn-submit");
+		btn.disabled = true;
+		btn.innerHTML = '<span class="spinner"></span>&nbsp;Creating token…';
+		$("#err-submit").style.display = "none";
+
+		const f = state.form;
+		const payload = {
+			store: STORE_PARAM,
+			customer_name: f.customer_name,
+			customer_phone: f.customer_phone,
+			visit_reason: f.visit_reason,
+			device_type: f.is_repair_visit ? f.device_type : "",
+			device_brand: f.is_repair_visit ? f.device_brand : "",
+			device_model: f.is_repair_visit ? f.device_model : "",
+			other_device_hint: f.is_repair_visit ? f.other_device_hint : "",
+			selected_issues: f.is_repair_visit ? f.selected_issues : [],
+			additional_notes: f.additional_notes,
+		};
+
+		api("gofix.api.token_api.create_token", payload)
+			.then((result) => {
+				state.result = result;
+				showConfirmation(result);
+			})
+			.catch((err) => {
+				$("#err-submit").textContent = err.message || "Something went wrong. Please try again.";
+				$("#err-submit").style.display = "block";
+				btn.disabled = false;
+				btn.textContent = "Generate Token";
+			});
+	}
+
+	function showConfirmation(result) {
+		$("#out-token").textContent = result.token_number || "—";
+		$("#out-queue").textContent = result.queue_position
+			? `You are #${result.queue_position} in line`
+			: "You're next!";
+		const wa = result.whatsapp_status || "Not Sent";
+		let msg = "";
+		if (wa === "Sent" || wa === "Delivered" || wa === "Read" || wa === "Queued") {
+			msg = `<span class="ok">✓ Confirmation sent to your WhatsApp.</span>`;
+		} else if (wa === "Failed") {
+			msg = `<span class="warn">Confirmation SMS could not be sent — please note your token.</span>`;
+		} else {
+			msg = `<span class="warn">Please note your token number.</span>`;
+		}
+		$("#out-wa").innerHTML = msg;
+		showStep(6);
+	}
+
+	// ------ Step 6 (Done) -----------------------------------------------
+
+	$("#btn-done").addEventListener("click", () => {
+		// Reset form + go back to Step 1 for the next customer.
+		state.form = {
+			customer_name: "",
+			customer_phone: "",
+			visit_reason: "",
+			is_repair_visit: false,
+			device_type: "",
+			device_brand: "",
+			device_model: "",
+			other_device_hint: "",
+			selected_issues: [],
+			additional_notes: "",
+		};
+		$("#in-name").value = "";
+		$("#in-phone").value = "";
+		$("#in-brand").innerHTML = '<option value="">— Choose brand —</option>';
+		$("#in-model").value = "";
+		$("#in-other-device").value = "";
+		$("#in-notes").value = "";
+		$$("#visit-grid .tile, #device-grid .tile, #symptom-grid .tile").forEach((t) => t.classList.remove("selected"));
+		$("#brand-block").style.display = "none";
+		$("#other-device-block").style.display = "none";
+		$("#other-notes-block").style.display = "none";
+		$("#symptom-grid").innerHTML = "";
+		$("#symptom-count").textContent = "0 selected";
+		$("#btn-next-2").disabled = true;
+		$("#btn-next-3").disabled = true;
+		$("#btn-next-4").disabled = true;
+		const submit = $("#btn-submit");
+		submit.disabled = false;
+		submit.textContent = "Generate Token";
+		showStep(1);
+	});
+
+	// ------ Back buttons ------------------------------------------------
+
+	$$("[data-back]").forEach((btn) => {
+		btn.addEventListener("click", () => showStep(Number(btn.dataset.back)));
+	});
+
+	// ------ Escape helper -----------------------------------------------
+
+	function escapeHtml(s) {
+		return String(s == null ? "" : s)
+			.replace(/&/g, "&amp;")
+			.replace(/</g, "&lt;")
+			.replace(/>/g, "&gt;")
+			.replace(/"/g, "&quot;")
+			.replace(/'/g, "&#39;");
+	}
+
+	// Go!
+	boot();
+})();
+</script>
+{% endif %}
+</body>
+</html>

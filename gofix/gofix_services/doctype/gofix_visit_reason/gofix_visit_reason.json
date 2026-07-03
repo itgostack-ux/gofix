@@ -1,0 +1,100 @@
+{
+ "actions": [],
+ "allow_import": 1,
+ "allow_rename": 1,
+ "autoname": "field:reason_name",
+ "creation": "2026-07-03 09:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "description": "Reason the customer walked into the store — used at Step 2 of the tablet. Only reasons with is_repair=1 push the customer into the device/brand/symptom flow.",
+ "field_order": [
+  "reason_name",
+  "is_repair",
+  "display_order",
+  "disabled",
+  "description"
+ ],
+ "fields": [
+  {
+   "fieldname": "reason_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Reason",
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "is_repair",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Requires Device / Symptom",
+   "description": "If enabled, the tablet asks for device type, brand, model and symptoms. If not, the token is created against the visit reason only."
+  },
+  {
+   "default": "0",
+   "fieldname": "display_order",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "Display Order"
+  },
+  {
+   "default": "0",
+   "fieldname": "disabled",
+   "fieldtype": "Check",
+   "label": "Disabled"
+  },
+  {
+   "fieldname": "description",
+   "fieldtype": "Small Text",
+   "label": "Internal Description"
+  }
+ ],
+ "links": [],
+ "modified": "2026-07-03 09:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "GoFix Services",
+ "name": "GoFix Visit Reason",
+ "naming_rule": "By fieldname",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Service Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "read": 1,
+   "role": "Service Engineer"
+  },
+  {
+   "read": 1,
+   "role": "Service Viewer"
+  }
+ ],
+ "quick_entry": 1,
+ "sort_field": "display_order",
+ "sort_order": "ASC",
+ "states": [],
+ "track_changes": 1
+}

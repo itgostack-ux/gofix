@@ -1,0 +1,95 @@
+{
+ "actions": [],
+ "allow_import": 1,
+ "allow_rename": 1,
+ "autoname": "format:{device_type}::{brand_name}",
+ "creation": "2026-07-03 09:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "description": "Brand entries offered on the tablet per device type. Brand is a free string so ops can add brands (Boat, Fastrack, Fire-Boltt, etc.) without touching the ERPNext Brand master.",
+ "field_order": [
+  "device_type",
+  "brand_name",
+  "display_order",
+  "disabled"
+ ],
+ "fields": [
+  {
+   "fieldname": "device_type",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Device Type",
+   "options": "GoFix Device Type",
+   "reqd": 1
+  },
+  {
+   "fieldname": "brand_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Brand Name",
+   "reqd": 1,
+   "description": "Free-text brand name (kept as Data so ops can add any brand without editing the Brand master)."
+  },
+  {
+   "default": "0",
+   "fieldname": "display_order",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "Display Order"
+  },
+  {
+   "default": "0",
+   "fieldname": "disabled",
+   "fieldtype": "Check",
+   "label": "Disabled"
+  }
+ ],
+ "links": [],
+ "modified": "2026-07-03 09:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "GoFix Services",
+ "name": "GoFix Brand Option",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Service Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "read": 1,
+   "role": "Service Engineer"
+  },
+  {
+   "read": 1,
+   "role": "Service Viewer"
+  }
+ ],
+ "quick_entry": 1,
+ "sort_field": "display_order",
+ "sort_order": "ASC",
+ "states": [],
+ "track_changes": 1
+}

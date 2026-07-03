@@ -1,0 +1,110 @@
+{
+ "actions": [],
+ "allow_import": 1,
+ "allow_rename": 1,
+ "autoname": "field:reason_name",
+ "creation": "2026-07-03 09:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "description": "Structured reasons the FDE picks when moving a token to Cancelled or Customer Left. Kept separate from Withdrawal Reason so token analytics stay clean and BRD wording is preserved.",
+ "field_order": [
+  "reason_name",
+  "scope",
+  "requires_note",
+  "display_order",
+  "disabled",
+  "description"
+ ],
+ "fields": [
+  {
+   "fieldname": "reason_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Reason",
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "default": "Both",
+   "fieldname": "scope",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Applies To",
+   "options": "Both\nCustomer Left\nCancelled",
+   "description": "\"Customer Left\" reasons appear only on the customer-left action, \"Cancelled\" reasons only on the cancel action, \"Both\" appear on either."
+  },
+  {
+   "default": "0",
+   "fieldname": "requires_note",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Requires Note",
+   "description": "If enabled, the FDE must enter a note before the transition is saved. Used for \"Other\"."
+  },
+  {
+   "default": "0",
+   "fieldname": "display_order",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "Display Order"
+  },
+  {
+   "default": "0",
+   "fieldname": "disabled",
+   "fieldtype": "Check",
+   "label": "Disabled"
+  },
+  {
+   "fieldname": "description",
+   "fieldtype": "Small Text",
+   "label": "Internal Description"
+  }
+ ],
+ "links": [],
+ "modified": "2026-07-03 09:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "GoFix Services",
+ "name": "GoFix Cancellation Reason",
+ "naming_rule": "By fieldname",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Service Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "read": 1,
+   "role": "Service Engineer"
+  },
+  {
+   "read": 1,
+   "role": "Service Viewer"
+  }
+ ],
+ "quick_entry": 1,
+ "sort_field": "display_order",
+ "sort_order": "ASC",
+ "states": [],
+ "track_changes": 1
+}

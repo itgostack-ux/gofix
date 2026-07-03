@@ -1,0 +1,64 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "creation": "2026-07-03 09:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "istable": 1,
+ "field_order": [
+  "symptom_name",
+  "device_type",
+  "is_expert_check",
+  "is_other",
+  "symptom_ref"
+ ],
+ "fields": [
+  {
+   "fieldname": "symptom_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Symptom",
+   "reqd": 1
+  },
+  {
+   "fieldname": "device_type",
+   "fieldtype": "Data",
+   "label": "Device Type",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "is_expert_check",
+   "fieldtype": "Check",
+   "label": "Expert Check"
+  },
+  {
+   "default": "0",
+   "fieldname": "is_other",
+   "fieldtype": "Check",
+   "label": "Other"
+  },
+  {
+   "fieldname": "symptom_ref",
+   "fieldtype": "Link",
+   "label": "GoFix Symptom Ref",
+   "options": "GoFix Symptom",
+   "read_only": 1,
+   "description": "The GoFix Symptom row this selection resolved to at submit time. Left blank when the customer typed a free-form \"Other\" entry."
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-07-03 09:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "GoFix Services",
+ "name": "GoFix Token Issue",
+ "owner": "Administrator",
+ "permissions": [],
+ "quick_entry": 0,
+ "sort_field": "idx",
+ "sort_order": "ASC",
+ "states": [],
+ "track_changes": 0
+}

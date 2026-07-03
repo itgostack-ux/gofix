@@ -1,0 +1,121 @@
+{
+ "actions": [],
+ "allow_import": 1,
+ "allow_rename": 1,
+ "autoname": "format:{device_type}::{symptom_name}",
+ "creation": "2026-07-03 09:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "description": "Symptoms shown on the GoFix tablet's issue-selection step. Symptom is customer-facing language (\"Battery draining fast\") that the backend can map to a service category later.",
+ "field_order": [
+  "device_type",
+  "symptom_name",
+  "display_order",
+  "is_expert_check",
+  "is_other",
+  "disabled",
+  "backend_category"
+ ],
+ "fields": [
+  {
+   "fieldname": "device_type",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Device Type",
+   "options": "GoFix Device Type",
+   "reqd": 1
+  },
+  {
+   "fieldname": "symptom_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Symptom (customer-facing)",
+   "reqd": 1,
+   "description": "Text the customer sees, e.g. \"Screen cracked / broken\"."
+  },
+  {
+   "default": "0",
+   "fieldname": "display_order",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "Display Order"
+  },
+  {
+   "default": "0",
+   "fieldname": "is_expert_check",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Not-Sure / Expert Check",
+   "description": "Marks the \"Not sure / need expert check\" option. The tablet enforces that this option cannot be combined with any other symptom."
+  },
+  {
+   "default": "0",
+   "fieldname": "is_other",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Other (free text)",
+   "description": "Marks the \"Other\" option. Selecting it reveals the optional additional-notes textarea; typing remains optional."
+  },
+  {
+   "default": "0",
+   "fieldname": "disabled",
+   "fieldtype": "Check",
+   "label": "Disabled"
+  },
+  {
+   "fieldname": "backend_category",
+   "fieldtype": "Link",
+   "label": "Backend Issue Category",
+   "options": "Issue Category",
+   "description": "Optional map to the existing Issue Category master so downstream Service Request analytics stay consistent."
+  }
+ ],
+ "links": [],
+ "modified": "2026-07-03 09:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "GoFix Services",
+ "name": "GoFix Symptom",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Service Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "read": 1,
+   "role": "Service Engineer"
+  },
+  {
+   "read": 1,
+   "role": "Service Viewer"
+  }
+ ],
+ "quick_entry": 1,
+ "sort_field": "display_order",
+ "sort_order": "ASC",
+ "states": [],
+ "track_changes": 1
+}

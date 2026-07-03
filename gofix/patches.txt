@@ -7,3 +7,4 @@
 gofix.patches.cleanup_gofix_workspace
 gofix.patches.backfill_service_request_customer_ids
 gofix.patches.backfill_service_request_tracking_tokens
+gofix.patches.seed_gofix_token_masters

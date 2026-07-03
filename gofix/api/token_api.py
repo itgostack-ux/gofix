@@ -506,6 +506,66 @@ def _ensure_fde() -> None:
 
 
 @frappe.whitelist()
+def get_fde_stores() -> list[dict]:
+	"""Return the GoFix-enabled stores this FDE can operate.
+
+	Used by the token queue page to populate the store picker. Falls back to
+	POS Profile / Warehouse names when a CH Store row is missing so the
+	picker still works during rollout.
+	"""
+
+	_ensure_fde()
+	companies = frappe.get_all(
+		"Company",
+		filters={"gofix_enabled": 1},
+		pluck="name",
+	)
+	if not companies:
+		return []
+
+	seen: dict[str, dict] = {}
+
+	# CH Store rows first — they carry the human-friendly store_name/store_code.
+	if frappe.db.table_exists("CH Store"):
+		rows = frappe.get_all(
+			"CH Store",
+			filters={"company": ("in", companies), "disabled": 0},
+			fields=["name", "store_code", "store_name", "warehouse", "company"],
+			order_by="store_name asc, store_code asc",
+		)
+		for r in rows:
+			if not r.get("warehouse"):
+				continue
+			seen[r["warehouse"]] = {
+				"warehouse": r["warehouse"],
+				"company": r["company"],
+				"store_code": (r.get("store_code") or "").strip().upper(),
+				"store_name": r.get("store_name") or r.get("name") or r["warehouse"],
+			}
+
+	# Fall back to any non-group, non-disabled warehouse on a GoFix company
+	# that isn't already covered by CH Store.
+	wh_rows = frappe.get_all(
+		"Warehouse",
+		filters={"company": ("in", companies), "is_group": 0, "disabled": 0},
+		fields=["name", "warehouse_name", "company"],
+		order_by="warehouse_name asc",
+	)
+	for w in wh_rows:
+		if w["name"] in seen:
+			continue
+		code, name = resolve_store_code(w["name"])
+		seen[w["name"]] = {
+			"warehouse": w["name"],
+			"company": w["company"],
+			"store_code": code,
+			"store_name": name or w["warehouse_name"] or w["name"],
+		}
+
+	return list(seen.values())
+
+
+@frappe.whitelist()
 def list_active_tokens(store: str, statuses: Any = None) -> list[dict]:
 	"""Return active tokens for the FDE queue view."""
 

@@ -143,6 +143,7 @@ class GoFixToken(Document):
 	def validate(self) -> None:
 		self._resolve_store_fields()
 		self.customer_phone = normalize_phone(self.customer_phone)
+		self._validate_company_scope()
 		self._validate_repair_fields()
 		self._validate_issue_rules()
 		self._validate_status_transition()
@@ -172,6 +173,25 @@ class GoFixToken(Document):
 			frappe.throw(_("Device type is required for a repair visit."))
 		if not (self.selected_issues or []):
 			frappe.throw(_("Select at least one symptom for a repair visit."))
+
+	def _validate_company_scope(self) -> None:
+		"""Reject tokens for companies that don't have gofix_enabled set.
+
+		Fail-open when the flag column has not been created yet (e.g. code
+		deployed but migrate hasn't run) so the doctype stays usable during
+		rollout.
+		"""
+
+		if not self.company:
+			return
+		if not frappe.db.has_column("Company", "gofix_enabled"):
+			return
+		if not frappe.db.get_value("Company", self.company, "gofix_enabled"):
+			frappe.throw(
+				_("Company {0} is not enabled for GoFix Token. Ask a System Manager to tick \"GoFix Token Enabled\" on the Company.").format(
+					self.company
+				)
+			)
 
 	def _validate_issue_rules(self) -> None:
 		rows = list(self.selected_issues or [])

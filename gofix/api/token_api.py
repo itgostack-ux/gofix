@@ -57,12 +57,31 @@ _GUEST_RATE_WINDOW = 3600
 # ---------------------------------------------------------------------------
 
 
+def _company_is_gofix_enabled(company: str | None) -> bool:
+	"""Return True when the Company is flagged for GoFix Token.
+
+	Fail-open when the ``gofix_enabled`` column does not yet exist so that
+	the API keeps working in the brief window between code deploy and the
+	next ``bench migrate``. Once the column is present the check is
+	authoritative.
+	"""
+
+	if not company:
+		return False
+	if not frappe.db.has_column("Company", "gofix_enabled"):
+		return True
+	return bool(frappe.db.get_value("Company", company, "gofix_enabled"))
+
+
 def _resolve_store(identifier: str | None) -> dict | None:
 	"""Resolve a store identifier to ``{warehouse, company, store_code, store_name}``.
 
 	Accepts (in priority order): CH Store name, CH Store store_code,
 	CH Store store_name, POS Profile name, Warehouse name. Returns ``None``
-	if nothing matches so the caller can raise a user-friendly error.
+	if nothing matches OR the resolved company is not GoFix-enabled — so
+	the caller can surface a single user-friendly "Store not configured for
+	GoFix" message either way, without leaking whether the store exists on
+	a non-GoFix company.
 	"""
 
 	if not identifier:
@@ -83,7 +102,7 @@ def _resolve_store(identifier: str | None) -> dict | None:
 			(identifier, identifier, identifier, identifier, identifier),
 			as_dict=True,
 		)
-		if row and row[0].get("warehouse"):
+		if row and row[0].get("warehouse") and _company_is_gofix_enabled(row[0].get("company")):
 			r = row[0]
 			return {
 				"warehouse": r["warehouse"],
@@ -99,7 +118,7 @@ def _resolve_store(identifier: str | None) -> dict | None:
 		("name", "warehouse", "company"),
 		as_dict=True,
 	)
-	if profile and profile.get("warehouse"):
+	if profile and profile.get("warehouse") and _company_is_gofix_enabled(profile.get("company")):
 		code, name = resolve_store_code(profile["warehouse"])
 		return {
 			"warehouse": profile["warehouse"],
@@ -115,7 +134,12 @@ def _resolve_store(identifier: str | None) -> dict | None:
 		("name", "warehouse_name", "company", "is_group", "disabled"),
 		as_dict=True,
 	)
-	if wh and not wh.get("is_group") and not wh.get("disabled"):
+	if (
+		wh
+		and not wh.get("is_group")
+		and not wh.get("disabled")
+		and _company_is_gofix_enabled(wh.get("company"))
+	):
 		code, name = resolve_store_code(wh["name"])
 		return {
 			"warehouse": wh["name"],

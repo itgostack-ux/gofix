@@ -527,7 +527,13 @@
 	}
 
 	function normalizePhone(raw) {
-		return String(raw || "").replace(/\D+/g, "").replace(/^0+/, "").replace(/^91/, "").slice(0, 10);
+		// Strip non-digits and any leading zeros, then drop the India country
+		// code ONLY when it's actually a country-code prefix (12-digit form
+		// "91XXXXXXXXXX"). Guarding on length prevents genuine local numbers
+		// that happen to start with "91" (e.g. 9176496808) from losing digits.
+		let s = String(raw || "").replace(/\D+/g, "").replace(/^0+/, "");
+		if (s.length === 12 && s.startsWith("91")) s = s.slice(2);
+		return s.slice(0, 10);
 	}
 
 	// ------ Bootstrap ---------------------------------------------------

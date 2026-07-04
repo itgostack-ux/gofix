@@ -13,10 +13,28 @@ import frappe
 from frappe.utils import now_datetime
 
 COMPANY_NAME = "GOFIX SOLUTIONS PRIVATE LIMITED"
-COMPANY_ABBR = "GSPL"
+# Business rule: Company.abbr must be exactly 2 alphabetic chars
+# (enforced by ``ch_erp15.ch_erp15.custom.company.CustomCompany``).
+# Historical value was ``"GSPL"``; the ``gofix.patches.rename_company_abbrs_to_2char``
+# patch migrated existing sites to ``"GF"``. Fresh installs use the new value directly.
+COMPANY_ABBR = "GF"
 GSTIN = "33AAJCG6064A1ZY"
 CURRENCY = "INR"
 COUNTRY = "India"
+
+
+def _current_abbr() -> str:
+    """Return the *current* Company.abbr, or ``COMPANY_ABBR`` on fresh installs.
+
+    Existing sites may still be on the legacy 4-char abbr until the
+    rename patch runs. Every warehouse-name lookup in this module goes
+    through this helper so both pre- and post-migration sites work.
+    """
+    if frappe.db.exists("Company", COMPANY_NAME):
+        current = frappe.db.get_value("Company", COMPANY_NAME, "abbr")
+        if current:
+            return current
+    return COMPANY_ABBR
 
 
 def _ok(msg):
@@ -71,9 +89,10 @@ _WAREHOUSES = [
 
 
 def create_warehouses():
+    abbr = _current_abbr()
     created = []
     for wh_name, wh_type, _, _ in _WAREHOUSES:
-        full_name = f"{wh_name} - {COMPANY_ABBR}"
+        full_name = f"{wh_name} - {abbr}"
         if frappe.db.exists("Warehouse", full_name):
             _skip(f"Warehouse '{full_name}' already exists")
             continue
@@ -101,11 +120,12 @@ def set_company_gofix_fields():
     """Set master_hub_warehouse, supplier_return_warehouse, damaged_stock_warehouse
     on the company — these custom fields are created by gofix.setup.install."""
 
+    abbr = _current_abbr()
     meta = frappe.get_meta("Company")
     custom_field_map = {
-        "master_hub_warehouse": f"GoFix Repair Hub - {COMPANY_ABBR}",
-        "supplier_return_warehouse": f"Supplier Return - {COMPANY_ABBR}",
-        "damaged_stock_warehouse": f"Damaged Stock - {COMPANY_ABBR}",
+        "master_hub_warehouse": f"GoFix Repair Hub - {abbr}",
+        "supplier_return_warehouse": f"Supplier Return - {abbr}",
+        "damaged_stock_warehouse": f"Damaged Stock - {abbr}",
     }
 
     updates = {}
@@ -131,14 +151,15 @@ def set_company_gofix_fields():
 
 def set_company_defaults():
     """Set default_warehouse and cost_center on the company if not already set."""
+    abbr = _current_abbr()
     company_doc = frappe.get_doc("Company", COMPANY_NAME)
 
     updates = {}
-    stores_wh = f"GoFix Stores - {COMPANY_ABBR}"
+    stores_wh = f"GoFix Stores - {abbr}"
     if not company_doc.default_fg_warehouse and frappe.db.exists("Warehouse", stores_wh):
         updates["default_fg_warehouse"] = stores_wh
 
-    default_cc = f"Main - {COMPANY_ABBR}"
+    default_cc = f"Main - {abbr}"
     if not company_doc.cost_center and frappe.db.exists("Cost Center", default_cc):
         updates["cost_center"] = default_cc
 
@@ -156,6 +177,7 @@ def set_company_defaults():
 def create_gst_tax_templates():
     """Clone standard GST tax templates from BestBuy for the GoFix company."""
 
+    abbr = _current_abbr()
     templates = [
         ("Output GST In-state", "Sales", [
             ("CGST - GSPL", "output", 9),
@@ -174,14 +196,23 @@ def create_gst_tax_templates():
     ]
 
     created = 0
+    # BestBuy is the source of truth for cloneable templates. Its abbr
+    # is legacy "BMPL" pre-migration or "BM" post-migration — look up
+    # the current value so this works on both.
+    bmpl_company = "BestBuy Mobiles Pvt Ltd"
+    bmpl_abbr = (
+        frappe.db.get_value("Company", bmpl_company, "abbr") or "BMPL"
+    )
+    bmpl_suffix = f"- {bmpl_abbr}"
+    target_suffix = f"- {abbr}"
     for template_name_base, template_type, _ in templates:
-        full_name = f"{template_name_base} - {COMPANY_ABBR}"
+        full_name = f"{template_name_base} - {abbr}"
         if frappe.db.exists("Sales Taxes and Charges Template" if template_type == "Sales" else "Purchase Taxes and Charges Template", full_name):
             _skip(f"Tax Template '{full_name}' already exists")
             continue
 
         # Look up corresponding BestBuy template to clone from
-        bmpl_name = f"{template_name_base} - BMPL"
+        bmpl_name = f"{template_name_base} {bmpl_suffix}"
         source_doctype = "Sales Taxes and Charges Template" if template_type == "Sales" else "Purchase Taxes and Charges Template"
         if not frappe.db.exists(source_doctype, bmpl_name):
             _warn(f"Source template '{bmpl_name}' not found — skipping '{full_name}'")
@@ -193,10 +224,10 @@ def create_gst_tax_templates():
         new_tmpl.company = COMPANY_NAME
         new_tmpl.is_default = 0
         new_tmpl.name = full_name
-        # Update account heads in rows to GSPL equivalents where possible
+        # Rewrite BestBuy account heads to the GoFix equivalents.
         for row in new_tmpl.taxes:
             if row.account_head:
-                gspl_account = row.account_head.replace("- BMPL", f"- {COMPANY_ABBR}")
+                gspl_account = row.account_head.replace(bmpl_suffix, target_suffix)
                 if frappe.db.exists("Account", gspl_account):
                     row.account_head = gspl_account
         new_tmpl.insert(ignore_permissions=True)

@@ -430,14 +430,22 @@ def create_token(
 
 
 def _enqueue_whatsapp_confirmation(token_name: str) -> None:
-	"""Phase 7 hook — no-op stub for now.
+	"""Enqueue the customer-facing WhatsApp confirmation for a new token.
 
-	The actual sender lands in ``gofix.gofix_services.whatsapp_notifications``
-	so this function stays trivial and the API contract is stable.
+	The actual send lives in
+	``gofix.gofix_services.whatsapp_notifications.send_token_confirmation``
+	so the API layer stays thin. Runs on the short queue — the tablet flow
+	never blocks on WhatsApp.
 	"""
 
-	# TODO(phase-7): frappe.enqueue("gofix.gofix_services.whatsapp_notifications.send_token_confirmation", token=token_name)
-	return None
+	if not token_name:
+		return
+	frappe.enqueue(
+		"gofix.gofix_services.whatsapp_notifications.send_token_confirmation",
+		queue="short",
+		token_name=token_name,
+		enqueue_after_commit=True,
+	)
 
 
 # ---------------------------------------------------------------------------
@@ -715,3 +723,524 @@ def get_cancellation_reasons(scope: str | None = None) -> list[dict]:
 		fields=["name", "reason_name", "scope", "requires_note", "display_order"],
 		order_by="display_order asc, reason_name asc",
 	)
+
+
+# ---------------------------------------------------------------------------
+# Management Dashboard endpoints (mirrors the ch_pos.api.token_api contract
+# so the shared /queue-mgmt page can drive both systems by URL-toggling
+# ``?system=gofix``)
+# ---------------------------------------------------------------------------
+
+
+# Map GoFix statuses onto the four buckets the shared dashboard understands.
+# ``in_progress`` = anything actively being handled by an FDE.
+_STATUS_BUCKET = {
+	STATUS_WAITING:   "waiting",
+	STATUS_CALLED:    "in_progress",
+	STATUS_ATTENDING: "in_progress",
+	STATUS_JOB_CARD:  "in_progress",
+	STATUS_COMPLETED: "completed",
+	STATUS_CANCELLED: "cancelled",
+	STATUS_LEFT:      "dropped",
+}
+
+
+def _date_filter_bounds(date_filter: str) -> tuple[str | None, str | None]:
+	"""Return ``(start, end)`` datetimes for the shared date-filter tokens."""
+
+	today = frappe.utils.today()
+	if date_filter == "today":
+		return today + " 00:00:00", None
+	if date_filter == "yesterday":
+		yesterday = frappe.utils.add_days(today, -1)
+		return yesterday + " 00:00:00", yesterday + " 23:59:59"
+	if date_filter == "this_week":
+		return frappe.utils.add_days(today, -6) + " 00:00:00", None
+	return None, None
+
+
+def _apply_scope(filters: dict, store: str | None) -> dict | None:
+	"""Attach a ``store`` filter for a single-store view; ``None`` = all stores.
+
+	Returns the resolved store dict (or ``None`` for all-stores) so the caller
+	can echo store_code / store_name back to the UI.
+	"""
+
+	if not store:
+		return None
+	resolved = _resolve_store(store)
+	if not resolved:
+		frappe.throw(_("Store {0} is not configured for GoFix.").format(store))
+	filters["store"] = resolved["warehouse"]
+	return resolved
+
+
+def _mgmt_status(row_status: str) -> str:
+	"""Collapse the GoFix status set into the four UI labels the shared
+	dashboard already renders badges for: ``Waiting`` / ``In Progress`` /
+	``Completed`` / ``Cancelled`` / ``Dropped``.
+	"""
+
+	bucket = _STATUS_BUCKET.get(row_status, "waiting")
+	return {
+		"waiting":     "Waiting",
+		"in_progress": "In Progress",
+		"completed":   "Completed",
+		"cancelled":   "Cancelled",
+		"dropped":     "Dropped",
+	}[bucket]
+
+
+@frappe.whitelist()
+def get_pos_profiles() -> list[dict]:
+	"""GoFix mirror of ``ch_pos.api.token_api.get_pos_profiles``.
+
+	Returns ``[{name, company, warehouse}]`` for the stores the caller can
+	operate. ``name`` is the CH Store name (or the warehouse if the store
+	row is missing) so URLs remain stable across the two backends.
+	"""
+
+	_ensure_fde()
+	stores = get_fde_stores()  # already scoped to gofix_enabled companies
+	profiles: list[dict] = []
+	for s in stores:
+		# Prefer the CH Store name for URL-round-tripping; fall back to warehouse.
+		name = s.get("store_code") or s.get("warehouse")
+		if frappe.db.table_exists("CH Store"):
+			ch = frappe.db.get_value(
+				"CH Store",
+				{"warehouse": s["warehouse"]},
+				"name",
+			)
+			if ch:
+				name = ch
+		profiles.append(
+			{
+				"name": name,
+				"company": s.get("company"),
+				"warehouse": s.get("warehouse"),
+			}
+		)
+	return profiles
+
+
+@frappe.whitelist()
+def get_dashboard_stats(pos_profile: str | None = None, date_filter: str = "today") -> dict:
+	"""Aggregate KPI card metrics for the management dashboard.
+
+	``pos_profile`` — the store identifier chosen in the sidebar (may be
+	blank for the all-stores rollup). ``date_filter`` — today / yesterday /
+	this_week / all.
+	"""
+
+	_ensure_fde()
+	filters: dict[str, Any] = {}
+	_apply_scope(filters, pos_profile)
+
+	start, end = _date_filter_bounds(date_filter)
+	if start and end:
+		filters["creation"] = ["between", [start, end]]
+	elif start:
+		filters["creation"] = [">=", start]
+
+	rows = frappe.get_all(
+		"GoFix Token",
+		filters=filters,
+		fields=["status", "creation", "completed_at", "store", "store_name"],
+	)
+
+	total = len(rows)
+	waiting = sum(1 for r in rows if _STATUS_BUCKET.get(r["status"]) == "waiting")
+	in_progress = sum(1 for r in rows if _STATUS_BUCKET.get(r["status"]) == "in_progress")
+	completed = sum(1 for r in rows if _STATUS_BUCKET.get(r["status"]) == "completed")
+	cancelled = sum(1 for r in rows if _STATUS_BUCKET.get(r["status"]) == "cancelled")
+	dropped = sum(1 for r in rows if _STATUS_BUCKET.get(r["status"]) == "dropped")
+
+	serviceable = completed + waiting + in_progress
+	completion_rate = round(completed / serviceable * 100) if serviceable else 0
+
+	completed_rows = [r for r in rows if _STATUS_BUCKET.get(r["status"]) == "completed" and r.get("completed_at")]
+	if completed_rows:
+		total_mins = sum(
+			int((get_datetime(r["completed_at"]) - get_datetime(r["creation"])).total_seconds() / 60)
+			for r in completed_rows
+		)
+		avg_wait = round(total_mins / len(completed_rows))
+	else:
+		avg_wait = 0
+
+	store_breakdown: dict[str, dict] = {}
+	for r in rows:
+		key = r.get("store") or "Unknown"
+		label = r.get("store_name") or key
+		bucket = store_breakdown.setdefault(
+			key,
+			{"store": label, "total": 0, "waiting": 0, "in_progress": 0, "completed": 0},
+		)
+		bucket["total"] += 1
+		b = _STATUS_BUCKET.get(r["status"])
+		if b in bucket:
+			bucket[b] += 1
+
+	return {
+		"total": total,
+		"waiting": waiting,
+		"in_progress": in_progress,
+		"completed": completed,
+		"cancelled": cancelled,
+		"dropped": dropped,
+		"avg_wait_minutes": avg_wait,
+		"completion_rate": completion_rate,
+		"store_breakdown": list(store_breakdown.values()),
+	}
+
+
+def _token_row_for_ui(r: dict, now) -> dict:
+	"""Shape a GoFix Token row for the shared queue-mgmt table."""
+
+	created = get_datetime(r["creation"])
+	end_time = get_datetime(r["completed_at"]) if r.get("completed_at") else now
+	wait_minutes = int((end_time - created).total_seconds() / 60)
+
+	device_parts = [r.get("device_type") or "", r.get("device_brand") or "", r.get("device_model") or ""]
+	device_label = " ".join(p for p in device_parts[1:] if p).strip()
+
+	tech = r.get("assigned_fde")
+	tech_name = (
+		frappe.db.get_value("User", tech, "full_name") if tech else None
+	) or (tech or None)
+
+	return {
+		"name": r["name"],
+		"token_display": r.get("token_number") or r["name"],
+		"creation": r["creation"],
+		"status": _mgmt_status(r["status"]),
+		"raw_status": r["status"],
+		"customer_name": r.get("customer_name") or "",
+		"customer_phone": r.get("customer_phone") or "",
+		"device_type": r.get("device_type") or "",
+		"device": device_label,
+		"issue_category": r.get("visit_reason") or "",
+		"technician": tech,
+		"technician_name": tech_name,
+		"wait_minutes": wait_minutes,
+		"pos_profile": r.get("store"),
+		"company": r.get("company"),
+	}
+
+
+@frappe.whitelist()
+def get_queue(pos_profile: str | None = None, status: str | None = None, date_filter: str = "today") -> list[dict]:
+	"""Return the queue rows for the management dashboard.
+
+	``status`` accepts either the collapsed UI label (``Waiting`` /
+	``In Progress`` / ``Completed`` / ``Cancelled`` / ``Dropped``) or the
+	raw GoFix status; both are normalised.
+	"""
+
+	_ensure_fde()
+	filters: dict[str, Any] = {}
+	_apply_scope(filters, pos_profile)
+
+	start, end = _date_filter_bounds(date_filter)
+	if start and end:
+		filters["creation"] = ["between", [start, end]]
+	elif start:
+		filters["creation"] = [">=", start]
+
+	if status and status != "All":
+		# Reverse-map collapsed labels to the raw statuses.
+		reverse = {v: [] for v in {"Waiting", "In Progress", "Completed", "Cancelled", "Dropped"}}
+		for raw, bucket in _STATUS_BUCKET.items():
+			label = _mgmt_status(raw)
+			reverse.setdefault(label, []).append(raw)
+		if status in reverse:
+			filters["status"] = ["in", reverse[status]]
+		else:
+			filters["status"] = status
+
+	rows = frappe.get_all(
+		"GoFix Token",
+		filters=filters,
+		fields=[
+			"name", "token_number", "status", "creation", "completed_at",
+			"customer_name", "customer_phone",
+			"device_type", "device_brand", "device_model",
+			"visit_reason", "assigned_fde", "store", "company",
+		],
+		order_by="creation desc",
+		limit=200,
+	)
+
+	now = now_datetime()
+	return [_token_row_for_ui(r, now) for r in rows]
+
+
+@frappe.whitelist()
+def get_technician_tokens(technician: str | None = None) -> list[dict]:
+	""""My Tokens" list — tokens assigned to the current FDE today."""
+
+	_ensure_fde()
+	user = technician or frappe.session.user
+	today = frappe.utils.today()
+	rows = frappe.get_all(
+		"GoFix Token",
+		filters={
+			"assigned_fde": user,
+			"creation": [">=", today + " 00:00:00"],
+		},
+		fields=[
+			"name", "token_number", "status", "creation", "completed_at",
+			"customer_name", "customer_phone",
+			"device_type", "device_brand", "device_model",
+			"visit_reason", "assigned_fde", "store", "company",
+		],
+		order_by="creation desc",
+	)
+	now = now_datetime()
+	return [_token_row_for_ui(r, now) for r in rows]
+
+
+@frappe.whitelist()
+def get_store_users(pos_profile: str | None = None, role: str | None = None) -> list[dict]:
+	"""FDE picker for the "Assign" dialog. Returns store-mapped users when
+	available, else falls back to enabled System Users with any of the
+	transition roles.
+	"""
+
+	_ensure_fde()
+	users: list[dict] = []
+	if pos_profile:
+		resolved = _resolve_store(pos_profile)
+		if resolved and frappe.db.table_exists("CH Store"):
+			store_name = frappe.db.get_value(
+				"CH Store",
+				{"warehouse": resolved["warehouse"], "disabled": 0},
+				"name",
+			)
+			if store_name and frappe.db.exists("DocType", "CH Store User"):
+				filters: dict[str, Any] = {"parent": store_name, "parenttype": "CH Store"}
+				if role:
+					filters["role"] = role
+				rows = frappe.db.get_all(
+					"CH Store User",
+					filters=filters,
+					fields=["user", "full_name", "role"],
+					order_by="full_name",
+				)
+				for r in rows:
+					if not r.full_name:
+						r.full_name = frappe.db.get_value("User", r.user, "full_name") or r.user
+				users = rows
+
+	if not users:
+		rows = frappe.db.get_all(
+			"User",
+			filters={"enabled": 1, "user_type": "System User", "name": ("not in", ["Administrator", "Guest"])},
+			fields=["name as user", "full_name"],
+			order_by="full_name",
+		)
+		for r in rows:
+			r["role"] = ""
+		users = rows
+
+	return users
+
+
+def _load_token(token_name: str):
+	if not token_name or not frappe.db.exists("GoFix Token", token_name):
+		frappe.throw(_("Token {0} not found.").format(token_name or ""))
+	return frappe.get_doc("GoFix Token", token_name)
+
+
+@frappe.whitelist()
+def assign_token(token_name: str, technician: str) -> dict:
+	"""Set ``assigned_fde``. Moves Waiting → Called when appropriate."""
+
+	_ensure_fde()
+	doc = _load_token(token_name)
+	doc.assigned_fde = technician
+	if doc.status == STATUS_WAITING:
+		doc.status = STATUS_CALLED
+	doc.save()
+	frappe.db.commit()
+	return {"status": "ok", "token_status": doc.status}
+
+
+@frappe.whitelist()
+def start_token(token_name: str) -> dict:
+	"""Manager-dashboard "Start" — moves Waiting/Called → Attending."""
+
+	_ensure_fde()
+	doc = _load_token(token_name)
+	if doc.status in {STATUS_WAITING, STATUS_CALLED}:
+		doc.status = STATUS_ATTENDING
+		doc.save()
+		frappe.db.commit()
+	return {"status": "ok"}
+
+
+@frappe.whitelist()
+def complete_token(token_name: str) -> dict:
+	"""Manager-dashboard "Complete" — closes the token."""
+
+	_ensure_fde()
+	doc = _load_token(token_name)
+	if doc.status in {STATUS_ATTENDING, STATUS_JOB_CARD}:
+		doc.status = STATUS_COMPLETED
+		doc.save()
+		frappe.db.commit()
+	return {"status": "ok"}
+
+
+@frappe.whitelist()
+def cancel_token(
+	token_name: str,
+	drop_reason: str | None = None,
+	drop_sub_reason: str | None = None,
+	drop_remarks: str | None = None,
+) -> dict:
+	"""Manager-dashboard "Cancel". Uses ``drop_reason`` if supplied else
+	first available Cancelled-scope reason (kept for API parity with the
+	ch_pos endpoint which passes optional drop metadata).
+	"""
+
+	_ensure_fde()
+	doc = _load_token(token_name)
+	reason = drop_reason
+	if not reason:
+		fallback = frappe.db.get_value(
+			"GoFix Cancellation Reason",
+			{"scope": ["in", ["Cancelled", "Both"]], "disabled": 0},
+			"name",
+			order_by="display_order asc",
+		)
+		reason = fallback
+	if not reason:
+		frappe.throw(_("No GoFix Cancellation Reason configured."))
+	doc.cancellation_reason = reason
+	if drop_remarks:
+		doc.cancellation_notes = drop_remarks
+	doc.status = STATUS_CANCELLED
+	doc.save()
+	frappe.db.commit()
+	return {"status": "ok"}
+
+
+@frappe.whitelist()
+def drop_token(
+	token_name: str,
+	drop_reason: str | None = None,
+	drop_sub_reason: str | None = None,
+	drop_remarks: str | None = None,
+) -> dict:
+	"""Manager-dashboard "Drop" — customer walked away without service."""
+
+	_ensure_fde()
+	doc = _load_token(token_name)
+	reason = drop_reason
+	if not reason:
+		fallback = frappe.db.get_value(
+			"GoFix Cancellation Reason",
+			{"scope": ["in", ["Customer Left", "Both"]], "disabled": 0},
+			"name",
+			order_by="display_order asc",
+		)
+		reason = fallback
+	if not reason:
+		frappe.throw(_("No GoFix Cancellation Reason configured."))
+	doc.cancellation_reason = reason
+	if drop_remarks:
+		doc.cancellation_notes = drop_remarks
+	doc.status = STATUS_LEFT
+	doc.save()
+	frappe.db.commit()
+	return {"status": "ok"}
+
+
+@frappe.whitelist()
+def get_reports(pos_profile: str | None = None, days: int = 7) -> dict:
+	"""Daily-breakdown and FDE-performance data for the Reports tab."""
+
+	_ensure_fde()
+	days = max(1, cint(days) or 7)
+	today = frappe.utils.today()
+	start_date = frappe.utils.add_days(today, -(days - 1))
+	filters: dict[str, Any] = {"creation": [">=", start_date + " 00:00:00"]}
+	_apply_scope(filters, pos_profile)
+
+	rows = frappe.get_all(
+		"GoFix Token",
+		filters=filters,
+		fields=["name", "status", "creation", "completed_at", "assigned_fde"],
+	)
+
+	daily_map: dict[str, dict] = {}
+	for r in rows:
+		day = str(get_datetime(r["creation"]).date())
+		bucket = daily_map.setdefault(
+			day,
+			{"date": day, "created": 0, "completed": 0, "cancelled": 0, "wait_sum": 0, "wait_count": 0},
+		)
+		bucket["created"] += 1
+		mgmt = _STATUS_BUCKET.get(r["status"])
+		if mgmt == "completed":
+			bucket["completed"] += 1
+			if r.get("completed_at"):
+				mins = int((get_datetime(r["completed_at"]) - get_datetime(r["creation"])).total_seconds() / 60)
+				bucket["wait_sum"] += mins
+				bucket["wait_count"] += 1
+		elif mgmt in {"cancelled", "dropped"}:
+			bucket["cancelled"] += 1
+
+	daily_breakdown = []
+	for day, data in sorted(daily_map.items(), reverse=True):
+		avg = round(data["wait_sum"] / data["wait_count"]) if data["wait_count"] else 0
+		daily_breakdown.append(
+			{
+				"date": data["date"],
+				"created": data["created"],
+				"completed": data["completed"],
+				"cancelled": data["cancelled"],
+				"avg_wait": avg,
+			}
+		)
+
+	tech_map: dict[str, dict] = {}
+	for r in rows:
+		tech = r.get("assigned_fde")
+		if not tech:
+			continue
+		bucket = tech_map.setdefault(
+			tech,
+			{
+				"technician": tech,
+				"name": frappe.db.get_value("User", tech, "full_name") or tech,
+				"total": 0, "completed": 0, "time_sum": 0, "time_count": 0,
+			},
+		)
+		bucket["total"] += 1
+		if _STATUS_BUCKET.get(r["status"]) == "completed":
+			bucket["completed"] += 1
+			if r.get("completed_at"):
+				mins = int((get_datetime(r["completed_at"]) - get_datetime(r["creation"])).total_seconds() / 60)
+				bucket["time_sum"] += mins
+				bucket["time_count"] += 1
+
+	tech_performance = []
+	for data in sorted(tech_map.values(), key=lambda x: x["completed"], reverse=True):
+		avg = round(data["time_sum"] / data["time_count"]) if data["time_count"] else 0
+		tech_performance.append(
+			{
+				"technician": data["technician"],
+				"name": data["name"],
+				"total": data["total"],
+				"completed": data["completed"],
+				"avg_time": avg,
+			}
+		)
+
+	return {
+		"daily_breakdown": daily_breakdown,
+		"tech_performance": tech_performance,
+	}

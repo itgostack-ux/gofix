@@ -324,3 +324,121 @@ def _fallback_sms(phone, template_name, params):
         send_sms([phone], msg)
     except Exception:
         pass
+
+
+# ── GoFix Token: check-in confirmation ──────────────────────────────
+
+def send_token_confirmation(token_name: str) -> None:
+    """Send the queue-token confirmation WhatsApp to the walk-in customer.
+
+    Enqueued from ``gofix.api.token_api.create_token`` after the token is
+    committed. Uses the per-company ``gofix_token_confirmation`` template
+    key resolved via ``ch_item_master.ch_core.whatsapp.get_template`` so
+    ops can override the actual provider template name per company.
+
+    Body values (positional):
+      1 → customer name
+      2 → token number (e.g. AKG-024)
+      3 → store name
+      4 → queue position (1-based) or empty when the customer is already up
+
+    The token row's ``whatsapp_status`` moves to ``Queued`` on successful
+    enqueue and to ``Failed`` on error. Detailed per-message delivery
+    lands in ``CH WhatsApp Log`` via the shared sender.
+    """
+
+    if not token_name:
+        return
+    try:
+        token = frappe.get_doc("GoFix Token", token_name)
+    except frappe.DoesNotExistError:
+        return
+
+    phone = (token.customer_phone or "").strip()
+    if not phone:
+        return
+
+    # Skip if we've already sent — avoids duplicate WhatsApp on retries.
+    if token.whatsapp_status in {"Queued", "Sent", "Delivered", "Read"}:
+        return
+
+    settings = _get_settings(token.company)
+    if not settings:
+        # No WhatsApp configured for this company — mark as skipped so ops can
+        # see the confirmation was intentionally not sent.
+        frappe.db.set_value(
+            "GoFix Token",
+            token.name,
+            {
+                "whatsapp_status": "Failed",
+                "whatsapp_last_error": "WhatsApp not configured for this company.",
+            },
+            update_modified=False,
+        )
+        return
+
+    from ch_item_master.ch_core.whatsapp import get_template, send_template_message
+
+    template_name, _lang = get_template(token.company, "gofix_token_confirmation")
+    if not template_name:
+        frappe.db.set_value(
+            "GoFix Token",
+            token.name,
+            {
+                "whatsapp_status": "Failed",
+                "whatsapp_last_error": "Template 'gofix_token_confirmation' not mapped for company.",
+            },
+            update_modified=False,
+        )
+        return
+
+    # Recompute queue position at send time — the customer may have already
+    # been called between token creation and the async send.
+    try:
+        from gofix.api.token_api import _queue_position
+
+        position = _queue_position(token.name, token.store, token.business_date)
+    except Exception:
+        position = 0
+
+    body_values = {
+        "1": token.customer_name or "Customer",
+        "2": token.token_number or token.name,
+        "3": token.store_name or "",
+        "4": str(position) if position else "",
+    }
+
+    try:
+        send_template_message(
+            phone=phone,
+            event="gofix_token_confirmation",
+            body_values=body_values,
+            customer_name=token.customer_name,
+            ref_doctype="GoFix Token",
+            ref_name=token.name,
+            company=token.company,
+        )
+        frappe.db.set_value(
+            "GoFix Token",
+            token.name,
+            {
+                "whatsapp_status": "Queued",
+                "whatsapp_sent_at": frappe.utils.now_datetime(),
+                "whatsapp_last_error": None,
+            },
+            update_modified=False,
+        )
+    except Exception as exc:
+        frappe.log_error(
+            frappe.get_traceback(),
+            f"gofix_token_confirmation WhatsApp failed for {token.name}",
+        )
+        frappe.db.set_value(
+            "GoFix Token",
+            token.name,
+            {
+                "whatsapp_status": "Failed",
+                "whatsapp_last_error": str(exc)[:500],
+            },
+            update_modified=False,
+        )

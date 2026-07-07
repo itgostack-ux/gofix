@@ -10,3 +10,4 @@ gofix.patches.backfill_service_request_tracking_tokens
 gofix.patches.seed_gofix_token_masters
 gofix.patches.rename_gspl_stores_to_gf_prefix
 gofix.patches.rename_company_abbrs_to_2char
+gofix.patches.heal_legacy_abbr_suffix_docs

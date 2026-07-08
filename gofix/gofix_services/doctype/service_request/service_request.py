@@ -322,6 +322,11 @@ class ServiceRequest(Document):
 				self.warranty_plan_name = covering.get("plan_title")
 				self.warranty_deductible = covering.get("deductible_amount")
 				self.warranty_expiry_date = covering.get("end_date")
+				# Capture the specific Active VAS Plans row so on_submit can
+				# increment claims_used on the correct policy. The master
+				# warranty_plan link alone is insufficient — a serial can carry
+				# multiple plans (own + extended) and only one is being consumed.
+				self.active_warranty_plan = covering.get("name")
 			else:
 				# No active sold plan — fallback to Serial No expiry
 				self._fallback_warranty_from_serial(serial)
@@ -696,6 +701,12 @@ class ServiceRequest(Document):
 		"""Actions on submission"""
 		if self.is_completed_status():
 			self.ensure_completion_artifacts()
+		# Consume the linked Active VAS Plans entitlement (SAP CS / Oracle
+		# Service pattern: submitting a Service Order on a covered device draws
+		# down the coverage counter). Idempotent via CH VAS Ledger lookup, and
+		# skipped when a CH Warranty Claim is present so the claim's own
+		# closure remains the single consumption event.
+		self._consume_active_warranty_plan()
 
 	def on_cancel(self):
 		"""Cancel related documents"""
@@ -704,12 +715,95 @@ class ServiceRequest(Document):
 			invoice = frappe.get_doc("Sales Invoice", self.service_invoice)
 			if invoice.docstatus == 1:
 				frappe.throw(_("Please cancel Sales Invoice {0} first").format(self.service_invoice), title=_("Service Request Error"))
-		
+
 		# Cancel stock entry if exists
 		if self.stock_entry:
 			stock_entry = frappe.get_doc("Stock Entry", self.stock_entry)
 			if stock_entry.docstatus == 1:
 				frappe.throw(_("Please cancel Stock Entry {0} first").format(self.stock_entry), title=_("Service Request Error"))
+
+		# Cancellation audit trail: log to CH VAS Ledger only when this SR
+		# had previously consumed a coverage entitlement. We deliberately do
+		# NOT decrement claims_used — once a Service Order consumed coverage,
+		# reversal requires a compensating manual entry (same pattern SAP CS
+		# uses for confirmed service order cancellations). Ops can reconcile
+		# via CH VAS Ledger reports when a genuine over-count occurred.
+		if self.active_warranty_plan:
+			had_claim = frappe.db.exists(
+				"CH VAS Ledger",
+				{
+					"sold_plan": self.active_warranty_plan,
+					"event_type": "Claim Used",
+					"reference_doctype": "Service Request",
+					"reference_name": self.name,
+				},
+			)
+			if had_claim:
+				try:
+					from ch_item_master.ch_item_master.doctype.ch_vas_ledger.ch_vas_ledger import log_vas_event
+					log_vas_event(
+						sold_plan=self.active_warranty_plan,
+						event_type="Claim Reversed",
+						reference_doctype="Service Request",
+						reference_name=self.name,
+						remarks=(
+							f"Service Request {self.name} cancelled — "
+							"claims_used NOT decremented (manual reconciliation "
+							"required if this was a genuine reversal)"
+						),
+					)
+				except Exception:
+					frappe.log_error(
+						frappe.get_traceback(),
+						f"VAS ledger cancel-log failed for {self.name}",
+					)
+
+	def _consume_active_warranty_plan(self):
+		"""Bump claims_used on the linked Active VAS Plans row.
+
+		Skips when:
+		  * ``active_warranty_plan`` is not set (nothing to consume)
+		  * warranty_status != Under Warranty (out-of-warranty paid repair)
+		  * a ``warranty_claim`` is linked — the CH Warranty Claim's own
+		    closure calls ``record_claim`` with the same idempotency key,
+		    so letting the SR fire too would risk double-counting on the
+		    off-chance the ledger dedup query races.
+
+		Idempotency: ``Active VAS Plans.record_claim`` checks the CH VAS
+		Ledger for an existing "Claim Used" row with our (Service Request,
+		self.name) reference and skips the bump if found. Safe to call
+		multiple times (e.g. after amend + resubmit).
+		"""
+		if not self.active_warranty_plan:
+			return
+		if (self.warranty_status or "").strip() != "Under Warranty":
+			return
+		if self.warranty_claim:
+			return  # CH Warranty Claim closure owns the counter for this event.
+
+		try:
+			sp = frappe.get_doc("Active VAS Plans", self.active_warranty_plan)
+			sp.record_claim(
+				service_reference=self.name,
+				claim_cost=flt(self.total_estimated_cost or self.estimated_cost or 0),
+				reference_doctype="Service Request",
+				reference_name=self.name,
+			)
+		except frappe.DoesNotExistError:
+			# The Active VAS Plans row was deleted after this SR captured it.
+			# Log and continue — the SR itself is still valid.
+			frappe.log_error(
+				f"Service Request {self.name}: linked Active VAS Plan "
+				f"{self.active_warranty_plan} no longer exists",
+				"VAS Claim Consumption",
+			)
+		except Exception:
+			# Never block the SR submission on a coverage-counter failure —
+			# finance can reconcile via CH VAS Ledger reports.
+			frappe.log_error(
+				frappe.get_traceback(),
+				f"VAS record_claim failed from Service Request {self.name}",
+			)
 
 	@frappe.whitelist()
 	def get_device_details(self) -> None:

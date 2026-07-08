@@ -53,6 +53,8 @@
   "warranty_status",
   "warranty_expiry_date",
   "warranty_plan",
+  "active_warranty_plan",
+  "warranty_claim",
   "warranty_plan_name",
   "warranty_deductible",
   "mode_of_service",
@@ -489,6 +491,22 @@
    "options": "CH Warranty Plan",
    "read_only": 1,
    "description": "Auto-populated from CH Sold Plan lookup. The active warranty plan covering this device."
+  },
+  {
+   "fieldname": "active_warranty_plan",
+   "fieldtype": "Link",
+   "label": "Active VAS Plan (Consumed)",
+   "options": "Active VAS Plans",
+   "read_only": 1,
+   "description": "The specific Active VAS Plans row being consumed by this Service Request. Auto-resolved from serial_no + warranty_plan. On submit, claims_used is incremented on this row (unless a linked CH Warranty Claim handles it)."
+  },
+  {
+   "fieldname": "warranty_claim",
+   "fieldtype": "Link",
+   "label": "CH Warranty Claim",
+   "options": "CH Warranty Claim",
+   "read_only": 1,
+   "description": "When present, claim consumption on the Active VAS Plan is bumped by the CH Warranty Claim closure — not by this Service Request — to prevent double-counting."
   },
   {
    "fieldname": "warranty_plan_name",

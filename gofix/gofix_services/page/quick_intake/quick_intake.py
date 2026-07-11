@@ -13,6 +13,9 @@ _VIP_THRESHOLD = 10
 @frappe.whitelist()
 def get_intake_context() -> dict:
 	"""Return context for the intake form: warehouses, recent customers, config."""
+	from gofix.scope_guard import user_scope
+	allowed_wh, _allowed_co, bypass = user_scope()
+
 	user_warehouse = frappe.defaults.get_user_default("warehouse") or ""
 	company = frappe.defaults.get_user_default("company") or frappe.db.get_single_value("Global Defaults", "default_company")
 
@@ -23,14 +26,33 @@ def get_intake_context() -> dict:
 		order_by="name",
 	)
 
-	# Recent customers (last 50 unique)
-	recent = frappe.db.sql("""
-		SELECT DISTINCT customer, customer_name, contact_number
-		FROM `tabService Request`
-		WHERE company = %s
-		ORDER BY creation DESC
-		LIMIT 50
-	""", (company,), as_dict=True)
+	# Store scope: a technician only sees warehouses — and the recent-customer
+	# history — for the stores they are entitled to. Fail closed when scoped
+	# with no allowed warehouses.
+	if not bypass:
+		warehouses = [w for w in warehouses if w in allowed_wh]
+		if user_warehouse and user_warehouse not in allowed_wh:
+			user_warehouse = warehouses[0] if warehouses else ""
+
+	# Recent customers (last 50 unique) — restricted to in-scope warehouses.
+	if bypass:
+		recent = frappe.db.sql("""
+			SELECT DISTINCT customer, customer_name, contact_number
+			FROM `tabService Request`
+			WHERE company = %(company)s
+			ORDER BY creation DESC
+			LIMIT 50
+		""", {"company": company}, as_dict=True)
+	elif warehouses:
+		recent = frappe.db.sql("""
+			SELECT DISTINCT customer, customer_name, contact_number
+			FROM `tabService Request`
+			WHERE company = %(company)s AND source_warehouse IN %(wh)s
+			ORDER BY creation DESC
+			LIMIT 50
+		""", {"company": company, "wh": tuple(warehouses)}, as_dict=True)
+	else:
+		recent = []
 
 	return {
 		"default_warehouse": user_warehouse,
@@ -56,12 +78,19 @@ def search_serial(serial_no) -> dict:
 	except Exception:
 		pass
 
-	# Open service requests for this serial
-	open_srs = frappe.get_all("Service Request", filters={
+	# Open service requests for this serial — scoped to the caller's stores so
+	# another store's service history for the device is not exposed.
+	from gofix.scope_guard import user_scope
+	allowed_wh, _co, bypass = user_scope()
+	sr_filters = {
 		"serial_no": serial_no,
 		"status": ["not in", ["Completed", "Delivered", "Cancelled", "Invoiced"]],
 		"docstatus": ["<", 2],
-	}, fields=["name", "status", "service_date", "issue_category"], limit=5)
+	}
+	if not bypass:
+		sr_filters["source_warehouse"] = ["in", list(allowed_wh) or ["__none__"]]
+	open_srs = frappe.get_all("Service Request", filters=sr_filters,
+		fields=["name", "status", "service_date", "issue_category"], limit=5)
 
 	return {
 		"found": True,
@@ -81,15 +110,33 @@ def search_customer(query) -> list:
 	if not query or len(query) < 3:
 		return []
 
-	results = frappe.db.sql("""
-		SELECT DISTINCT sr.customer, sr.customer_name, sr.contact_number, sr.email
-		FROM `tabService Request` sr
-		WHERE (sr.customer_name LIKE %(q)s
-			OR sr.contact_number LIKE %(q)s
-			OR sr.customer LIKE %(q)s)
-		ORDER BY sr.creation DESC
-		LIMIT 15
-	""", {"q": f"%{query}%"}, as_dict=True)
+	# Restrict the service-history search to the caller's in-scope stores so a
+	# technician cannot enumerate customer contact details from other stores.
+	from gofix.scope_guard import user_scope
+	allowed_wh, _co, bypass = user_scope()
+	if bypass:
+		results = frappe.db.sql("""
+			SELECT DISTINCT sr.customer, sr.customer_name, sr.contact_number, sr.email
+			FROM `tabService Request` sr
+			WHERE (sr.customer_name LIKE %(q)s
+				OR sr.contact_number LIKE %(q)s
+				OR sr.customer LIKE %(q)s)
+			ORDER BY sr.creation DESC
+			LIMIT 15
+		""", {"q": f"%{query}%"}, as_dict=True)
+	elif allowed_wh:
+		results = frappe.db.sql("""
+			SELECT DISTINCT sr.customer, sr.customer_name, sr.contact_number, sr.email
+			FROM `tabService Request` sr
+			WHERE (sr.customer_name LIKE %(q)s
+				OR sr.contact_number LIKE %(q)s
+				OR sr.customer LIKE %(q)s)
+				AND sr.source_warehouse IN %(wh)s
+			ORDER BY sr.creation DESC
+			LIMIT 15
+		""", {"q": f"%{query}%", "wh": tuple(allowed_wh)}, as_dict=True)
+	else:
+		results = []
 
 	if not results:
 		# Fallback: search Customer doctype
@@ -159,6 +206,14 @@ def submit_intake(data) -> dict:
 	for field in required:
 		if not data.get(field):
 			frappe.throw(_("{0} is required").format(field), title=_("Validation Error"))
+
+	# Bind the intake to a warehouse the caller is entitled to — a technician
+	# must not file a Service Request against another store's warehouse.
+	from gofix.scope_guard import assert_warehouse
+	assert_warehouse(
+		warehouse=data["source_warehouse"],
+		msg=_("You are not entitled to create intake at this warehouse."),
+	)
 
 	sr = frappe.new_doc("Service Request")
 	sr.company = data.get("company") or frappe.defaults.get_user_default("company")

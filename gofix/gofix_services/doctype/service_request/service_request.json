@@ -537,15 +537,15 @@
   },
   {
    "fieldname": "password",
-   "fieldtype": "Data",
+   "fieldtype": "Password",
    "label": "Device Password/PIN",
-   "description": "Password, PIN or code to unlock device (visible for technicians to test after repair)"
+   "description": "Encrypted at rest. Revealable by technicians to test after repair. Do not retain longer than the service lifecycle."
   },
   {
    "fieldname": "pattern",
-   "fieldtype": "Data",
+   "fieldtype": "Password",
    "label": "Device Pattern",
-   "description": "Pattern lock details"
+   "description": "Encrypted at rest. Pattern lock unlock sequence — revealable by technicians; do not retain beyond the service lifecycle."
   },
   {
    "fieldname": "column_break_security",

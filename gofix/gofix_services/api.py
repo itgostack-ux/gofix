@@ -221,6 +221,176 @@ def _send_delivery_otp(so, otp):
 			frappe.log_error(frappe.get_traceback(), "Delivery OTP email failed")
 
 
+# ── Billing location guard + remote-billing customer OTP ─────────────
+#
+# Invoicing must happen at the store where the customer handed in the
+# device (source_warehouse), after the return transfer is recorded. Billing
+# anywhere else requires the customer's explicit OTP consent, sent via
+# WhatsApp / SMS / email.
+
+_REMOTE_BILLING_OTP_TTL = 600  # OTP valid 10 minutes
+_REMOTE_BILLING_CONSENT_TTL = 1800  # verified consent valid 30 minutes
+_BILLING_ROLES = ["Sales Manager", "System Manager", "Service Manager", "Sales User", "Store Manager", "Store Executive"]
+
+
+def billing_location_status(sr) -> dict:
+	"""Where is the device vs where it must be billed."""
+	if isinstance(sr, str):
+		sr = frappe.get_doc("Service Request", sr)
+	home = sr.source_warehouse
+	transfer = (sr.get("transfer_status") or "").strip()
+	if transfer in ("", "Not Transferred", "Returned to Store"):
+		device_at = sr.get("current_location") or home
+	elif transfer in ("In Transit", "Return In Transit"):
+		device_at = None  # on the road
+	else:
+		device_at = sr.get("current_location") or sr.get("transferred_to_store")
+	at_home = bool(home and device_at == home)
+	verified = bool(frappe.cache().get_value(f"gofix_remote_billing_ok::{sr.name}"))
+	return {
+		"home_store": home,
+		"device_at": device_at,
+		"transfer_status": transfer or "Not Transferred",
+		"at_home_store": at_home,
+		"requires_remote_otp": not at_home,
+		"otp_verified": verified,
+	}
+
+
+def assert_billing_location(sr, remote_otp=None) -> None:
+	"""Block off-store invoicing unless customer OTP consent is verified."""
+	if isinstance(sr, str):
+		sr = frappe.get_doc("Service Request", sr)
+	status = billing_location_status(sr)
+	if status["at_home_store"] or status["otp_verified"]:
+		return
+	if remote_otp:
+		verify_remote_billing_otp(sr.name, remote_otp)
+		return
+	frappe.throw(
+		_(
+			"Invoicing is allowed only at the device's home store {0} — the device is "
+			"currently at {1} ({2}). Either record the return transfer to the store, or "
+			"take the customer's consent: send them a billing OTP (WhatsApp / email) and "
+			"enter it here."
+		).format(
+			frappe.bold(status["home_store"] or "—"),
+			frappe.bold(status["device_at"] or _("in transit")),
+			status["transfer_status"],
+		),
+		title=_("Bill at Home Store"),
+	)
+
+
+@frappe.whitelist()
+def request_remote_billing_otp(service_request) -> dict:
+	"""Send the customer a billing-consent OTP via WhatsApp / SMS / email."""
+	frappe.only_for(_BILLING_ROLES)
+	sr = frappe.get_doc("Service Request", service_request)
+	status = billing_location_status(sr)
+	if status["at_home_store"]:
+		return {"otp_sent": False, "message": _("Device is at its home store — no OTP needed.")}
+
+	otp = str(secrets.randbelow(900000) + 100000)
+	frappe.cache().set_value(
+		f"gofix_remote_billing_otp::{sr.name}",
+		frappe.utils.password.encrypt(otp),
+		expires_in_sec=_REMOTE_BILLING_OTP_TTL,
+	)
+
+	channels = []
+	phone = (sr.contact_number or "").strip()
+	email = (sr.get("email") or "").strip()
+
+	if phone:
+		try:
+			from ch_item_master.ch_core.whatsapp import send_template_message
+
+			send_template_message(
+				phone=phone,
+				event="general_otp",
+				body_values={"1": otp},
+				customer_name=sr.customer_name,
+				ref_doctype="Service Request",
+				ref_name=sr.name,
+				company=sr.company,
+			)
+			channels.append("WhatsApp")
+		except Exception:
+			frappe.log_error(frappe.get_traceback(), "Remote billing OTP WhatsApp failed")
+		try:
+			from frappe.core.doctype.sms_settings.sms_settings import send_sms
+
+			send_sms(
+				[phone],
+				f"GoFix: OTP {otp} to approve billing of your repair {sr.name} at a different "
+				f"store. Valid 10 minutes. Do not share unless you authorise this bill.",
+			)
+			channels.append("SMS")
+		except Exception:
+			frappe.log_error(frappe.get_traceback(), "Remote billing OTP SMS failed")
+
+	if email:
+		try:
+			frappe.sendmail(
+				recipients=[email],
+				subject=f"GoFix Services | Billing Approval OTP | {sr.name}",
+				message=(
+					"<div style='font-family:Segoe UI,Arial,sans-serif;max-width:680px;border:1px solid #e5e7eb;border-radius:10px;overflow:hidden'>"
+					"<div style='background:#0f172a;color:#ffffff;padding:12px 16px;font-weight:600'>GoFix Services</div>"
+					"<div style='padding:16px'>"
+					f"<p>Dear {frappe.utils.escape_html(sr.customer_name or 'Customer')},</p>"
+					f"<p>Your repair <b>{sr.name}</b> is being billed at a location other than the "
+					f"store where you handed in your device. If you approve, share this OTP with "
+					f"the executive: <span style='font-size:22px;font-weight:700;letter-spacing:4px'>{otp}</span></p>"
+					"<p>The OTP is valid for 10 minutes. If you did not request this, ignore this email.</p>"
+					"</div></div>"
+				),
+				reference_doctype="Service Request",
+				reference_name=sr.name,
+				now=True,
+			)
+			channels.append("Email")
+		except Exception:
+			frappe.log_error(frappe.get_traceback(), "Remote billing OTP email failed")
+
+	if not channels:
+		frappe.throw(
+			_("Could not send OTP — no reachable customer phone or email on {0}.").format(sr.name),
+			title=_("OTP Not Sent"),
+		)
+	return {"otp_sent": True, "channels": channels, "message": _("OTP sent via {0}").format(", ".join(channels))}
+
+
+@frappe.whitelist()
+def verify_remote_billing_otp(service_request, otp) -> dict:
+	"""Verify the customer's billing-consent OTP; consent stays valid 30 minutes."""
+	frappe.only_for(_BILLING_ROLES)
+	stored = frappe.cache().get_value(f"gofix_remote_billing_otp::{service_request}")
+	if not stored:
+		frappe.throw(_("No active OTP for {0} — send a new one.").format(service_request), title=_("OTP Expired"))
+	try:
+		decrypted = frappe.utils.password.decrypt(stored)
+	except Exception:
+		decrypted = stored
+	if str(otp).strip() != str(decrypted).strip():
+		frappe.throw(_("Invalid OTP. Please re-check with the customer."), title=_("Invalid OTP"))
+
+	frappe.cache().delete_value(f"gofix_remote_billing_otp::{service_request}")
+	frappe.cache().set_value(
+		f"gofix_remote_billing_ok::{service_request}", 1, expires_in_sec=_REMOTE_BILLING_CONSENT_TTL
+	)
+	try:
+		sr = frappe.get_doc("Service Request", service_request)
+		sr.add_comment(
+			"Comment",
+			_("Customer approved off-store billing via OTP (verified by {0}).").format(frappe.session.user),
+		)
+	except Exception:
+		pass
+	return {"verified": True, "message": _("Customer consent verified — billing unlocked for 30 minutes.")}
+
+
 # ── Estimate Approval Flow ───────────────────────────────────────────
 
 @frappe.whitelist()

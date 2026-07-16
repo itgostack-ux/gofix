@@ -508,7 +508,22 @@ class ServiceRequest(Document):
 			self.repair_warranty_expiry = add_days(completion_date, warranty_days)
 
 		if not self.get("service_invoice"):
-			self.create_service_invoice()
+			# Auto-invoice only when the device is back at its home store (or the
+			# customer has approved off-store billing via OTP) — otherwise defer
+			# to the store's POS / Ops Hub billing after the return transfer.
+			from gofix.gofix_services.api import billing_location_status
+
+			loc = billing_location_status(self)
+			if loc["at_home_store"] or loc["otp_verified"]:
+				self.create_service_invoice()
+			else:
+				self.add_comment(
+					"Comment",
+					_(
+						"Invoice deferred — device is at {0}, billing happens at home store {1} "
+						"(or with customer OTP consent)."
+					).format(loc["device_at"] or _("in transit"), loc["home_store"]),
+				)
 
 		if self.spare_parts and not self.get("stock_entry"):
 			self.create_stock_entry()

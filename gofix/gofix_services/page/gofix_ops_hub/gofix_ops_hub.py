@@ -2015,7 +2015,7 @@ def get_invoice_summary(sr_name) -> dict:
 
 
 @frappe.whitelist()
-def create_ops_hub_invoice(sr_name) -> dict:
+def create_ops_hub_invoice(sr_name, remote_otp=None) -> dict:
 	"""Create a Sales Invoice directly from the Ops Hub invoice stage.
 
 	Falls back to Sales Order items when SR has no service_items / spare_parts.
@@ -2029,6 +2029,11 @@ def create_ops_hub_invoice(sr_name) -> dict:
 
 	if not sr.is_completed_status():
 		frappe.throw(_("Service Request must be in Completed status to create an invoice."), title=_("Validation Error"))
+
+	# Bill only at the device's home store — off-store billing needs customer OTP.
+	from gofix.gofix_services.api import assert_billing_location
+
+	assert_billing_location(sr, remote_otp)
 
 	# ── Gather line items ──────────────────────────────────────────────────
 	items = []

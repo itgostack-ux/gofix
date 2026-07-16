@@ -40,7 +40,9 @@ def get_columns():
 		{"label": _("Estimate"), "fieldname": "estimated_cost", "fieldtype": "Currency", "width": 100},
 		{"label": _("Invoice"), "fieldname": "service_invoice", "fieldtype": "Link", "options": "Sales Invoice", "width": 140},
 		{"label": _("Billed"), "fieldname": "billed_amount", "fieldtype": "Currency", "width": 100},
+		{"label": _("Completed"), "fieldname": "actual_completion_date", "fieldtype": "Date", "width": 95},
 		{"label": _("Days Open"), "fieldname": "days_open", "fieldtype": "Int", "width": 85},
+		{"label": _("Timeline"), "fieldname": "timeline_btn", "fieldtype": "Data", "width": 90},
 	]
 
 
@@ -107,6 +109,7 @@ def get_data(filters):
 			r.status = f"{r.status} ({r.invoice_status})" if r.service_invoice else r.status
 		end = r.actual_completion_date or today()
 		r.days_open = max(date_diff(end, r.service_date), 0) if r.service_date else None
+		r.timeline_btn = "View"
 
 	return rows
 

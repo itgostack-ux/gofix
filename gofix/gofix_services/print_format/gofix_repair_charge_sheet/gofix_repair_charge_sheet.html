@@ -1,91 +1,460 @@
-{%- set history = get_repair_history(doc.name) -%}
-{%- set spare_total = namespace(v=0) -%}
-{%- for sl in doc.spare_lines if sl.status not in ("Damaged", "Returned") -%}
-	{%- set spare_total.v = spare_total.v + (sl.amount or (sl.qty or 0) * (sl.rate or 0)) -%}
-{%- endfor -%}
+{%- set si_name = doc.service_invoice if doc.service_invoice and frappe.db.exists("Sales Invoice", doc.service_invoice) else None -%}
+{%- set si = frappe.get_doc("Sales Invoice", si_name) if si_name else None -%}
+{%- set company_name = (si.company if si else doc.company) -%}
+{%- set company = frappe.get_cached_doc("Company", company_name) if company_name else None -%}
+{%- set currency = (si.currency if si else None) or (company.default_currency if company else None) or "INR" -%}
+{%- set company_addr_name = (si.company_address if si and si.company_address else None) -%}
+{%- if not company_addr_name and company_name -%}
+	{%- set company_addr_name = frappe.db.get_value("Dynamic Link", {"link_doctype": "Company", "link_name": company_name, "parenttype": "Address"}, "parent") -%}
+{%- endif -%}
+{%- set company_addr = frappe.db.get_value("Address", company_addr_name, ["address_line1", "address_line2", "city", "state", "pincode", "country", "gstin", "phone", "email_id"], as_dict=True) if company_addr_name else None -%}
+{%- set company_gstin = (si.company_gstin if si and si.company_gstin else None) or (company.get("gstin") if company else None) or (company_addr.gstin if company_addr else None) -%}
+{%- set company_pan = company.tax_id if company and company.tax_id else None -%}
+{%- set customer_info = frappe.db.get_value("Customer", doc.customer, ["mobile_no", "email_id", "customer_primary_address", "customer_primary_contact", "gstin"], as_dict=True) if doc.customer else None -%}
+{%- set customer_addr_name = (si.customer_address if si and si.customer_address else None) or (customer_info.customer_primary_address if customer_info else None) -%}
+{%- set customer_addr = frappe.db.get_value("Address", customer_addr_name, ["address_line1", "address_line2", "city", "state", "pincode", "country", "gstin", "phone", "email_id"], as_dict=True) if customer_addr_name else None -%}
+{%- set customer_gstin = (si.billing_address_gstin if si and si.billing_address_gstin else None) or doc.billing_gstin or doc.gstin or (customer_info.gstin if customer_info else None) or (customer_addr.gstin if customer_addr else None) -%}
+{%- set invoice_no = si.name if si else (doc.service_invoice or doc.name) -%}
+{%- set invoice_date = si.posting_date if si else (doc.service_date or doc.creation) -%}
+{%- set invoice_time = si.posting_time if si else None -%}
+{%- set place_of_supply = (si.place_of_supply if si and si.place_of_supply else None) or ((doc.state_code ~ " - " ~ doc.state_name) if doc.state_code and doc.state_name else doc.state_name) -%}
+{%- set contact_mobile = doc.contact_number or (si.contact_mobile if si else None) or (customer_info.mobile_no if customer_info else None) -%}
+{%- set contact_email = (si.contact_email if si else None) or (customer_info.email_id if customer_info else None) -%}
+{%- set totals = namespace(taxable=0, cgst=0, sgst=0, igst=0, amount=0, qty=0) -%}
+{%- if si -%}
+	{%- for item in si.items -%}
+		{%- set line_taxable = item.taxable_value if item.taxable_value else (item.net_amount or item.amount or 0) -%}
+		{%- set totals.taxable = totals.taxable + (line_taxable or 0) -%}
+		{%- set totals.cgst = totals.cgst + (item.cgst_amount or 0) -%}
+		{%- set totals.sgst = totals.sgst + (item.sgst_amount or 0) -%}
+		{%- set totals.igst = totals.igst + (item.igst_amount or 0) -%}
+		{%- set totals.amount = totals.amount + (item.amount or 0) -%}
+		{%- set totals.qty = totals.qty + (item.qty or 0) -%}
+	{%- endfor -%}
+{%- else -%}
+	{%- set totals.taxable = doc.estimated_cost or 0 -%}
+	{%- set totals.amount = doc.estimated_cost or 0 -%}
+	{%- set totals.qty = 1 -%}
+{%- endif -%}
+
+{% macro money(value) -%}
+{{ frappe.utils.fmt_money(value or 0, currency=currency) }}
+{%- endmacro %}
+
+{% macro address_block(addr) -%}
+	{%- if addr -%}
+		{{ addr.address_line1 or "" }}{% if addr.address_line2 %}<br>{{ addr.address_line2 }}{% endif %}
+		{% if addr.city or addr.state or addr.pincode %}<br>{{ [addr.city, addr.state, addr.pincode] | select | join(", ") }}{% endif %}
+		{% if addr.country %}<br>{{ addr.country }}{% endif %}
+		{% if addr.phone %}<br>Phone: {{ addr.phone }}{% endif %}
+		{% if addr.email_id %}<br>Email: {{ addr.email_id }}{% endif %}
+	{%- else -%}
+		<span class="muted">Address not configured</span>
+	{%- endif -%}
+{%- endmacro %}
+
 <style>
-	.gcs { font-size: 12px; color: #1e293b; }
-	.gcs h2 { margin: 0 0 2px; font-size: 20px; }
-	.gcs .muted { color: #64748b; }
-	.gcs .head { display: flex; justify-content: space-between; border-bottom: 2px solid #0f172a; padding-bottom: 8px; margin-bottom: 12px; }
-	.gcs table { width: 100%; border-collapse: collapse; margin-bottom: 14px; }
-	.gcs th { text-align: left; background: #f1f5f9; padding: 5px 8px; border: 1px solid #cbd5e1; font-size: 11px; text-transform: uppercase; letter-spacing: .03em; }
-	.gcs td { padding: 5px 8px; border: 1px solid #e2e8f0; vertical-align: top; }
-	.gcs .sec { font-weight: 700; margin: 14px 0 6px; font-size: 13px; border-left: 3px solid #0f172a; padding-left: 8px; }
-	.gcs .right { text-align: right; }
-	.gcs .badge { display: inline-block; padding: 1px 8px; border: 1px solid #94a3b8; border-radius: 10px; font-size: 11px; }
-	.gcs .ts { white-space: nowrap; color: #475569; }
+	.gfi {
+		color: #111827;
+		font-family: Arial, Helvetica, sans-serif;
+		font-size: 10.5px;
+		line-height: 1.35;
+	}
+	.gfi * { box-sizing: border-box; }
+	.gfi .topbar {
+		align-items: stretch;
+		border: 1.5px solid #111827;
+		display: flex;
+		margin-bottom: 8px;
+	}
+	.gfi .brand {
+		border-right: 1px solid #111827;
+		flex: 1 1 auto;
+		padding: 10px 12px;
+	}
+	.gfi .brand-name {
+		color: #b91c1c;
+		font-size: 20px;
+		font-weight: 800;
+		letter-spacing: 0;
+		line-height: 1.05;
+		margin-bottom: 4px;
+		text-transform: uppercase;
+	}
+	.gfi .brand-sub {
+		color: #374151;
+		font-size: 10px;
+		font-weight: 600;
+		text-transform: uppercase;
+	}
+	.gfi .invoice-title {
+		display: flex;
+		flex: 0 0 210px;
+		flex-direction: column;
+		justify-content: center;
+		padding: 10px 12px;
+		text-align: right;
+	}
+	.gfi .invoice-title h1 {
+		font-size: 21px;
+		font-weight: 800;
+		letter-spacing: 0;
+		line-height: 1;
+		margin: 0 0 6px;
+		text-transform: uppercase;
+	}
+	.gfi .copy-label {
+		border: 1px solid #d1d5db;
+		color: #374151;
+		display: inline-block;
+		font-size: 9px;
+		font-weight: 700;
+		padding: 2px 6px;
+		text-transform: uppercase;
+	}
+	.gfi .grid-2 {
+		display: grid;
+		gap: 8px;
+		grid-template-columns: 1fr 1fr;
+		margin-bottom: 8px;
+	}
+	.gfi .box {
+		border: 1px solid #cbd5e1;
+		min-height: 94px;
+		padding: 8px 10px;
+	}
+	.gfi .box-title {
+		color: #111827;
+		font-size: 9px;
+		font-weight: 800;
+		margin-bottom: 5px;
+		text-transform: uppercase;
+	}
+	.gfi .strong { font-weight: 800; }
+	.gfi .muted { color: #6b7280; }
+	.gfi .danger { color: #b91c1c; font-weight: 700; }
+	.gfi .meta {
+		border-collapse: collapse;
+		margin-bottom: 8px;
+		width: 100%;
+	}
+	.gfi .meta td {
+		border: 1px solid #cbd5e1;
+		padding: 5px 7px;
+		vertical-align: top;
+		width: 25%;
+	}
+	.gfi .label {
+		color: #6b7280;
+		display: block;
+		font-size: 8.5px;
+		font-weight: 800;
+		text-transform: uppercase;
+	}
+	.gfi .value {
+		color: #111827;
+		font-size: 10.5px;
+		font-weight: 700;
+		margin-top: 1px;
+	}
+	.gfi .section {
+		background: #111827;
+		color: #ffffff;
+		font-size: 9px;
+		font-weight: 800;
+		margin: 9px 0 0;
+		padding: 4px 7px;
+		text-transform: uppercase;
+	}
+	.gfi table.lines {
+		border-collapse: collapse;
+		margin: 0;
+		width: 100%;
+	}
+	.gfi .lines th {
+		background: #f3f4f6;
+		border: 1px solid #cbd5e1;
+		color: #111827;
+		font-size: 8.3px;
+		font-weight: 800;
+		padding: 5px 4px;
+		text-align: left;
+		text-transform: uppercase;
+		vertical-align: middle;
+	}
+	.gfi .lines td {
+		border: 1px solid #dbe3ee;
+		padding: 5px 4px;
+		vertical-align: top;
+	}
+	.gfi .right { text-align: right; }
+	.gfi .center { text-align: center; }
+	.gfi .nowrap { white-space: nowrap; }
+	.gfi .item-desc {
+		font-size: 10px;
+		font-weight: 700;
+	}
+	.gfi .small {
+		font-size: 9px;
+		line-height: 1.35;
+	}
+	.gfi .summary-wrap {
+		display: grid;
+		gap: 8px;
+		grid-template-columns: 1fr 280px;
+		margin-top: 8px;
+	}
+	.gfi .terms {
+		border: 1px solid #cbd5e1;
+		padding: 8px 10px;
+	}
+	.gfi .summary {
+		border-collapse: collapse;
+		width: 100%;
+	}
+	.gfi .summary td {
+		border: 1px solid #cbd5e1;
+		padding: 5px 7px;
+	}
+	.gfi .summary .grand td {
+		background: #111827;
+		color: #ffffff;
+		font-size: 12px;
+		font-weight: 800;
+	}
+	.gfi .pay-chip {
+		border: 1px solid #16a34a;
+		color: #166534;
+		display: inline-block;
+		font-size: 9px;
+		font-weight: 800;
+		margin-top: 3px;
+		padding: 2px 6px;
+		text-transform: uppercase;
+	}
+	.gfi .footer {
+		align-items: end;
+		display: grid;
+		gap: 8px;
+		grid-template-columns: 1fr 220px;
+		margin-top: 12px;
+	}
+	.gfi .signature {
+		border: 1px solid #cbd5e1;
+		min-height: 72px;
+		padding: 8px;
+		text-align: center;
+	}
+	.gfi .signature-line {
+		border-top: 1px solid #111827;
+		margin-top: 36px;
+		padding-top: 4px;
+	}
+	@media print {
+		.gfi { font-size: 10px; }
+		.gfi .section { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+		.gfi .summary .grand td { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+	}
 </style>
 
-<div class="gcs">
-	<div class="head">
-		<div>
-			<h2>Repair Charge Sheet</h2>
-			<div class="muted">{{ doc.name }} &nbsp;·&nbsp; {{ frappe.utils.format_date(doc.service_date) }}</div>
+<div class="gfi">
+	<div class="topbar">
+		<div class="brand">
+			<div class="brand-name">{{ company.company_name if company else company_name }}</div>
+			<div class="brand-sub">Authorised Service Centre - Repair, Diagnostics and Device Care</div>
+			<div class="small" style="margin-top:7px;">
+				{% if si and si.company_address_display %}
+					{{ si.company_address_display | safe }}
+				{% else %}
+					{{ address_block(company_addr) }}
+				{% endif %}
+			</div>
+			<div class="small" style="margin-top:5px;">
+				<span class="strong">GSTIN:</span>
+				{% if company_gstin %}{{ company_gstin }}{% else %}<span class="danger">Not configured</span>{% endif %}
+				{% if company_pan %} &nbsp; <span class="strong">PAN:</span> {{ company_pan }}{% endif %}
+				{% if company and company.gst_category %} &nbsp; <span class="strong">GST Category:</span> {{ company.gst_category }}{% endif %}
+			</div>
 		</div>
-		<div style="text-align:right">
-			<div><b>{{ doc.company }}</b></div>
-			<div class="muted">{{ doc.source_warehouse }}</div>
-			<div class="badge">{{ doc.status }}{% if doc.decision and doc.decision != doc.status %} · {{ doc.decision }}{% endif %}</div>
+		<div class="invoice-title">
+			<h1>Tax Invoice</h1>
+			<div><span class="copy-label">Original for Recipient</span></div>
+			<div class="small muted" style="margin-top:8px;">Service Request Linked Invoice</div>
 		</div>
 	</div>
 
-	<table>
+	<table class="meta">
 		<tr>
-			<th style="width:25%">Customer</th><td style="width:25%">{{ doc.customer_name or doc.customer }}<br><span class="muted">{{ doc.contact_number or "" }}</span></td>
-			<th style="width:25%">Device</th><td>{{ doc.device_item_name or doc.device_item or "—" }}{% if doc.brand %}<br><span class="muted">{{ doc.brand }}</span>{% endif %}</td>
+			<td><span class="label">Invoice No.</span><div class="value">{{ invoice_no }}</div></td>
+			<td><span class="label">Invoice Date</span><div class="value">{{ frappe.utils.format_date(invoice_date) }}{% if invoice_time %} {{ frappe.utils.format_time(invoice_time) }}{% endif %}</div></td>
+			<td><span class="label">Service Request</span><div class="value">{{ doc.name }}</div></td>
+			<td><span class="label">Payment Status</span><div class="value">{{ si.status if si else doc.status }}</div></td>
 		</tr>
 		<tr>
-			<th>Serial / IMEI</th><td>{{ doc.serial_no or doc.actual_imei or "—" }}</td>
-			<th>Issue</th><td>{{ doc.issue_category or "—" }}{% if doc.warranty_status %} · {{ doc.warranty_status }}{% endif %}</td>
+			<td><span class="label">Service Order</span><div class="value">{{ doc.service_order or "-" }}</div></td>
+			<td><span class="label">Place of Supply</span><div class="value">{{ place_of_supply or "-" }}</div></td>
+			<td><span class="label">POS / Store</span><div class="value">{{ (si.pos_profile if si else None) or doc.source_warehouse or "-" }}</div></td>
+			<td><span class="label">Reverse Charge</span><div class="value">No</div></td>
 		</tr>
-		<tr>
-			<th>Condition at intake</th><td>{{ doc.product_condition_desc or doc.device_condition or "—" }}</td>
-			<th>Accessories</th><td>{{ doc.accessories_received or "—" }}</td>
-		</tr>
-		{% if doc.transferred_to_store %}
-		<tr>
-			<th>Repaired at</th><td>{{ doc.transferred_to_store }}</td>
-			<th>Transfer status</th><td>{{ doc.transfer_status }}</td>
-		</tr>
-		{% endif %}
 	</table>
 
-	<div class="sec">Charges</div>
-	<table>
-		<tr><th>Description</th><th class="right" style="width:18%">Amount</th></tr>
-		{% for sl in doc.spare_lines if sl.status not in ("Damaged", "Returned") %}
-		<tr>
-			<td>Spare: {{ sl.item_name or sl.spare_item }} × {{ sl.qty }} <span class="muted">({{ sl.status }})</span></td>
-			<td class="right">{{ frappe.utils.fmt_money(sl.amount or (sl.qty or 0) * (sl.rate or 0), currency="INR") }}</td>
-		</tr>
-		{% endfor %}
-		{% if doc.estimated_cost %}
-		<tr><td class="muted">Approved estimate (v{{ doc.estimate_versions | length }})</td>
-			<td class="right muted">{{ frappe.utils.fmt_money(doc.estimated_cost, currency="INR") }}</td></tr>
-		{% endif %}
-		{% set inv = frappe.db.get_value("Sales Invoice", doc.service_invoice, ["grand_total", "status"], as_dict=True) if doc.service_invoice else None %}
-		{% if inv %}
-		<tr>
-			<td><b>Billed — {{ doc.service_invoice }}</b> <span class="badge">{{ inv.status }}</span></td>
-			<td class="right"><b>{{ frappe.utils.fmt_money(inv.grand_total, currency="INR") }}</b></td>
-		</tr>
-		{% endif %}
+	<div class="grid-2">
+		<div class="box">
+			<div class="box-title">Bill To</div>
+			<div class="strong">{{ doc.customer_name or doc.customer or (si.customer_name if si else "") }}</div>
+			{% if contact_mobile %}<div>Mobile: {{ contact_mobile }}</div>{% endif %}
+			{% if contact_email %}<div>Email: {{ contact_email }}</div>{% endif %}
+			{% if doc.ch_customer_id or doc.ch_membership_id %}
+				<div class="small muted">
+					{% if doc.ch_customer_id %}Customer ID: {{ doc.ch_customer_id }}{% endif %}
+					{% if doc.ch_membership_id %} &nbsp; Membership: {{ doc.ch_membership_id }}{% endif %}
+				</div>
+			{% endif %}
+			<div class="small" style="margin-top:5px;">
+				{% if si and si.address_display %}
+					{{ si.address_display | safe }}
+				{% elif doc.billing_address_display %}
+					{{ doc.billing_address_display | safe }}
+				{% else %}
+					{{ address_block(customer_addr) }}
+				{% endif %}
+			</div>
+			<div class="small" style="margin-top:4px;">
+				<span class="strong">Customer GSTIN:</span> {{ customer_gstin or "Unregistered / Not provided" }}
+			</div>
+		</div>
+		<div class="box">
+			<div class="box-title">Device and Service Details</div>
+			<div><span class="strong">Device:</span> {{ doc.device_item_name or doc.device_item or "-" }}</div>
+			<div>
+				<span class="strong">Brand:</span> {{ doc.brand or "-" }}
+				&nbsp; <span class="strong">Serial / IMEI:</span> {{ doc.serial_no or doc.actual_imei or "-" }}
+			</div>
+			<div><span class="strong">Issue:</span> {{ doc.issue_category or "-" }}</div>
+			{% if doc.issue_description %}<div class="small muted">{{ doc.issue_description }}</div>{% endif %}
+			<div><span class="strong">Condition:</span> {{ doc.device_condition or doc.product_condition_desc or "-" }}</div>
+			<div><span class="strong">Accessories:</span> {{ doc.accessories_received or "-" }}</div>
+			<div>
+				<span class="strong">Repair Warranty:</span>
+				{% if doc.repair_warranty_days %}{{ doc.repair_warranty_days }} days{% else %}-{% endif %}
+				{% if doc.repair_warranty_expiry %} (valid till {{ frappe.utils.format_date(doc.repair_warranty_expiry) }}){% endif %}
+			</div>
+		</div>
+	</div>
+
+	<div class="section">Service Charges and GST Breakup</div>
+	<table class="lines">
+		<thead>
+			<tr>
+				<th style="width:28px;">#</th>
+				<th>Description</th>
+				<th style="width:70px;">HSN/SAC</th>
+				<th class="right" style="width:42px;">Qty</th>
+				<th class="right" style="width:72px;">Rate</th>
+				<th class="right" style="width:78px;">Taxable</th>
+				<th class="right" style="width:54px;">CGST</th>
+				<th class="right" style="width:54px;">SGST</th>
+				<th class="right" style="width:54px;">IGST</th>
+				<th class="right" style="width:78px;">Total</th>
+			</tr>
+		</thead>
+		<tbody>
+			{% if si %}
+				{% for item in si.items %}
+					{% set line_taxable = item.taxable_value if item.taxable_value else (item.net_amount or item.amount or 0) %}
+					<tr>
+						<td class="center">{{ loop.index }}</td>
+						<td>
+							<div class="item-desc">{{ item.item_name or item.item_code }}</div>
+							<div class="small muted">{{ item.description or "" }}</div>
+							{% if item.gst_treatment %}<div class="small muted">GST Treatment: {{ item.gst_treatment }}</div>{% endif %}
+						</td>
+						<td>{{ item.gst_hsn_code or item.item_tax_template or "-" }}</td>
+						<td class="right">{{ item.qty or 0 }}</td>
+						<td class="right nowrap">{{ money(item.rate) }}</td>
+						<td class="right nowrap">{{ money(line_taxable) }}</td>
+						<td class="right nowrap">{{ item.cgst_rate or 0 }}%<br>{{ money(item.cgst_amount) }}</td>
+						<td class="right nowrap">{{ item.sgst_rate or 0 }}%<br>{{ money(item.sgst_amount) }}</td>
+						<td class="right nowrap">{{ item.igst_rate or 0 }}%<br>{{ money(item.igst_amount) }}</td>
+						<td class="right nowrap">{{ money(item.amount) }}</td>
+					</tr>
+				{% endfor %}
+			{% else %}
+				<tr>
+					<td class="center">1</td>
+					<td>
+						<div class="item-desc">Repair estimate / service charge</div>
+						<div class="small muted">{{ doc.issue_category or doc.name }}</div>
+					</td>
+					<td>9987</td>
+					<td class="right">1</td>
+					<td class="right nowrap">{{ money(doc.estimated_cost) }}</td>
+					<td class="right nowrap">{{ money(doc.estimated_cost) }}</td>
+					<td class="right nowrap">0%<br>{{ money(0) }}</td>
+					<td class="right nowrap">0%<br>{{ money(0) }}</td>
+					<td class="right nowrap">0%<br>{{ money(0) }}</td>
+					<td class="right nowrap">{{ money(doc.estimated_cost) }}</td>
+				</tr>
+			{% endif %}
+		</tbody>
 	</table>
 
-	<div class="sec">Complete History</div>
-	<table>
-		<tr><th style="width:20%">When</th><th>Event</th><th style="width:32%">Detail</th></tr>
-		{% for ev in history %}
-		<tr>
-			<td class="ts">{{ frappe.utils.format_datetime(ev.at, "dd MMM yyyy HH:mm") }}</td>
-			<td>{{ ev.title }}{% if ev.ref_name %} <span class="muted">[{{ ev.ref_name }}]</span>{% endif %}</td>
-			<td class="muted">{{ ev.detail }}</td>
-		</tr>
-		{% endfor %}
-	</table>
+	<div class="summary-wrap">
+		<div class="terms">
+			<div class="box-title">Payment and Service Terms</div>
+			<div class="small">
+				{% if si and si.payments %}
+					<span class="strong">Payment:</span>
+					{% for p in si.payments %}
+						{{ p.mode_of_payment }} - {{ money(p.amount) }}{% if not loop.last %}; {% endif %}
+					{% endfor %}
+					<span class="pay-chip">{{ si.status }}</span>
+				{% else %}
+					<span class="strong">Payment:</span> {{ si.status if si else "Not invoiced" }}
+				{% endif %}
+			</div>
+			<div class="small" style="margin-top:5px;">
+				<span class="strong">Amount in Words:</span>
+				{{ si.in_words if si and si.in_words else frappe.utils.money_in_words(doc.estimated_cost or 0, currency) }}
+			</div>
+			<div class="small" style="margin-top:7px;">
+				1. Warranty applies only to the repair/service performed and excludes physical damage, liquid damage recurrence, tampering, accessories and consumables unless stated separately.<br>
+				2. Data backup is the customer's responsibility. GoFix is not liable for data loss during diagnosis or repair.<br>
+				3. Goods once delivered after successful repair are deemed accepted by the customer.
+			</div>
+		</div>
+		<table class="summary">
+			<tr><td>Taxable / Exempt Value</td><td class="right nowrap">{{ money(totals.taxable) }}</td></tr>
+			<tr><td>CGST</td><td class="right nowrap">{{ money(totals.cgst) }}</td></tr>
+			<tr><td>SGST</td><td class="right nowrap">{{ money(totals.sgst) }}</td></tr>
+			<tr><td>IGST</td><td class="right nowrap">{{ money(totals.igst) }}</td></tr>
+			{% if si and si.discount_amount %}
+				<tr><td>Discount</td><td class="right nowrap">- {{ money(si.discount_amount) }}</td></tr>
+			{% endif %}
+			{% if si and si.rounding_adjustment %}
+				<tr><td>Round Off</td><td class="right nowrap">{{ money(si.rounding_adjustment) }}</td></tr>
+			{% endif %}
+			<tr class="grand">
+				<td>Grand Total</td>
+				<td class="right nowrap">{{ money((si.rounded_total or si.grand_total) if si else doc.estimated_cost) }}</td>
+			</tr>
+			{% if si %}
+				<tr><td>Paid</td><td class="right nowrap">{{ money(si.paid_amount) }}</td></tr>
+				<tr><td>Outstanding</td><td class="right nowrap">{{ money(si.outstanding_amount) }}</td></tr>
+			{% endif %}
+		</table>
+	</div>
 
-	<div class="muted" style="margin-top:16px; font-size:10px;">
-		Generated {{ frappe.utils.format_datetime(frappe.utils.now_datetime(), "dd MMM yyyy HH:mm") }} · GoFix Service Management
+	<div class="footer">
+		<div class="small muted">
+			Generated from GoFix Service Management on {{ frappe.utils.format_datetime(frappe.utils.now_datetime(), "dd MMM yyyy HH:mm") }}.
+			{% if not si %}<br><span class="danger">No linked Sales Invoice was found. This print is based on the Service Request estimate.</span>{% endif %}
+			{% if not company_gstin %}<br><span class="danger">Company GSTIN is not configured in Company/Address master.</span>{% endif %}
+			{% if not customer_addr and not (si and si.address_display) and not doc.billing_address_display %}<br><span class="danger">Customer billing address is not configured.</span>{% endif %}
+		</div>
+		<div class="signature">
+			<div class="strong">For {{ company.company_name if company else company_name }}</div>
+			<div class="signature-line">Authorised Signatory</div>
+		</div>
 	</div>
 </div>

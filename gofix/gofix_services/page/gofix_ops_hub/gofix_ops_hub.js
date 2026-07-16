@@ -408,6 +408,27 @@ class GoFixOpsHub {
 		this._bind_stepper_nav(d);
 		this._bind_step_events(d);
 		this._bind_not_repairable(d);
+		this._bind_invoice_print_actions();
+	}
+
+	_print_invoice(invoice_name) {
+		if (!invoice_name) return;
+		const qs = new URLSearchParams({
+			doctype: "Sales Invoice",
+			name: invoice_name,
+			format: "GoFix Service Invoice",
+			no_letterhead: "1",
+			trigger_print: "1",
+		});
+		window.open(`/printview?${qs.toString()}`, "_blank");
+	}
+
+	_bind_invoice_print_actions() {
+		this.parent.off("click", ".goh-print-invoice").on("click", ".goh-print-invoice", (e) => {
+			e.preventDefault();
+			e.stopPropagation();
+			this._print_invoice($(e.currentTarget).data("invoice"));
+		});
 	}
 
 	/* ── Stepper ────────────────────────────────────────────────────────── */
@@ -516,6 +537,7 @@ class GoFixOpsHub {
 							<i class="fa fa-external-link"></i>
 						</a>
 						${d.service_order ? `<a href="/app/sales-order/${encodeURIComponent(d.service_order)}" target="_blank" class="btn btn-xs btn-default" title="${__("Service Order")}"><i class="fa fa-file-text-o"></i></a>` : ""}
+						${d.service_invoice ? `<button class="btn btn-xs btn-default goh-print-invoice" data-invoice="${esc(d.service_invoice)}" title="${__("Print Invoice")}"><i class="fa fa-print"></i></button>` : ""}
 					</div>
 				</div>
 			</div>
@@ -1188,6 +1210,7 @@ class GoFixOpsHub {
 			<div class="goh-section-actions">
 				<a href="/app/service-request/${encodeURIComponent(d.name)}" target="_blank" class="btn btn-sm btn-default"><i class="fa fa-external-link"></i> ${__("Open SR")}</a>
 				${d.service_invoice ? `<a href="/app/sales-invoice/${encodeURIComponent(d.service_invoice)}" target="_blank" class="btn btn-sm btn-primary ml-2"><i class="fa fa-file-text-o"></i> ${__("View Invoice")}</a>` : ""}
+				${d.service_invoice ? `<button class="btn btn-sm btn-default ml-2 goh-print-invoice" data-invoice="${frappe.utils.escape_html(d.service_invoice)}"><i class="fa fa-print"></i> ${__("Print Invoice")}</button>` : ""}
 			</div>
 		`;
 	}
@@ -1296,6 +1319,7 @@ class GoFixOpsHub {
 					${hasInvoice
 						? `<a href="/app/sales-invoice/${encodeURIComponent(d.service_invoice)}" target="_blank" class="btn btn-primary btn-sm"><i class="fa fa-file-text-o"></i> ${__("View Invoice")} — ${esc(d.service_invoice)}</a>`
 						: ""}
+					${hasInvoice ? `<button class="btn btn-default btn-sm ml-2 goh-print-invoice" data-invoice="${esc(d.service_invoice)}"><i class="fa fa-print"></i> ${__("Print Invoice")}</button>` : ""}
 					<a href="/app/service-request/${encodeURIComponent(d.name)}" target="_blank" class="btn btn-default btn-sm ${hasInvoice ? 'ml-2' : ''}"><i class="fa fa-external-link"></i> ${__("View Service Request")}</a>
 				</div>
 			</div>
@@ -1724,7 +1748,11 @@ class GoFixOpsHub {
 						` : ""}
 					</div>
 					${s.service_invoice
-						? `<div class="mt-2"><span class="goh-badge badge-green">${__("Invoiced")}</span> <a href="/app/sales-invoice/${encodeURIComponent(s.service_invoice)}" target="_blank">${esc(s.service_invoice)}</a></div>`
+						? `<div class="mt-2">
+							<span class="goh-badge badge-green">${__("Invoiced")}</span>
+							<a href="/app/sales-invoice/${encodeURIComponent(s.service_invoice)}" target="_blank">${esc(s.service_invoice)}</a>
+							<button class="btn btn-xs btn-default ml-2 goh-print-invoice" data-invoice="${esc(s.service_invoice)}"><i class="fa fa-print"></i> ${__("Print")}</button>
+						</div>`
 						: `<div class="mt-3">
 							<button class="btn btn-sm btn-primary" id="goh-create-invoice"><i class="fa fa-file-text-o"></i> ${__("Create Invoice")}</button>
 							<span class="text-muted ml-2">${__("Or invoice at POS during handover.")}</span>

@@ -204,13 +204,10 @@ class GoFixToken(Document):
 			frappe.throw(
 				_("\"Not sure / expert check\" cannot be combined with other symptoms.")
 			)
-		# "Other" symptom is a free-form entry — the customer/FDE must describe
-		# the issue in additional_notes so the FDE has actionable context.
-		other_rows = [r for r in rows if r.is_other]
-		if other_rows and not (self.additional_notes or "").strip():
-			frappe.throw(
-				_("Please describe the issue in Additional Notes when selecting \"Other\".")
-			)
+		# BRD §5: "Other" must NOT require additional notes — forcing typing on
+		# the tablet makes customers drop off or enter junk. The notes box is
+		# shown for "Other" but stays optional; token generation never blocks
+		# on an empty comment.
 
 	def _validate_status_transition(self) -> None:
 		if self.is_new():

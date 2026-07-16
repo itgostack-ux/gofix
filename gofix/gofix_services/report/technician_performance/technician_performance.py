@@ -38,13 +38,20 @@ def get_data(filters):
 	if filters and filters.get("to_date"):
 		conditions += " AND ja.assignment_date <= %(to_date)s"
 		params["to_date"] = filters["to_date"]
+	company = filters.get("company") if filters else None
+	if company:
+		conditions += " AND COALESCE(sr.company, so.company) = %(company)s"
+		params["company"] = company
 
 	# Tier 4: Job Assignment has no store/warehouse of its own — reach scope
 	# through the linked Sales Order (service order). LEFT JOIN keeps rows
 	# whose SO is missing only when the caller is a bypass user (scope is None);
 	# for scoped users, an absent SO fails the IN check and drops — fail-closed.
 	scope = scope_where_clause(warehouse_field="so.set_warehouse")
-	sr_join = "LEFT JOIN `tabSales Order` so ON so.name = ja.service_order" if scope else ""
+	needs_so_join = bool(scope or company)
+	needs_sr_join = bool(company)
+	so_join = "LEFT JOIN `tabSales Order` so ON so.name = ja.service_order" if needs_so_join else ""
+	sr_join = "LEFT JOIN `tabService Request` sr ON sr.name = ja.service_request" if needs_sr_join else ""
 	scope_sql = f" AND {scope}" if scope else ""
 
 	query = f"""
@@ -56,6 +63,7 @@ def get_data(filters):
 			SUM(COALESCE(ja.actual_hours, 0)) as total_hours,
 			SUM(CASE WHEN ja.repair_outcome = 'Not Repairable' THEN 1 ELSE 0 END) as not_repairable
 		FROM `tabJob Assignment` ja
+		{so_join}
 		{sr_join}
 		WHERE ja.docstatus < 2
 		{conditions}{scope_sql}
@@ -70,13 +78,24 @@ def get_data(filters):
 		tech = row.technician
 		if tech and tech != "Unassigned":
 			# Get SO names for this technician's completed jobs
-			so_names = frappe.db.sql("""
+			extra = ""
+			tech_params = {"tech": tech}
+			if company:
+				extra += " AND COALESCE(sr.company, so.company) = %(company)s"
+				tech_params["company"] = company
+			if scope:
+				extra += f" AND {scope}"
+
+			so_names = frappe.db.sql(f"""
 				SELECT DISTINCT ja.service_order
 				FROM `tabJob Assignment` ja
-				WHERE (ja.service_engineer = %s OR ja.user = %s)
+				LEFT JOIN `tabSales Order` so ON so.name = ja.service_order
+				LEFT JOIN `tabService Request` sr ON sr.name = ja.service_request
+				WHERE (ja.service_engineer = %(tech)s OR ja.user = %(tech)s)
 				  AND ja.assignment_status IN ('Completed', 'Closed')
 				  AND ja.service_order IS NOT NULL
-			""", (tech, tech), as_dict=True)
+				  {extra}
+			""", tech_params, as_dict=True)
 
 			if so_names:
 				so_list = [s.service_order for s in so_names if s.service_order]

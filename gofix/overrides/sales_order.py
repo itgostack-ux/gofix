@@ -373,7 +373,10 @@ def update_service_request_on_qc(doc, method=None):
 					title=_("Insufficient Permission"),
 				)
 
-			if getattr(doc, 'workflow_state', None) != "QC Pass":
+			# Stamp QC Pass only when moving forward — never drag a Closed
+			# order back (the Close action fires this hook via
+			# on_update_after_submit and must stay Closed).
+			if getattr(doc, 'workflow_state', None) not in ("QC Pass", "Closed"):
 				doc.db_set("workflow_state", "QC Pass", update_modified=False)
 
 			# Update QC metadata
@@ -441,7 +444,11 @@ def _update_service_costing(doc):
 		hourly_rate = 0
 		if js.service_engineer:
 			# Try to get hourly rate from Employee custom field, fallback to ctc/2080
-			hourly_rate = flt(frappe.db.get_value("Employee", js.service_engineer, "custom_hourly_rate"))
+			hourly_rate = (
+				flt(frappe.db.get_value("Employee", js.service_engineer, "custom_hourly_rate"))
+				if frappe.db.has_column("Employee", "custom_hourly_rate")
+				else 0
+			)
 			if not hourly_rate:
 				ctc = flt(frappe.db.get_value("Employee", js.service_engineer, "ctc"))
 				if ctc:

@@ -21,21 +21,33 @@ class ServiceHub {
 		this._start_auto_refresh();
 	}
 
+	_active_company() {
+		const lock = window.ch_erp15 && window.ch_erp15.company_lock;
+		if (lock && typeof lock.active_company === "function") {
+			return lock.active_company() || "";
+		}
+		return frappe.defaults.get_user_default("Company") || frappe.defaults.get_user_default("company") || "";
+	}
+
 	_setup_controls() {
 		this.company_field = this.page.add_field({
 			fieldname: "company", label: __("Company"),
 			fieldtype: "Link", options: "Company",
-			default: frappe.defaults.get_user_default("Company"),
-			change: () => this.refresh(),
+			default: this._active_company(),
+			change: () => {
+				this.store_field?.set_value("");
+				this.refresh();
+			},
 		});
 		this.store_field = this.page.add_field({
 			fieldname: "store", label: __("Store / Warehouse"),
 			fieldtype: "Link", options: "Warehouse",
 			get_query: () => {
-				const company = this.company_field?.get_value();
-				const filters = { is_group: 0 };
-				if (company) filters.company = company;
-				return { filters };
+				const company = this.company_field?.get_value() || this._active_company();
+				return {
+					query: "gofix.gofix_services.store_context.warehouse_query",
+					filters: { company },
+				};
 			},
 			change: () => this.refresh(),
 		});
@@ -61,11 +73,13 @@ class ServiceHub {
 	_go_list(doctype, filters = {}) {
 		const co = this.company_field?.get_value();
 		if (co) filters.company = co;
+		const store = this.store_field?.get_value();
+		if (store && doctype === "Service Request") filters.source_warehouse = store;
 		frappe.set_route("List", doctype, filters);
 	}
 
 	refresh() {
-		const company = this.company_field?.get_value() || "";
+		const company = this.company_field?.get_value() || this._active_company() || "";
 		const store = this.store_field?.get_value() || "";
 		const from_date = this.from_date_field?.get_value() || "";
 		const to_date = this.to_date_field?.get_value() || "";

@@ -19,12 +19,21 @@ this.parent     = $(page.body);
 this._detail    = null;
 this._data      = null;
 this._filters   = {
+company: this._active_company(),
 date_from: frappe.datetime.add_days(frappe.datetime.nowdate(), -30),
 date_to:   frappe.datetime.nowdate(),
 warehouse: null,
 search:    '',
 };
 this.setup();
+}
+
+_active_company() {
+const lock = window.ch_erp15 && window.ch_erp15.company_lock;
+if (lock && typeof lock.active_company === 'function') {
+return lock.active_company() || '';
+}
+return frappe.defaults.get_user_default('Company') || frappe.defaults.get_user_default('company') || '';
 }
 
 setup() {
@@ -47,6 +56,10 @@ change: () => { this._filters.date_to = this.page.fields_dict.date_to.get_value(
 });
 this.page.add_field({
 fieldname: 'warehouse', label: __('Store'), fieldtype: 'Link', options: 'Warehouse',
+get_query: () => ({
+query: 'gofix.gofix_services.store_context.warehouse_query',
+filters: { company: this._active_company() || this._filters.company || '' },
+}),
 change: () => { this._filters.warehouse = this.page.fields_dict.warehouse.get_value() || null; this._load(); },
 });
 this.page.add_button(__('Refresh'), () => this._load(), { icon: 'refresh' });
@@ -89,6 +102,7 @@ this.parent.find('#jt-board').html(
 `<div class="jt-loading"><i class="fa fa-spinner fa-spin fa-2x"></i><br>${__('Loading…')}</div>`
 );
 frappe.xcall('gofix.gofix_services.page.job_tracker.job_tracker.get_board_data', {
+company: this._active_company() || this._filters.company || '',
 warehouse: this._filters.warehouse || '',
 date_from: this._filters.date_from,
 date_to:   this._filters.date_to,
@@ -155,8 +169,9 @@ const filters = { decision: status };
 if (status === 'Rejected') {
 filters.repairability_status = ['in', ['Not Repairable', 'BER']];
 }
-const co = frappe.defaults.get_user_default('Company');
+const co = this._active_company() || this._filters.company || '';
 if (co) filters.company = co;
+if (this._filters.warehouse) filters.source_warehouse = this._filters.warehouse;
 frappe.set_route('List', 'Service Request', filters);
 });
 }

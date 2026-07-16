@@ -2,6 +2,8 @@ import frappe
 from frappe import _
 from frappe.utils import nowdate, add_days
 
+from gofix.gofix_services.store_context import active_company
+
 no_cache = 1
 
 
@@ -11,9 +13,10 @@ def get_context(context):
 
 
 @frappe.whitelist()
-def get_board_data(warehouse=None, date_from=None, date_to=None, search=None) -> dict:
+def get_board_data(warehouse=None, date_from=None, date_to=None, search=None, company=None) -> dict:
 	"""Return all active Service Requests grouped by decision for the Kanban board."""
 	frappe.has_permission("Service Request", "read", throw=True)
+	company = active_company(company)
 
 	if not date_from:
 		date_from = add_days(nowdate(), -30)
@@ -25,6 +28,8 @@ def get_board_data(warehouse=None, date_from=None, date_to=None, search=None) ->
 		["service_date", "<=", date_to],
 		["decision", "not in", ["Delivered", "Cancelled", "Rejected"]],
 	]
+	if company:
+		filters.append(["company", "=", company])
 	if warehouse:
 		filters.append(["source_warehouse", "=", warehouse])
 	if search:

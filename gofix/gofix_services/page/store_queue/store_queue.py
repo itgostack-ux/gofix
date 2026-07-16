@@ -22,6 +22,8 @@ import frappe
 from frappe import _
 from frappe.utils import add_days, cint, flt, getdate, nowdate
 
+from gofix.gofix_services.store_context import active_company, build_store_context
+
 no_cache = 1
 
 
@@ -31,35 +33,20 @@ def get_context(context):
 
 
 @frappe.whitelist()
-def get_store_context() -> dict:
+def get_store_context(company=None) -> dict:
 	"""Return store context — warehouses, user info, summary counts."""
-	user = frappe.session.user
-	company = frappe.defaults.get_user_default("Company") or ""
-	default_warehouse = frappe.defaults.get_user_default("warehouse") or ""
-
-	wh_filters = {"is_group": 0, "disabled": 0}
-	if company:
-		wh_filters["company"] = company
-
-	warehouses = frappe.get_all("Warehouse", filters=wh_filters, pluck="name", order_by="name")
-
-	return {
-		"user": user,
-		"user_fullname": frappe.utils.get_fullname(user),
-		"company": company,
-		"default_warehouse": default_warehouse,
-		"warehouses": warehouses,
-	}
+	return build_store_context(company=company)
 
 
 @frappe.whitelist()
-def get_queue(warehouse=None, search=None, date_from=None, date_to=None, stage_filter="all") -> dict:
+def get_queue(warehouse=None, search=None, date_from=None, date_to=None, stage_filter="all", company=None) -> dict:
 	"""Return store queue — all SRs at this store with stage classification.
 
 	Unlike Ops Hub (which requires a Service Order), this shows ALL requests
 	including new intakes that haven't been accepted yet.
 	"""
 	frappe.has_permission("Service Request", "read", throw=True)
+	company = active_company(company)
 
 	if not date_from:
 		date_from = add_days(nowdate(), -30)
@@ -72,6 +59,8 @@ def get_queue(warehouse=None, search=None, date_from=None, date_to=None, stage_f
 		["status", "not in", ["Cancelled"]],
 	]
 
+	if company:
+		filters.append(["company", "=", company])
 	if warehouse:
 		filters.append(["source_warehouse", "=", warehouse])
 

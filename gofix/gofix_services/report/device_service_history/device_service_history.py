@@ -53,6 +53,9 @@ def get_data(filters):
 	if filters.get("device_item"):
 		conditions.append("sr.device_item = %(device_item)s")
 		values["device_item"] = filters["device_item"]
+	if filters.get("company"):
+		conditions.append("sr.company = %(company)s")
+		values["company"] = filters["company"]
 	if filters.get("from_date"):
 		conditions.append("sr.service_date >= %(from_date)s")
 		values["from_date"] = filters["from_date"]

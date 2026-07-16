@@ -27,20 +27,89 @@ class QuickIntake {
 		this.init();
 	}
 
+	active_company() {
+		const lock = window.ch_erp15 && window.ch_erp15.company_lock;
+		if (lock && typeof lock.active_company === "function") {
+			return lock.active_company() || "";
+		}
+		return frappe.defaults.get_user_default("Company") || frappe.defaults.get_user_default("company") || "";
+	}
+
 	async init() {
-		this.ctx = await frappe.xcall(`${QI_API}.get_intake_context`);
+		this.ctx = await frappe.xcall(`${QI_API}.get_intake_context`, {
+			company: this.active_company(),
+		});
 		this.form_data.source_warehouse = this.ctx.default_warehouse;
 		this.form_data.company = this.ctx.company;
 		this.render();
 		this.bind_events();
+		await this._consume_token_prefill();
 		// Auto-focus serial field
 		setTimeout(() => this.wrapper.find("#qi-serial").focus(), 200);
 	}
 
+	// GoFix Token Queue hands off via localStorage when the FDE hits
+	// "Job Card → Create New" — prefill from the token's masters so the SR and
+	// the queue token stay in sync, and link back on submit.
+	async _consume_token_prefill() {
+		let stash = null;
+		try {
+			const raw = localStorage.getItem("gofix_token_prefill");
+			if (raw) stash = JSON.parse(raw);
+		} catch (e) { /* corrupted stash — ignore */ }
+		if (!stash || !stash.token_name) return;
+		localStorage.removeItem("gofix_token_prefill");
+		// Stale handoffs (> 30 min) are dropped — likely an abandoned intake.
+		if (stash.at && Date.now() - stash.at > 30 * 60 * 1000) return;
+
+		let d = null;
+		try {
+			d = await frappe.xcall(`${QI_API}.get_token_intake_defaults`, { token_name: stash.token_name });
+		} catch (e) { /* token gone / no access — fall through to blank intake */ }
+		if (!d) return;
+
+		const w = this.wrapper;
+		this.form_data.gofix_token = d.token;
+		this.form_data.issue_category = d.issue_category || "";
+		this.form_data.customer_name = d.customer_name || "";
+
+		const phone10 = (d.customer_phone || "").replace(/\D/g, "").slice(-10);
+		if (phone10) {
+			w.find("#qi-phone").val(phone10);
+			this.form_data.contact_number = phone10;
+			w.find("#qi-customer-search").val(phone10);
+			this.search_customer(phone10);
+		}
+		if (d.issue_category) w.find("#qi-issue-category").val(d.issue_category);
+		const desc = [(d.symptoms || []).join(", "), d.additional_notes || ""].filter(Boolean).join(" — ");
+		if (desc) w.find("#qi-issue-desc").val(desc);
+
+		const device = [d.device_type, d.device_brand, d.device_model, d.other_device_hint]
+			.filter(Boolean).join(" ");
+		w.find(".qi-container").prepend(`
+			<div class="qi-card" id="qi-token-banner" style="background:#fdf2f8;border-color:#f9a8d4;">
+				<b>🎫 ${__("Token")} ${frappe.utils.escape_html(d.token_number || d.token)}</b>
+				— ${frappe.utils.escape_html(d.customer_name || "")}
+				${device ? " · " + frappe.utils.escape_html(device) : ""}
+				<div class="text-muted" style="font-size:12px;margin-top:2px;">
+					${__("This Service Request will be linked to the token automatically on submit.")}
+				</div>
+			</div>`);
+	}
+
 	render() {
-		const wh_options = this.ctx.warehouses.map(
-			(w) => `<option value="${w}" ${w === this.ctx.default_warehouse ? "selected" : ""}>${w}</option>`
-		).join("");
+		const esc = frappe.utils.escape_html;
+		const stores = this.ctx.stores || [];
+		const wh_options = stores.length
+			? stores.map((s) => {
+				const label = s.store_name && s.store_name !== s.store_code
+					? `${s.store_code} — ${s.store_name}`
+					: (s.store_code || s.warehouse);
+				return `<option value="${esc(s.warehouse)}" ${s.warehouse === this.ctx.default_warehouse ? "selected" : ""}>${esc(label)}</option>`;
+			}).join("")
+			: (this.ctx.warehouses || []).map(
+				(w) => `<option value="${esc(w)}" ${w === this.ctx.default_warehouse ? "selected" : ""}>${esc(w)}</option>`
+			).join("");
 
 		this.wrapper.html(`
 		<style>

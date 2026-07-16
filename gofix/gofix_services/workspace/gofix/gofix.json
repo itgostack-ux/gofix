@@ -1,7 +1,7 @@
 {
  "app": "gofix",
  "charts": [],
- "content": "[{\"type\": \"header\", \"data\": {\"text\": \"Operations\", \"col\": 12}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Ops Hub\", \"col\": 4}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Service Hub\", \"col\": 4}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Job Tracker\", \"col\": 4}}, {\"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"type\": \"header\", \"data\": {\"text\": \"Services\", \"col\": 12}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Service Request\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Job Assignment\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Spare Parts\", \"col\": 3}}, {\"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"type\": \"header\", \"data\": {\"text\": \"Masters\", \"col\": 12}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Walkin Source\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Issue Category\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Withdrawal Reason\", \"col\": 3}}, {\"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"type\": \"header\", \"data\": {\"text\": \"Quick Access\", \"col\": 12}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Operations\", \"col\": 4}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Services\", \"col\": 4}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Job Management\", \"col\": 4}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Items\", \"col\": 4}}, {\"id\": \"card_qc\", \"type\": \"card\", \"data\": {\"card_name\": \"Quality Control\", \"col\": 4}}, {\"id\": \"card_sla\", \"type\": \"card\", \"data\": {\"card_name\": \"SLA & Monitoring\", \"col\": 4}}, {\"id\": \"card_repair_soln\", \"type\": \"card\", \"data\": {\"card_name\": \"Repair Solutions\", \"col\": 4}}, {\"id\": \"card_pricing_rules\", \"type\": \"card\", \"data\": {\"card_name\": \"Pricing & Approvals\", \"col\": 4}}, {\"id\": \"card_gofix_pages\", \"type\": \"card\", \"data\": {\"card_name\": \"Quick Pages\", \"col\": 4}}, {\"id\": \"card_gofix_reports\", \"type\": \"card\", \"data\": {\"card_name\": \"GoFix Reports\", \"col\": 6}}]",
+ "content": "[{\"type\": \"header\", \"data\": {\"text\": \"Operations\", \"col\": 12}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Ops Hub\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Service Hub\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Job Tracker\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"GoFix Token Queue\", \"col\": 3}}, {\"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"type\": \"header\", \"data\": {\"text\": \"Services\", \"col\": 12}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"GoFix Token\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Service Request\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Job Assignment\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Spare Parts\", \"col\": 3}}, {\"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"type\": \"header\", \"data\": {\"text\": \"Masters & Mapping\", \"col\": 12}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Repair Solution\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Solution Spare Mapping\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Technician Grade\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"GoFix Device Type\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"GoFix Symptom\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Issue Category\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"GoFix Brand Option\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"GoFix Visit Reason\", \"col\": 3}}, {\"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"type\": \"header\", \"data\": {\"text\": \"Quick Access\", \"col\": 12}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Operations\", \"col\": 4}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Core Documents\", \"col\": 4}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Intake Masters\", \"col\": 4}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Repair Mapping & Skills\", \"col\": 4}, \"id\": \"card_repair_mapping\"}, {\"type\": \"card\", \"data\": {\"card_name\": \"Commercial Rules\", \"col\": 4}, \"id\": \"card_commercial_rules\"}, {\"type\": \"card\", \"data\": {\"card_name\": \"Quality & SLA\", \"col\": 4}, \"id\": \"card_quality_sla\"}, {\"type\": \"card\", \"data\": {\"card_name\": \"Workflow & States\", \"col\": 4}, \"id\": \"card_workflow_states\"}, {\"type\": \"card\", \"data\": {\"card_name\": \"Customer Extensions\", \"col\": 4}, \"id\": \"card_customer_ext\"}, {\"type\": \"card\", \"data\": {\"card_name\": \"Embedded Data Entry Points\", \"col\": 4}, \"id\": \"card_embedded_entry_points\"}, {\"type\": \"card\", \"data\": {\"card_name\": \"GoFix Reports\", \"col\": 6}, \"id\": \"card_gofix_reports\"}]",
  "creation": "2025-12-05 07:30:00",
  "custom_blocks": [],
  "docstatus": 0,
@@ -17,7 +17,8 @@
    "hidden": 0,
    "is_query_report": 0,
    "label": "Operations",
-   "link_count": 0,
+   "link_count": 6,
+   "link_type": "Page",
    "onboard": 0,
    "type": "Card Break"
   },
@@ -27,6 +28,16 @@
    "label": "Ops Hub",
    "link_count": 0,
    "link_to": "gofix-ops-hub",
+   "link_type": "Page",
+   "onboard": 1,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Service Hub",
+   "link_count": 0,
+   "link_to": "service-hub",
    "link_type": "Page",
    "onboard": 1,
    "type": "Link"
@@ -44,10 +55,51 @@
   {
    "hidden": 0,
    "is_query_report": 0,
-   "label": "Services",
+   "label": "Quick Intake",
    "link_count": 0,
+   "link_to": "quick-intake",
+   "link_type": "Page",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Store Queue",
+   "link_count": 0,
+   "link_to": "store-queue",
+   "link_type": "Page",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "GoFix Token Queue",
+   "link_count": 0,
+   "link_to": "gofix-token-queue",
+   "link_type": "Page",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Core Documents",
+   "link_count": 4,
+   "link_type": "DocType",
    "onboard": 0,
    "type": "Card Break"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "GoFix Token",
+   "link_count": 0,
+   "link_to": "GoFix Token",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
   },
   {
    "hidden": 0,
@@ -62,10 +114,81 @@
   {
    "hidden": 0,
    "is_query_report": 0,
-   "label": "Masters",
+   "label": "Job Assignment",
    "link_count": 0,
+   "link_to": "Job Assignment",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Spare Parts Usage",
+   "link_count": 0,
+   "link_to": "Spare Parts Usage",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Intake Masters",
+   "link_count": 8,
+   "link_type": "DocType",
    "onboard": 0,
    "type": "Card Break"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "GoFix Device Type",
+   "link_count": 0,
+   "link_to": "GoFix Device Type",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "GoFix Brand Option",
+   "link_count": 0,
+   "link_to": "GoFix Brand Option",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "GoFix Symptom",
+   "link_count": 0,
+   "link_to": "GoFix Symptom",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "GoFix Visit Reason",
+   "link_count": 0,
+   "link_to": "GoFix Visit Reason",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "GoFix Cancellation Reason",
+   "link_count": 0,
+   "link_to": "GoFix Cancellation Reason",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
   },
   {
    "hidden": 0,
@@ -100,134 +223,8 @@
   {
    "hidden": 0,
    "is_query_report": 0,
-   "label": "Job Assignment",
-   "link_count": 0,
-   "link_to": "Job Assignment",
-   "link_type": "DocType",
-   "onboard": 0,
-   "type": "Link"
-  },
-  {
-   "hidden": 0,
-   "is_query_report": 0,
-   "label": "Job Management",
-   "link_count": 3,
-   "link_type": "DocType",
-   "onboard": 0,
-   "type": "Card Break"
-  },
-  {
-   "hidden": 0,
-   "is_query_report": 0,
-   "label": "Job Assignment",
-   "link_count": 0,
-   "link_to": "Job Assignment",
-   "link_type": "DocType",
-   "onboard": 0,
-   "type": "Link"
-  },
-  {
-   "hidden": 0,
-   "is_query_report": 0,
-   "label": "Service Order State",
-   "link_count": 0,
-   "link_to": "Service Order State",
-   "link_type": "DocType",
-   "onboard": 0,
-   "type": "Link"
-  },
-  {
-   "hidden": 0,
-   "is_query_report": 0,
-   "label": "Service Order Transition",
-   "link_count": 0,
-   "link_to": "Service Order Transition",
-   "link_type": "DocType",
-   "onboard": 0,
-   "type": "Link"
-  },
-  {
-   "hidden": 0,
-   "is_query_report": 0,
-   "label": "Items",
-   "link_count": 2,
-   "link_type": "DocType",
-   "onboard": 0,
-   "type": "Card Break"
-  },
-  {
-   "hidden": 0,
-   "is_query_report": 0,
-   "label": "Spare Parts Usage",
-   "link_count": 0,
-   "link_to": "Spare Parts Usage",
-   "link_type": "DocType",
-   "onboard": 0,
-   "type": "Link"
-  },
-  {
-   "hidden": 0,
-   "is_query_report": 0,
-   "label": "Service Order State",
-   "link_count": 0,
-   "link_to": "Service Order State",
-   "link_type": "DocType",
-   "onboard": 0,
-   "type": "Link"
-  },
-  {
-   "hidden": 0,
-   "is_query_report": 0,
-   "label": "Service Order Transition",
-   "link_count": 0,
-   "link_to": "Service Order Transition",
-   "link_type": "DocType",
-   "onboard": 0,
-   "type": "Link"
-  },
-  {
-   "hidden": 0,
-   "is_query_report": 0,
-   "label": "Quality Control",
-   "link_count": 0,
-   "link_type": "DocType",
-   "onboard": 0,
-   "type": "Card Break"
-  },
-  {
-   "hidden": 0,
-   "is_query_report": 0,
-   "label": "GoFix QC Template",
-   "link_count": 0,
-   "link_to": "GoFix QC Template",
-   "link_type": "DocType",
-   "onboard": 0,
-   "type": "Link"
-  },
-  {
-   "hidden": 0,
-   "is_query_report": 0,
-   "label": "SLA & Monitoring",
-   "link_count": 0,
-   "link_type": "DocType",
-   "onboard": 0,
-   "type": "Card Break"
-  },
-  {
-   "hidden": 0,
-   "is_query_report": 0,
-   "label": "GoFix SLA Rule",
-   "link_count": 0,
-   "link_to": "GoFix SLA Rule",
-   "link_type": "DocType",
-   "onboard": 0,
-   "type": "Link"
-  },
-  {
-   "hidden": 0,
-   "is_query_report": 0,
-   "label": "Repair Solutions",
-   "link_count": 3,
+   "label": "Repair Mapping & Skills",
+   "link_count": 4,
    "link_type": "DocType",
    "onboard": 0,
    "type": "Card Break"
@@ -255,7 +252,7 @@
   {
    "hidden": 0,
    "is_query_report": 0,
-   "label": "Technician Grade",
+   "label": "Technician Grade & Skills",
    "link_count": 0,
    "link_to": "Technician Grade",
    "link_type": "DocType",
@@ -265,8 +262,18 @@
   {
    "hidden": 0,
    "is_query_report": 0,
-   "label": "Pricing & Approvals",
-   "link_count": 2,
+   "label": "Item Spare Compatibility",
+   "link_count": 0,
+   "link_to": "Item",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Commercial Rules",
+   "link_count": 3,
    "link_type": "DocType",
    "onboard": 0,
    "type": "Card Break"
@@ -304,8 +311,8 @@
   {
    "hidden": 0,
    "is_query_report": 0,
-   "label": "Quick Pages",
-   "link_count": 3,
+   "label": "Quality & SLA",
+   "link_count": 2,
    "link_type": "DocType",
    "onboard": 0,
    "type": "Card Break"
@@ -313,30 +320,147 @@
   {
    "hidden": 0,
    "is_query_report": 0,
-   "label": "GoFix Token Queue",
+   "label": "GoFix QC Template",
    "link_count": 0,
-   "link_to": "gofix-token-queue",
-   "link_type": "Page",
+   "link_to": "GoFix QC Template",
+   "link_type": "DocType",
    "onboard": 0,
    "type": "Link"
   },
   {
    "hidden": 0,
    "is_query_report": 0,
-   "label": "Quick Intake",
+   "label": "GoFix SLA Rule",
    "link_count": 0,
-   "link_to": "quick-intake",
-   "link_type": "Page",
+   "link_to": "GoFix SLA Rule",
+   "link_type": "DocType",
    "onboard": 0,
    "type": "Link"
   },
   {
    "hidden": 0,
    "is_query_report": 0,
-   "label": "Store Queue",
+   "label": "Workflow & States",
+   "link_count": 2,
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Card Break"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Service Order State",
    "link_count": 0,
-   "link_to": "store-queue",
-   "link_type": "Page",
+   "link_to": "Service Order State",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Service Order Transition",
+   "link_count": 0,
+   "link_to": "Service Order Transition",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Customer Extensions",
+   "link_count": 2,
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Card Break"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Customer",
+   "link_count": 0,
+   "link_to": "Customer",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Customer Addresses",
+   "link_count": 0,
+   "link_to": "Customer",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Embedded Data Entry Points",
+   "link_count": 6,
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Card Break"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Service Request Lines",
+   "link_count": 0,
+   "link_to": "Service Request",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "GoFix Token Issues",
+   "link_count": 0,
+   "link_to": "GoFix Token",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "QC Template Checks",
+   "link_count": 0,
+   "link_to": "GoFix QC Template",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Repair Cost Items",
+   "link_count": 0,
+   "link_to": "GoFix Repair Cost Template",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Technician Audit Trail",
+   "link_count": 0,
+   "link_to": "Job Assignment",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Compatible Models",
+   "link_count": 0,
+   "link_to": "Item",
+   "link_type": "DocType",
    "onboard": 0,
    "type": "Link"
   },
@@ -344,7 +468,7 @@
    "hidden": 0,
    "is_query_report": 0,
    "label": "GoFix Reports",
-   "link_count": 6,
+   "link_count": 8,
    "link_type": "Report",
    "onboard": 0,
    "type": "Card Break"
@@ -365,6 +489,16 @@
    "label": "Device Service History",
    "link_count": 0,
    "link_to": "Device Service History",
+   "link_type": "Report",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 1,
+   "label": "GoFix Daily Tokens",
+   "link_count": 0,
+   "link_to": "GoFix Daily Tokens",
    "link_type": "Report",
    "onboard": 0,
    "type": "Link"
@@ -411,17 +545,7 @@
   },
   {
    "hidden": 0,
-   "is_query_report": 0,
-   "label": "Service Hub",
-   "link_count": 0,
-   "link_to": "service-hub",
-   "link_type": "Page",
-   "onboard": 1,
-   "type": "Link"
-  },
-  {
-   "hidden": 0,
-   "is_query_report": 0,
+   "is_query_report": 1,
    "label": "Walk-in Conversion",
    "link_count": 0,
    "link_to": "Walk-in Conversion Report",
@@ -430,7 +554,7 @@
    "type": "Link"
   }
  ],
- "modified": "2026-05-11 00:00:00.000000",
+ "modified": "2026-07-17 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "GoFix Services",
  "name": "GoFix",
@@ -462,13 +586,12 @@
    "type": "Page"
   },
   {
-   "color": "Blue",
-   "doc_view": "List",
-   "format": "{} Open",
-   "label": "Service Request",
-   "link_to": "Service Request",
-   "stats_filter": "{\"status\": [\"=\", \"Open\"]}",
-   "type": "DocType"
+   "color": "Purple",
+   "doc_view": "",
+   "icon": "fa fa-th-large",
+   "label": "Service Hub",
+   "link_to": "service-hub",
+   "type": "Page"
   },
   {
    "color": "Purple",
@@ -479,38 +602,27 @@
    "type": "Page"
   },
   {
-   "color": "Green",
-   "doc_view": "New",
-   "label": "New Service Request",
+   "color": "Blue",
+   "doc_view": "",
+   "icon": "fa fa-list",
+   "label": "GoFix Token Queue",
+   "link_to": "gofix-token-queue",
+   "type": "Page"
+  },
+  {
+   "color": "Blue",
+   "doc_view": "List",
+   "label": "GoFix Token",
+   "link_to": "GoFix Token",
+   "type": "DocType"
+  },
+  {
+   "color": "Blue",
+   "doc_view": "List",
+   "format": "{} Open",
+   "label": "Service Request",
    "link_to": "Service Request",
-   "type": "DocType"
-  },
-  {
-   "color": "Grey",
-   "doc_view": "List",
-   "label": "Walkin Source",
-   "link_to": "Walkin Source",
-   "type": "DocType"
-  },
-  {
-   "color": "Grey",
-   "doc_view": "List",
-   "label": "Issue Category",
-   "link_to": "Issue Category",
-   "type": "DocType"
-  },
-  {
-   "color": "Grey",
-   "doc_view": "List",
-   "label": "Withdrawal Reason",
-   "link_to": "Withdrawal Reason",
-   "type": "DocType"
-  },
-  {
-   "color": "Orange",
-   "doc_view": "List",
-   "label": "Customers",
-   "link_to": "Customer",
+   "stats_filter": "{\"status\": [\"=\", \"Open\"]}",
    "type": "DocType"
   },
   {
@@ -523,13 +635,6 @@
    "type": "DocType"
   },
   {
-   "color": "Yellow",
-   "doc_view": "New",
-   "label": "Assign Job",
-   "link_to": "Job Assignment",
-   "type": "DocType"
-  },
-  {
    "color": "Red",
    "doc_view": "List",
    "format": "{} Used",
@@ -539,12 +644,60 @@
    "type": "DocType"
   },
   {
-   "color": "Purple",
-   "doc_view": "",
-   "icon": "fa fa-th-large",
-   "label": "Service Hub",
-   "link_to": "service-hub",
-   "type": "Page"
+   "color": "Green",
+   "doc_view": "List",
+   "label": "Repair Solution",
+   "link_to": "Repair Solution",
+   "type": "DocType"
+  },
+  {
+   "color": "Green",
+   "doc_view": "List",
+   "label": "Solution Spare Mapping",
+   "link_to": "Solution Spare Mapping",
+   "type": "DocType"
+  },
+  {
+   "color": "Grey",
+   "doc_view": "List",
+   "label": "Technician Grade",
+   "link_to": "Technician Grade",
+   "type": "DocType"
+  },
+  {
+   "color": "Grey",
+   "doc_view": "List",
+   "label": "GoFix Device Type",
+   "link_to": "GoFix Device Type",
+   "type": "DocType"
+  },
+  {
+   "color": "Grey",
+   "doc_view": "List",
+   "label": "GoFix Symptom",
+   "link_to": "GoFix Symptom",
+   "type": "DocType"
+  },
+  {
+   "color": "Grey",
+   "doc_view": "List",
+   "label": "Issue Category",
+   "link_to": "Issue Category",
+   "type": "DocType"
+  },
+  {
+   "color": "Grey",
+   "doc_view": "List",
+   "label": "GoFix Brand Option",
+   "link_to": "GoFix Brand Option",
+   "type": "DocType"
+  },
+  {
+   "color": "Grey",
+   "doc_view": "List",
+   "label": "GoFix Visit Reason",
+   "link_to": "GoFix Visit Reason",
+   "type": "DocType"
   }
  ],
  "title": "GoFix",

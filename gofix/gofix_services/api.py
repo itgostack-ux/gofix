@@ -719,7 +719,11 @@ def calculate_suggested_price(service_order) -> dict:
 		hourly_rate = 0
 		engineer_name = js.engineer_name or "Unassigned"
 		if js.service_engineer:
-			hourly_rate = flt(frappe.db.get_value("Employee", js.service_engineer, "custom_hourly_rate"))
+			hourly_rate = (
+				flt(frappe.db.get_value("Employee", js.service_engineer, "custom_hourly_rate"))
+				if frappe.db.has_column("Employee", "custom_hourly_rate")
+				else 0
+			)
 			if not hourly_rate:
 				ctc = flt(frappe.db.get_value("Employee", js.service_engineer, "ctc"))
 				if ctc:
@@ -747,6 +751,60 @@ def calculate_suggested_price(service_order) -> dict:
 		"price_override": price_override,
 		"labor_details": labor_details,
 	}
+
+
+def auto_close_service_order_after_billing(service_request=None, service_order=None) -> None:
+	"""Bring a billed repair's Service Order to its terminal state.
+
+	Wired into every invoice-creation path (SR auto-invoice, Ops Hub invoice,
+	POS collect_repair_payment / close_repair_order) so an invoiced repair
+	never lingers as a draft Sales Order with a QC-Pass badge. Runs as a
+	system action (permission-exempt) but only when the repair is genuinely
+	finished: all Job Assignments settled AND QC passed. Never raises —
+	billing must not fail because closing hiccuped.
+	"""
+
+	try:
+		so_name = service_order
+		if not so_name and service_request:
+			so_name = frappe.db.get_value("Service Request", service_request, "service_order")
+		if not so_name:
+			return
+		so = frappe.get_doc("Sales Order", so_name)
+		if not so.get("is_service_order"):
+			return
+		if so.docstatus == 2 or (so.docstatus == 1 and so.get("workflow_state") == "Closed"):
+			return
+
+		jas = frappe.get_all(
+			"Job Assignment",
+			filters={"service_order": so_name, "docstatus": ["<", 2]},
+			pluck="assignment_status",
+		)
+		if not jas or any(s not in ("Completed", "Closed", "Cancelled") for s in jas):
+			return
+		if so.get("qc_status") != "Pass":
+			return
+
+		if so.docstatus == 0:
+			so.flags.ignore_permissions = True
+			so.submit()
+			# Submit-time hooks can knock qc/workflow back to Awaiting —
+			# restore the QC verdict that gated this close.
+			so.reload()
+
+		updates = {"workflow_state": "Closed"}
+		if so.get("qc_status") != "Pass":
+			updates["qc_status"] = "Pass"
+		so.db_set(updates, update_modified=False)
+		so.reload()
+		so.flags.ignore_permissions = True
+		so.update_status("Closed")
+	except Exception:
+		frappe.log_error(
+			frappe.get_traceback(),
+			f"auto_close_service_order_after_billing failed: {service_request or service_order}",
+		)
 
 
 # ── Issue → Solution → Spare Cascade APIs ────────────────────────────

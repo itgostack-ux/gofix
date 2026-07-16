@@ -12,3 +12,10 @@ gofix.patches.rename_gspl_stores_to_gf_prefix
 gofix.patches.rename_company_abbrs_to_2char
 gofix.patches.heal_legacy_abbr_suffix_docs
 gofix.patches.encrypt_service_request_unlock_secrets
+gofix.patches.seed_gofix_token_masters #2026-07-16 v2 — BRD symptom catalogue, Issue Category taxonomy + backend mapping, WhatsApp event
+gofix.patches.seed_gofix_service_masters
+gofix.patches.seed_gofix_service_masters #2026-07-17 v2 — add L4 technician grade and remap Expert solutions
+gofix.patches.seed_gofix_token_masters #2026-07-17 v3 — link brand options to item-master Brand + device types to CH Category
+gofix.patches.seed_gofix_service_masters #2026-07-17 v3 - merge duplicate legacy L3 Expert grade
+gofix.patches.sync_customer_addresses #2026-07-17 - activate imported customer billing rows and sync ERPNext Address links
+gofix.patches.seed_gofix_service_masters #2026-07-17 v4 — seed Service Order State/Transition matrix from active workflow

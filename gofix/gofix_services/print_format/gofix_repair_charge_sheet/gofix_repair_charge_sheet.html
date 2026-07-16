@@ -1,0 +1,91 @@
+{%- set history = get_repair_history(doc.name) -%}
+{%- set spare_total = namespace(v=0) -%}
+{%- for sl in doc.spare_lines if sl.status not in ("Damaged", "Returned") -%}
+	{%- set spare_total.v = spare_total.v + (sl.amount or (sl.qty or 0) * (sl.rate or 0)) -%}
+{%- endfor -%}
+<style>
+	.gcs { font-size: 12px; color: #1e293b; }
+	.gcs h2 { margin: 0 0 2px; font-size: 20px; }
+	.gcs .muted { color: #64748b; }
+	.gcs .head { display: flex; justify-content: space-between; border-bottom: 2px solid #0f172a; padding-bottom: 8px; margin-bottom: 12px; }
+	.gcs table { width: 100%; border-collapse: collapse; margin-bottom: 14px; }
+	.gcs th { text-align: left; background: #f1f5f9; padding: 5px 8px; border: 1px solid #cbd5e1; font-size: 11px; text-transform: uppercase; letter-spacing: .03em; }
+	.gcs td { padding: 5px 8px; border: 1px solid #e2e8f0; vertical-align: top; }
+	.gcs .sec { font-weight: 700; margin: 14px 0 6px; font-size: 13px; border-left: 3px solid #0f172a; padding-left: 8px; }
+	.gcs .right { text-align: right; }
+	.gcs .badge { display: inline-block; padding: 1px 8px; border: 1px solid #94a3b8; border-radius: 10px; font-size: 11px; }
+	.gcs .ts { white-space: nowrap; color: #475569; }
+</style>
+
+<div class="gcs">
+	<div class="head">
+		<div>
+			<h2>Repair Charge Sheet</h2>
+			<div class="muted">{{ doc.name }} &nbsp;·&nbsp; {{ frappe.utils.format_date(doc.service_date) }}</div>
+		</div>
+		<div style="text-align:right">
+			<div><b>{{ doc.company }}</b></div>
+			<div class="muted">{{ doc.source_warehouse }}</div>
+			<div class="badge">{{ doc.status }}{% if doc.decision and doc.decision != doc.status %} · {{ doc.decision }}{% endif %}</div>
+		</div>
+	</div>
+
+	<table>
+		<tr>
+			<th style="width:25%">Customer</th><td style="width:25%">{{ doc.customer_name or doc.customer }}<br><span class="muted">{{ doc.contact_number or "" }}</span></td>
+			<th style="width:25%">Device</th><td>{{ doc.device_item_name or doc.device_item or "—" }}{% if doc.brand %}<br><span class="muted">{{ doc.brand }}</span>{% endif %}</td>
+		</tr>
+		<tr>
+			<th>Serial / IMEI</th><td>{{ doc.serial_no or doc.actual_imei or "—" }}</td>
+			<th>Issue</th><td>{{ doc.issue_category or "—" }}{% if doc.warranty_status %} · {{ doc.warranty_status }}{% endif %}</td>
+		</tr>
+		<tr>
+			<th>Condition at intake</th><td>{{ doc.product_condition_desc or doc.device_condition or "—" }}</td>
+			<th>Accessories</th><td>{{ doc.accessories_received or "—" }}</td>
+		</tr>
+		{% if doc.transferred_to_store %}
+		<tr>
+			<th>Repaired at</th><td>{{ doc.transferred_to_store }}</td>
+			<th>Transfer status</th><td>{{ doc.transfer_status }}</td>
+		</tr>
+		{% endif %}
+	</table>
+
+	<div class="sec">Charges</div>
+	<table>
+		<tr><th>Description</th><th class="right" style="width:18%">Amount</th></tr>
+		{% for sl in doc.spare_lines if sl.status not in ("Damaged", "Returned") %}
+		<tr>
+			<td>Spare: {{ sl.item_name or sl.spare_item }} × {{ sl.qty }} <span class="muted">({{ sl.status }})</span></td>
+			<td class="right">{{ frappe.utils.fmt_money(sl.amount or (sl.qty or 0) * (sl.rate or 0), currency="INR") }}</td>
+		</tr>
+		{% endfor %}
+		{% if doc.estimated_cost %}
+		<tr><td class="muted">Approved estimate (v{{ doc.estimate_versions | length }})</td>
+			<td class="right muted">{{ frappe.utils.fmt_money(doc.estimated_cost, currency="INR") }}</td></tr>
+		{% endif %}
+		{% set inv = frappe.db.get_value("Sales Invoice", doc.service_invoice, ["grand_total", "status"], as_dict=True) if doc.service_invoice else None %}
+		{% if inv %}
+		<tr>
+			<td><b>Billed — {{ doc.service_invoice }}</b> <span class="badge">{{ inv.status }}</span></td>
+			<td class="right"><b>{{ frappe.utils.fmt_money(inv.grand_total, currency="INR") }}</b></td>
+		</tr>
+		{% endif %}
+	</table>
+
+	<div class="sec">Complete History</div>
+	<table>
+		<tr><th style="width:20%">When</th><th>Event</th><th style="width:32%">Detail</th></tr>
+		{% for ev in history %}
+		<tr>
+			<td class="ts">{{ frappe.utils.format_datetime(ev.at, "dd MMM yyyy HH:mm") }}</td>
+			<td>{{ ev.title }}{% if ev.ref_name %} <span class="muted">[{{ ev.ref_name }}]</span>{% endif %}</td>
+			<td class="muted">{{ ev.detail }}</td>
+		</tr>
+		{% endfor %}
+	</table>
+
+	<div class="muted" style="margin-top:16px; font-size:10px;">
+		Generated {{ frappe.utils.format_datetime(frappe.utils.now_datetime(), "dd MMM yyyy HH:mm") }} · GoFix Service Management
+	</div>
+</div>

@@ -551,37 +551,33 @@ def get_fde_stores() -> list[dict]:
 				"store_name": r.get("store_name") or r.get("name") or r["warehouse"],
 			}
 
-	# Fall back to any non-group, non-disabled warehouse on a GoFix company
-	# that isn't already covered by CH Store.
-	wh_rows = frappe.get_all(
-		"Warehouse",
-		filters={"company": ("in", companies), "is_group": 0, "disabled": 0},
-		fields=["name", "warehouse_name", "company"],
-		order_by="warehouse_name asc",
-	)
-	for w in wh_rows:
-		if w["name"] in seen:
-			continue
-		code, name = resolve_store_code(w["name"])
-		seen[w["name"]] = {
-			"warehouse": w["name"],
-			"company": w["company"],
-			"store_code": code,
-			"store_name": name or w["warehouse_name"] or w["name"],
-		}
+	# Fall back to warehouses only when CH Store has not been set up at all.
+	# Once CH Store exists, it is the store master; showing every warehouse
+	# here pollutes the FDE queue with Buyback/Damaged/Demo/WIP locations.
+	if not seen:
+		wh_rows = frappe.get_all(
+			"Warehouse",
+			filters={"company": ("in", companies), "is_group": 0, "disabled": 0},
+			fields=["name", "warehouse_name", "company"],
+			order_by="warehouse_name asc",
+		)
+		for w in wh_rows:
+			code, name = resolve_store_code(w["name"])
+			seen[w["name"]] = {
+				"warehouse": w["name"],
+				"company": w["company"],
+				"store_code": code,
+				"store_name": name or w["warehouse_name"] or w["name"],
+			}
 
 	return list(seen.values())
 
 
 @frappe.whitelist()
-def list_active_tokens(store: str, statuses: Any = None) -> list[dict]:
+def list_active_tokens(store: str | None = None, statuses: Any = None) -> list[dict]:
 	"""Return active tokens for the FDE queue view."""
 
 	_ensure_fde()
-	resolved = _resolve_store(store)
-	if not resolved:
-		frappe.throw(_("Store {0} is not configured for GoFix.").format(store))
-
 	if statuses:
 		if isinstance(statuses, str):
 			import json
@@ -593,17 +589,36 @@ def list_active_tokens(store: str, statuses: Any = None) -> list[dict]:
 	else:
 		statuses = list(ACTIVE_STATUSES)
 
+	filters: dict[str, Any] = {
+		"business_date": nowdate(),
+		"status": ["in", statuses],
+	}
+	if store and store != "__all__":
+		resolved = _resolve_store(store)
+		if not resolved:
+			frappe.throw(_("Store {0} is not configured for GoFix.").format(store))
+		filters["store"] = resolved["warehouse"]
+	else:
+		companies = frappe.get_all(
+			"Company",
+			filters={"gofix_enabled": 1},
+			pluck="name",
+		)
+		if not companies:
+			return []
+		filters["company"] = ["in", companies]
+
 	rows = frappe.get_all(
 		"GoFix Token",
-		filters={
-			"store": resolved["warehouse"],
-			"business_date": nowdate(),
-			"status": ["in", statuses],
-		},
+		filters=filters,
 		fields=[
 			"name",
 			"token_number",
 			"status",
+			"company",
+			"store",
+			"store_code",
+			"store_name",
 			"customer_name",
 			"customer_phone",
 			"visit_reason",

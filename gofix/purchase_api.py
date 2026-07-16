@@ -63,7 +63,8 @@ def create_pos_from_material_request(material_request: str) -> dict:
             "supplier": supplier,
             "transaction_date": nowdate(),
             "schedule_date": add_days(nowdate(), 7),
-            "custom_purchase_type": "Warranty",  # spare parts for repair = Warranty type
+            "set_warehouse": mr.set_warehouse or (items[0].get("warehouse") if items else None),
+            "custom_purchase_type": "Taxable",  # standard GST purchase of repair spares
             "items": items,
         })
         po.insert(ignore_permissions=True)

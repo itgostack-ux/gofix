@@ -8,6 +8,13 @@ app_license = "custom"
 boot_session = "gofix.boot.boot_session"
 required_apps = ["frappe/erpnext"]
 
+# Jinja helpers available to print formats (Repair Charge Sheet timeline)
+jinja = {
+	"methods": [
+		"gofix.gofix_services.page.gofix_ops_hub.gofix_ops_hub.get_repair_history",
+	]
+}
+
 fixtures = [
     {
         "dt": "Role",
@@ -119,6 +126,11 @@ doc_events = {
 	},
 	"Customer": {
 		"validate": "gofix.gofix_services.customer_address.validate_single_active_address",
+		"after_insert": "gofix.gofix_services.customer_address.sync_standard_customer_address",
+		"on_update": "gofix.gofix_services.customer_address.sync_standard_customer_address",
+	},
+	"Data Import": {
+		"on_change": "gofix.gofix_services.customer_address.on_data_import_change",
 	},
 }
 
@@ -134,4 +146,3 @@ scheduler_events = {
 		]
 	},
 }
-

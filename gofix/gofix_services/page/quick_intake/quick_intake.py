@@ -6,25 +6,22 @@ import frappe
 from frappe import _
 from frappe.utils import today, flt
 
+from gofix.gofix_services.store_context import active_company, build_store_context
+
 _GSTIN_RE = re.compile(r'^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$')
 _VIP_THRESHOLD = 10
 
 
 @frappe.whitelist()
-def get_intake_context() -> dict:
+def get_intake_context(company=None) -> dict:
 	"""Return context for the intake form: warehouses, recent customers, config."""
 	from gofix.scope_guard import user_scope
 	allowed_wh, _allowed_co, bypass = user_scope()
 
-	user_warehouse = frappe.defaults.get_user_default("warehouse") or ""
-	company = frappe.defaults.get_user_default("company") or frappe.db.get_single_value("Global Defaults", "default_company")
-
-	warehouses = frappe.get_all(
-		"Warehouse",
-		filters={"company": company, "is_group": 0, "disabled": 0},
-		pluck="name",
-		order_by="name",
-	)
+	company = active_company(company)
+	ctx = build_store_context(company=company, prefer_first=True)
+	user_warehouse = ctx["default_warehouse"]
+	warehouses = ctx["warehouses"]
 
 	# Store scope: a technician only sees warehouses — and the recent-customer
 	# history — for the stores they are entitled to. Fail closed when scoped
@@ -57,6 +54,7 @@ def get_intake_context() -> dict:
 	return {
 		"default_warehouse": user_warehouse,
 		"company": company,
+		"stores": ctx["stores"],
 		"warehouses": warehouses,
 		"recent_customers": recent,
 	}
@@ -190,6 +188,106 @@ def get_customer_classification(customer: str) -> dict:
 
 
 @frappe.whitelist()
+def get_token_intake_defaults(token_name: str) -> dict:
+	"""Prefill payload for a job card raised from a GoFix queue token.
+
+	Returns the customer/device/symptom details captured on the self check-in
+	tablet plus the Issue Category the first mapped symptom points at
+	(GoFix Symptom.backend_category), so the Service Request lands in the same
+	service taxonomy the token reports use.
+	"""
+	from gofix.api.token_api import _ensure_fde
+
+	_ensure_fde()
+	if not token_name or not frappe.db.exists("GoFix Token", token_name):
+		frappe.throw(_("GoFix Token {0} not found.").format(token_name or ""))
+	token = frappe.get_doc("GoFix Token", token_name)
+
+	# Canonical item-master Brand behind the customer-facing label (e.g.
+	# "Google Pixel" → "Google") so the job card and Item analytics agree.
+	canonical_brand = None
+	if token.device_type and token.device_brand:
+		canonical_brand = frappe.db.get_value(
+			"GoFix Brand Option", f"{token.device_type}::{token.device_brand}", "brand"
+		)
+
+	return {
+		"token": token.name,
+		"token_number": token.token_number,
+		"status": token.status,
+		"customer_name": token.customer_name,
+		"customer_phone": token.customer_phone,
+		"visit_reason": token.visit_reason,
+		"device_type": token.device_type,
+		"device_brand": token.device_brand,
+		"canonical_brand": canonical_brand or token.device_brand,
+		"device_model": token.device_model,
+		"other_device_hint": token.other_device_hint,
+		"symptoms": [r.symptom_name for r in (token.selected_issues or [])],
+		"additional_notes": token.additional_notes,
+		"issue_category": _resolve_backend_category(token),
+		"store": token.store,
+		"store_name": token.store_name,
+	}
+
+
+def _resolve_backend_category(token) -> str:
+	"""First mapped Issue Category across the token's selected symptoms."""
+	for row in token.selected_issues or []:
+		category = None
+		if row.symptom_ref:
+			category = frappe.db.get_value("GoFix Symptom", row.symptom_ref, "backend_category")
+		if not category and row.device_type and row.symptom_name:
+			category = frappe.db.get_value(
+				"GoFix Symptom", f"{row.device_type}::{row.symptom_name}", "backend_category"
+			)
+		if category:
+			return category
+	return ""
+
+
+def _link_gofix_token(sr, token_name: str) -> None:
+	"""Bind a freshly created Service Request back to its queue token.
+
+	Walks the token through its allowed transitions to "Job Card Created" so
+	the FDE queue and the token-to-job-card conversion reports stay accurate.
+	Raises inside the intake transaction — if linking fails, the Service
+	Request rolls back with it rather than leaving an orphan job card.
+	"""
+	from gofix.gofix_services.doctype.gofix_token.gofix_token import (
+		STATUS_ATTENDING,
+		STATUS_CALLED,
+		STATUS_JOB_CARD,
+		STATUS_WAITING,
+		TERMINAL_STATUSES,
+	)
+
+	if not frappe.db.exists("GoFix Token", token_name):
+		frappe.throw(_("GoFix Token {0} not found.").format(token_name))
+	token = frappe.get_doc("GoFix Token", token_name)
+	label = token.token_number or token_name
+	if token.service_request and token.service_request != sr.name:
+		frappe.throw(
+			_("Token {0} is already linked to Service Request {1}.").format(label, token.service_request)
+		)
+	if token.status in TERMINAL_STATUSES:
+		frappe.throw(_("Token {0} is already closed ({1}).").format(label, token.status))
+	if token.company and token.company != sr.company:
+		frappe.throw(
+			_("Token {0} belongs to {1} and cannot be linked to a {2} job card.").format(
+				label, token.company, sr.company
+			)
+		)
+	if token.status in {STATUS_WAITING, STATUS_CALLED}:
+		token.status = STATUS_ATTENDING
+		token.save(ignore_permissions=True)
+	token.service_request = sr.name
+	if token.status == STATUS_ATTENDING:
+		token.status = STATUS_JOB_CARD
+	token.save(ignore_permissions=True)
+
+
+@frappe.whitelist()
 def submit_intake(data) -> dict:
 	"""Create a Service Request from quick intake data.
 
@@ -238,6 +336,11 @@ def submit_intake(data) -> dict:
 
 	sr.insert()
 	sr.submit()
+
+	# Queue-token handoff: bind the token so the FDE queue flips to
+	# "Job Card Created" and walk-in conversion reporting stays intact.
+	if data.get("gofix_token"):
+		_link_gofix_token(sr, data["gofix_token"])
 
 	return {
 		"name": sr.name,

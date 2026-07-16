@@ -26,10 +26,11 @@ _SLA_RULES = [
         "escalation_1_role": "Service Manager",
         "escalation_2_role": "System Manager",
     },
-    # category-specific rules
+    # category-specific rules — categories match the canonical taxonomy
+    # seeded by gofix.patches.seed_gofix_token_masters
     {
-        "rule_name": "Screen Damage - High",
-        "issue_category": "Screen Damage",
+        "rule_name": "Screen & Display - High",
+        "issue_category": "Screen & Display",
         "priority": "High",
         "target_hours": 4.0,
         "warning_pct": 75,
@@ -38,8 +39,8 @@ _SLA_RULES = [
         "escalation_2_role": "System Manager",
     },
     {
-        "rule_name": "Screen Damage - Medium",
-        "issue_category": "Screen Damage",
+        "rule_name": "Screen & Display - Medium",
+        "issue_category": "Screen & Display",
         "priority": "Medium",
         "target_hours": 6.0,
         "warning_pct": 75,
@@ -47,18 +48,17 @@ _SLA_RULES = [
         "escalation_1_role": "Service Manager",
     },
     {
-        "rule_name": "Screen Issues - High",
-        "issue_category": "Screen Issues",
-        "priority": "High",
+        "rule_name": "Battery - Any",
+        "issue_category": "Battery",
         "target_hours": 4.0,
-        "warning_pct": 75,
+        "warning_pct": 80,
         "is_active": 1,
         "escalation_1_role": "Service Manager",
     },
     {
-        "rule_name": "Battery Issues - Any",
-        "issue_category": "Battery Issues",
-        "target_hours": 4.0,
+        "rule_name": "Charging & Power - Any",
+        "issue_category": "Charging & Power",
+        "target_hours": 6.0,
         "warning_pct": 80,
         "is_active": 1,
         "escalation_1_role": "Service Manager",
@@ -82,13 +82,21 @@ _SLA_RULES = [
         "escalation_1_role": "Service Manager",
     },
     {
-        "rule_name": "Accidental Damage - Any",
-        "issue_category": "Accidental Damage",
-        "target_hours": 8.0,
+        "rule_name": "Board Diagnosis - Any",
+        "issue_category": "Board Diagnosis",
+        "target_hours": 48.0,
         "warning_pct": 75,
         "is_active": 1,
         "escalation_1_role": "Service Manager",
         "escalation_2_role": "System Manager",
+    },
+    {
+        "rule_name": "Data Recovery - Any",
+        "issue_category": "Data Recovery",
+        "target_hours": 72.0,
+        "warning_pct": 80,
+        "is_active": 1,
+        "escalation_1_role": "Service Manager",
     },
 ]
 

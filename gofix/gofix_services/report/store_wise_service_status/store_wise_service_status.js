@@ -1,6 +1,14 @@
 // Copyright (c) 2026, GoStack and contributors
 // For license information, please see license.txt
 
+const store_wise_status_active_company = () => {
+	const lock = window.ch_erp15 && window.ch_erp15.company_lock;
+	if (lock && typeof lock.active_company === "function") {
+		return lock.active_company() || "";
+	}
+	return frappe.defaults.get_user_default("Company") || frappe.defaults.get_user_default("company") || "";
+};
+
 frappe.query_reports["Store Wise Service Status"] = {
 	filters: [
 		{
@@ -8,7 +16,7 @@ frappe.query_reports["Store Wise Service Status"] = {
 			label: __("Company"),
 			fieldtype: "Link",
 			options: "Company",
-			default: frappe.defaults.get_user_default("Company"),
+			default: store_wise_status_active_company(),
 		},
 		{
 			fieldname: "from_date",

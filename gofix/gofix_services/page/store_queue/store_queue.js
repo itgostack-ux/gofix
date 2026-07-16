@@ -12,6 +12,8 @@ class StoreQueue {
 	constructor(page) {
 		this.page = page;
 		this.wrapper = page.main.find("#store-queue-app");
+		this.company = "";
+		this.stores = [];
 		this.warehouse = "";
 		this.stage_filter = "all";
 		this.search = "";
@@ -19,10 +21,22 @@ class StoreQueue {
 		this.init();
 	}
 
+	active_company() {
+		const lock = window.ch_erp15 && window.ch_erp15.company_lock;
+		if (lock && typeof lock.active_company === "function") {
+			return lock.active_company() || "";
+		}
+		return frappe.defaults.get_user_default("Company") || frappe.defaults.get_user_default("company") || "";
+	}
+
 	async init() {
+		this.company = this.active_company();
 		const ctx = await frappe.xcall(
-			"gofix.gofix_services.page.store_queue.store_queue.get_store_context"
+			"gofix.gofix_services.page.store_queue.store_queue.get_store_context",
+			{ company: this.company }
 		);
+		this.company = ctx.company || this.company || "";
+		this.stores = ctx.stores || [];
 		this.warehouses = ctx.warehouses || [];
 		this.warehouse = ctx.default_warehouse || "";
 		this.render_toolbar();
@@ -32,12 +46,20 @@ class StoreQueue {
 
 	render_toolbar() {
 		this.page.clear_fields();
+		const store_options = [{ label: __("All Stores"), value: "" }].concat(
+			(this.stores || []).map((s) => ({
+				label: s.store_name && s.store_name !== s.store_code
+					? `${s.store_code} — ${s.store_name}`
+					: (s.store_code || s.warehouse),
+				value: s.warehouse,
+			}))
+		);
 
 		this.wh_field = this.page.add_field({
 			label: __("Store"),
 			fieldtype: "Select",
 			fieldname: "warehouse",
-			options: ["", ...this.warehouses],
+			options: store_options,
 			default: this.warehouse,
 			change: () => {
 				this.warehouse = this.wh_field.get_value();
@@ -74,6 +96,7 @@ class StoreQueue {
 			"gofix.gofix_services.page.store_queue.store_queue.get_queue",
 			{
 				warehouse: this.warehouse,
+				company: this.active_company() || this.company,
 				search: this.search,
 				stage_filter: this.stage_filter,
 			}
@@ -149,8 +172,9 @@ class StoreQueue {
 			e.stopPropagation();
 			const stage = $(e.currentTarget).data("stage");
 			const f = Object.assign({}, STAGE_LIST_FILTERS[stage] || {});
-			const co = frappe.defaults.get_user_default("Company");
+			const co = this.active_company() || this.company;
 			if (co) f.company = co;
+			if (this.warehouse) f.source_warehouse = this.warehouse;
 			frappe.set_route("List", "Service Request", f);
 		});
 	}

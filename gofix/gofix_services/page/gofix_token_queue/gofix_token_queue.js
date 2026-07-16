@@ -57,9 +57,20 @@ class GoFixTokenQueue {
 	}
 
 	_default_store() {
+		const url_store = new URLSearchParams(window.location.search || "").get("store");
+		const url_match = url_store && this.stores.find((s) => (
+			s.warehouse === url_store || s.store_code === url_store || s.store_name === url_store
+		));
+		if (url_match) return url_match;
+
 		const default_wh = frappe.defaults.get_user_default("warehouse");
 		const match = default_wh && this.stores.find((s) => s.warehouse === default_wh);
-		return match || this.stores[0];
+		return match || {
+			warehouse: "__all__",
+			company: "",
+			store_code: "ALL",
+			store_name: __("All GoFix Stores"),
+		};
 	}
 
 	// ------- Toolbar --------------------------------------------------------
@@ -71,20 +82,29 @@ class GoFixTokenQueue {
 			label: __("Store"),
 			fieldtype: "Select",
 			fieldname: "store",
-			options: this.stores.map((s) => ({
+			options: [{
+				value: "__all__",
+				label: __("All GoFix Stores"),
+			}].concat(this.stores.map((s) => ({
 				value: s.warehouse,
 				label: `${s.store_name || s.warehouse} — ${s.store_code || ""}`,
-			})),
+			}))),
 			default: this.store.warehouse,
 			change: () => {
 				const wh = this.store_field.get_value();
-				this.store = this.stores.find((s) => s.warehouse === wh) || this.store;
+				this.store = wh === "__all__"
+					? { warehouse: "__all__", company: "", store_code: "ALL", store_name: __("All GoFix Stores") }
+					: (this.stores.find((s) => s.warehouse === wh) || this.store);
 				this.load();
 			},
 		});
 
 		this.page.set_secondary_action(__("Refresh"), () => this.load(), "refresh");
 		this.page.set_primary_action(__("Open Tablet Page"), () => {
+			if (!this.store || this.store.warehouse === "__all__") {
+				frappe.msgprint(__("Select a specific store before opening the tablet page."));
+				return;
+			}
 			window.open(`/gofix-token?store=${encodeURIComponent(this.store.store_code || this.store.warehouse)}`, "_blank");
 		}, "external-link");
 	}
@@ -96,7 +116,7 @@ class GoFixTokenQueue {
 		try {
 			const statuses = _TABS.filter((t) => t.key !== "__all__").map((t) => t.key);
 			const rows = await frappe.xcall(`${_API}.list_active_tokens`, {
-				store: this.store.warehouse,
+				store: this.store && this.store.warehouse !== "__all__" ? this.store.warehouse : null,
 				statuses: JSON.stringify(statuses),
 			});
 			this.rows = rows || [];
@@ -178,11 +198,13 @@ class GoFixTokenQueue {
 		).join("");
 		const visit = r.visit_reason || "";
 		const actions = this._actions_html(r);
+		const store_label = [r.store_name, r.store_code].filter(Boolean).join(" — ") || r.store || "";
 		return `
 			<tr data-name="${frappe.utils.escape_html(r.name)}" data-status="${frappe.utils.escape_html(r.status)}">
 				<td>
 					<div class="gtq-token-num">${frappe.utils.escape_html(r.token_number || "")}</div>
 					<div class="gtq-muted">${frappe.utils.escape_html(r.name)}</div>
+					${this.store && this.store.warehouse === "__all__" && store_label ? `<div class="gtq-muted">${frappe.utils.escape_html(store_label)}</div>` : ""}
 				</td>
 				<td>
 					<span class="gtq-wait ${wait_cls}">${wait}</span>

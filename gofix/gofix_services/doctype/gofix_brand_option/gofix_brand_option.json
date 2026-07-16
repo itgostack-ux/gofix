@@ -7,10 +7,11 @@
  "doctype": "DocType",
  "editable_grid": 1,
  "engine": "InnoDB",
- "description": "Brand entries offered on the tablet per device type. Brand is a free string so ops can add brands (Boat, Fastrack, Fire-Boltt, etc.) without touching the ERPNext Brand master.",
+ "description": "Brand entries offered on the tablet per device type. brand_name is the customer-facing label; brand links each option to the common item-master Brand so tokens, Service Requests and Items report under one canonical spelling.",
  "field_order": [
   "device_type",
   "brand_name",
+  "brand",
   "display_order",
   "disabled"
  ],
@@ -28,9 +29,18 @@
    "fieldname": "brand_name",
    "fieldtype": "Data",
    "in_list_view": 1,
-   "label": "Brand Name",
+   "label": "Display Label",
    "reqd": 1,
-   "description": "Free-text brand name (kept as Data so ops can add any brand without editing the Brand master)."
+   "description": "Customer-facing label shown on the tablet (may differ from the canonical Brand, e.g. \"Google Pixel\" → Brand \"Google\")."
+  },
+  {
+   "fieldname": "brand",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Brand (Item Master)",
+   "options": "Brand",
+   "description": "Canonical Brand from the common item master. Mandatory except for the \"Other\" pseudo-option — auto-resolved by exact label match when left blank."
   },
   {
    "default": "0",

@@ -60,6 +60,7 @@ class GoFixOpsHub {
 		this.page = page;
 		this.parent = $(page.body);
 		this.ctx = {};
+		this.active_company = "";
 		this.queue = [];
 		this.selectedSR = null;
 		this.detail = null;
@@ -68,11 +69,15 @@ class GoFixOpsHub {
 	}
 
 	async _init() {
+		this.active_company = this._active_company();
 		try {
-			this.ctx = await frappe.xcall(`${API}.get_ops_context`);
+			this.ctx = await frappe.xcall(`${API}.get_ops_context`, {
+				company: this.active_company,
+			});
+			this.active_company = this.ctx.company || this.active_company || "";
 		} catch (e) {
 			console.error("GoFix Ops Hub: get_ops_context failed", e);
-			this.ctx = { warehouses: [], is_manager: false };
+			this.ctx = { stores: [], warehouses: [], is_manager: false, company: this.active_company };
 		}
 		try {
 			this._build_toolbar();
@@ -84,14 +89,36 @@ class GoFixOpsHub {
 		}
 	}
 
+	_active_company() {
+		const lock = window.ch_erp15 && window.ch_erp15.company_lock;
+		if (lock && typeof lock.active_company === "function") {
+			return lock.active_company() || "";
+		}
+		if (frappe.defaults) {
+			return frappe.defaults.get_user_default("Company") || frappe.defaults.get_user_default("company") || "";
+		}
+		return "";
+	}
+
 	/* ── Toolbar ────────────────────────────────────────────────────────── */
 	_build_toolbar() {
-		// Warehouse filter
+		const esc = frappe.utils.escape_html;
 		const wh_options = ["<option value=''>" + __("All Stores") + "</option>"];
-		(this.ctx.warehouses || []).forEach(w => {
-			const short = w.split(" - ")[0];
-			wh_options.push(`<option value="${frappe.utils.escape_html(w)}">${frappe.utils.escape_html(short)}</option>`);
-		});
+		const stores = this.ctx.stores || [];
+		if (stores.length) {
+			stores.forEach(store => {
+				const value = store.warehouse || store.value || "";
+				if (!value) return;
+				const label = store.store_code || store.store_name || value.split(" - ")[0];
+				const title = store.store_name && store.store_name !== label ? store.store_name : value;
+				wh_options.push(`<option value="${esc(value)}" title="${esc(title)}">${esc(label)}</option>`);
+			});
+		} else {
+			(this.ctx.warehouses || []).forEach(w => {
+				const short = w.split(" - ")[0];
+				wh_options.push(`<option value="${esc(w)}">${esc(short)}</option>`);
+			});
+		}
 
 		this.page.set_secondary_action(__("Refresh"), () => this._refresh_all(), "refresh");
 
@@ -164,10 +191,11 @@ class GoFixOpsHub {
 		const search = this.parent.find(".goh-search-input").val() || "";
 		const date_from = toolbar.find(".goh-tb-date-from").val() || "";
 		const date_to = toolbar.find(".goh-tb-date-to").val() || "";
+		const company = this._active_company() || this.active_company || "";
 
 		try {
 			let data = await frappe.xcall(`${API}.get_ticket_queue`, {
-				warehouse, search, stage_filter: stage, date_from, date_to,
+				warehouse, search, stage_filter: stage, date_from, date_to, company,
 			});
 
 			// Client-side priority filter
@@ -234,8 +262,10 @@ class GoFixOpsHub {
 			e.stopPropagation();
 			const stage = $(e.currentTarget).data("stage");
 			const f = Object.assign({}, STAGE_LIST_FILTERS[stage] || {});
-			const co = frappe.defaults.get_user_default("Company");
+			const co = this._active_company() || this.active_company || "";
 			if (co) f.company = co;
+			const wh = this.page.wrapper.find(".goh-tb-warehouse").val() || "";
+			if (wh) f.source_warehouse = wh;
 			frappe.set_route("List", "Service Request", f);
 		});
 

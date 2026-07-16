@@ -10,6 +10,7 @@
  "description": "Customer-facing device categories on the GoFix self-entry tablet. Drives which brand and symptom lists appear per device.",
  "field_order": [
   "device_type",
+  "ch_category",
   "icon",
   "display_order",
   "disabled"
@@ -23,6 +24,14 @@
    "reqd": 1,
    "unique": 1,
    "description": "Short name shown on the tablet (e.g. Mobile, Tablet, Laptop, Smartwatch, Other)."
+  },
+  {
+   "fieldname": "ch_category",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "CH Category (Item Master)",
+   "options": "CH Category",
+   "description": "Common item-master category this device type maps to (e.g. Mobile → Smart Phones) — used to join token demand with catalogue analytics."
   },
   {
    "fieldname": "icon",

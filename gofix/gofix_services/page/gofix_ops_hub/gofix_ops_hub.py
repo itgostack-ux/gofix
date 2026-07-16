@@ -16,6 +16,11 @@ import frappe
 from frappe import _
 from frappe.utils import add_days, cint, flt, now_datetime, nowdate
 
+from gofix.gofix_services.store_context import (
+	active_company as _active_company,
+	get_store_options as _get_store_options,
+)
+
 no_cache = 1
 
 STAGE_LABELS = {
@@ -80,22 +85,12 @@ def _assert_sr_permission(sr_name, ptype="read"):
 # ── Context ───────────────────────────────────────────────────────────────────
 
 @frappe.whitelist()
-def get_ops_context() -> dict:
+def get_ops_context(company=None) -> dict:
 	"""Return user context for toolbar initialization."""
 	user = frappe.session.user
 	roles = frappe.get_roles(user)
-	company = frappe.defaults.get_user_default("Company") or ""
-
-	wh_filters = {"is_group": 0, "disabled": 0}
-	if company:
-		wh_filters["company"] = company
-
-	warehouses = frappe.get_all(
-		"Warehouse",
-		filters=wh_filters,
-		pluck="name",
-		order_by="name",
-	)
+	company = _active_company(company)
+	stores = _get_store_options(company)
 
 	is_manager = any(r in roles for r in ["Service Manager", "System Manager", "Sales Manager"])
 
@@ -104,7 +99,8 @@ def get_ops_context() -> dict:
 		"user_fullname": frappe.utils.get_fullname(user),
 		"roles": roles,
 		"company": company,
-		"warehouses": warehouses,
+		"stores": stores,
+		"warehouses": [store["warehouse"] for store in stores],
 		"is_manager": is_manager,
 	}
 
@@ -112,9 +108,10 @@ def get_ops_context() -> dict:
 # ── Ticket Queue ──────────────────────────────────────────────────────────────
 
 @frappe.whitelist()
-def get_ticket_queue(warehouse=None, search=None, date_from=None, date_to=None, stage_filter="active") -> list:
+def get_ticket_queue(warehouse=None, search=None, date_from=None, date_to=None, stage_filter="active", company=None) -> list:
 	"""Return annotated SR list for the sidebar ticket queue."""
 	frappe.has_permission("Service Request", "read", throw=True)
+	company = _active_company(company)
 
 	if not date_from:
 		date_from = add_days(nowdate(), -60)
@@ -124,14 +121,20 @@ def get_ticket_queue(warehouse=None, search=None, date_from=None, date_to=None, 
 	# When a search term is supplied, skip date-range / stage / service_order
 	# restrictions so the user can find any SR by name, customer, or serial.
 	if not search:
+		# Submitted SRs only — POS-raised intakes land as docstatus 1 with
+		# decision "Draft" and no Service Order yet; they must appear in the
+		# queue (ops_stage "draft") so the hub can accept them. Docstatus-0
+		# form drafts stay out.
 		filters = [
 			["service_date", ">=", date_from],
 			["service_date", "<=", date_to],
-			["service_order", "is", "set"],
+			["docstatus", "=", 1],
 		]
+		if company:
+			filters.append(["company", "=", company])
 
 		if stage_filter == "active":
-			filters.append(["decision", "in", ["Accepted", "In Service", "Completed", "Invoiced"]])
+			filters.append(["decision", "in", ["Draft", "Accepted", "In Service", "Completed", "Invoiced"]])
 		elif stage_filter != "all":
 			filters.append(["decision", "not in", ["Cancelled", "Rejected", "Expired"]])
 
@@ -154,7 +157,12 @@ def get_ticket_queue(warehouse=None, search=None, date_from=None, date_to=None, 
 
 	if search:
 		# Use SQL OR to match name, customer_name, or serial_no
-		wh_clause = "AND source_warehouse = %(warehouse)s" if warehouse else ""
+		conditions = []
+		if company:
+			conditions.append("company = %(company)s")
+		if warehouse:
+			conditions.append("source_warehouse = %(warehouse)s")
+		extra_clause = " AND " + " AND ".join(conditions) if conditions else ""
 		sr_list = frappe.db.sql(
 			f"""
 			SELECT {", ".join(f"`tab{'Service Request'}`.`{f}`" for f in all_fields)}
@@ -164,11 +172,11 @@ def get_ticket_queue(warehouse=None, search=None, date_from=None, date_to=None, 
 				OR `customer_name` LIKE %(s)s
 				OR `serial_no` LIKE %(s)s
 				OR `contact_number` LIKE %(s)s
-			) {wh_clause}
+			) {extra_clause}
 			ORDER BY service_date ASC, priority DESC
 			LIMIT 100
 			""",
-			{"s": f"%{search}%", "warehouse": warehouse or ""},
+			{"s": f"%{search}%", "company": company or "", "warehouse": warehouse or ""},
 			as_dict=True,
 		)
 	else:
@@ -1022,6 +1030,95 @@ def get_technicians_for_grade(minimum_grade=None, issue_category=None) -> dict:
 	return result
 
 
+def _assert_technician_can_take_solutions(technician, repair_solutions) -> None:
+	"""Block assignment when a technician is below a solution's minimum grade."""
+	repair_solutions = list({s for s in (repair_solutions or []) if s})
+	if not repair_solutions:
+		return
+
+	solution_requirements = frappe.db.sql(
+		"""
+		SELECT
+			rs.name,
+			rs.solution_name,
+			rs.minimum_grade,
+			tg.grade_name,
+			tg.grade_level
+		FROM `tabRepair Solution` rs
+		LEFT JOIN `tabTechnician Grade` tg ON tg.name = rs.minimum_grade
+		WHERE rs.name IN %(solutions)s
+		""",
+		{"solutions": tuple(repair_solutions)},
+		as_dict=True,
+	)
+	required = [row for row in solution_requirements if row.minimum_grade]
+	if not required:
+		return
+
+	emp = frappe.db.get_value(
+		"Employee",
+		technician,
+		["name", "employee_name", "technician_grade"],
+		as_dict=True,
+	)
+	if not emp:
+		frappe.throw(_("Technician {0} not found.").format(technician), title=_("Technician Grade Required"))
+	if not emp.technician_grade:
+		frappe.throw(
+			_("Technician {0} has no Technician Grade. Set it on the Employee record before assigning graded solutions.").format(
+				emp.employee_name or technician
+			),
+			title=_("Technician Grade Required"),
+		)
+
+	tech_grade = frappe.db.get_value(
+		"Technician Grade",
+		emp.technician_grade,
+		["grade_name", "grade_level"],
+		as_dict=True,
+	)
+	tech_level = cint(tech_grade.grade_level if tech_grade else 0)
+	blocked = [row for row in required if cint(row.grade_level or 0) > tech_level]
+	if not blocked:
+		return
+
+	needed = max(cint(row.grade_level or 0) for row in blocked)
+	solution_names = ", ".join(row.solution_name or row.name for row in blocked)
+	frappe.throw(
+		_(
+			"Technician {0} is {1}, but {2} requires L{3} or above."
+		).format(
+			emp.employee_name or technician,
+			tech_grade.grade_name if tech_grade else emp.technician_grade,
+			solution_names,
+			needed,
+		),
+		title=_("Technician Grade Mismatch"),
+	)
+
+
+def _solution_rows_for_assignment(sr, row_names=None) -> list:
+	"""Return active SR solution rows, optionally filtered to selected child rows."""
+	rows = [
+		row for row in (sr.get("solution_lines") or [])
+		if row.status not in ("Cancelled", "Skipped")
+	]
+	if row_names is None:
+		return rows
+
+	requested = set(row_names)
+	selected = [row for row in rows if row.name in requested]
+	missing = requested - {row.name for row in selected}
+	if missing:
+		frappe.throw(
+			_("Selected solution rows are not active on {0}: {1}").format(
+				sr.name, ", ".join(sorted(missing))
+			),
+			title=_("Invalid Solution Selection"),
+		)
+	return selected
+
+
 @frappe.whitelist()
 def assign_technician(sr_name, technician, job_type="Repair", estimated_hours=None) -> dict:
 	"""Create a submitted Job Assignment for the SR."""
@@ -1032,6 +1129,11 @@ def assign_technician(sr_name, technician, job_type="Repair", estimated_hours=No
 		frappe.throw(
 			_("No Service Order found for {0}. Please accept the Service Request first.").format(sr_name)
 		)
+
+	_assert_technician_can_take_solutions(
+		technician,
+		[row.repair_solution for row in _solution_rows_for_assignment(sr)],
+	)
 
 	ja = frappe.new_doc("Job Assignment")
 	ja.service_order = sr.service_order
@@ -1069,12 +1171,18 @@ def assign_solutions_to_technician(sr_name, solution_rows_json, technician, esti
 	if not sr.service_order:
 		frappe.throw(_("No Service Order found for {0}.").format(sr_name), title=_("Validation Error"))
 
+	selected_rows = _solution_rows_for_assignment(sr, solution_rows)
+	_assert_technician_can_take_solutions(
+		technician,
+		[row.repair_solution for row in selected_rows],
+	)
+
 	# Resolve technician name
 	tech_name = frappe.db.get_value("Employee", technician, "employee_name") or technician
 
 	# Stamp technician on each selected solution line
-	for row_name in solution_rows:
-		frappe.db.set_value("SR Solution Line", row_name, {
+	for row in selected_rows:
+		frappe.db.set_value("SR Solution Line", row.name, {
 			"technician": technician,
 			"technician_name": tech_name,
 		}, update_modified=True)
@@ -1227,7 +1335,7 @@ def add_spare_to_ticket(sr_name, spare_item, qty, rate=0, repair_solution=None) 
 		) or flt(frappe.db.get_value("Item", spare_item, "standard_rate"))
 
 	sr = frappe.get_doc("Service Request", sr_name)
-	warehouse = sr.source_warehouse
+	warehouse = _effective_repair_warehouse(sr)
 
 	# ── Compatibility guard ─────────────────────────────────────────────
 	# Block spares that are not compatible with the device being repaired.
@@ -1302,6 +1410,249 @@ def add_spare_to_ticket(sr_name, spare_item, qty, rate=0, repair_solution=None) 
 
 
 @frappe.whitelist()
+def get_repair_history(sr_name) -> list:
+	"""Full chronological history of a repair — the "charge sheet" trail.
+
+	Assembles every event across the repair lifecycle: intake, analysis
+	stages, estimate versions, acceptance, device transfers (with logistics
+	manifests), spare requests and their procurement chain (MR → PO → PR),
+	technician assignments and hours, QC, invoicing. Used by the Repair
+	Charge Sheet print format and available to any UI.
+	"""
+	_assert_sr_permission(sr_name, "read")
+	sr = frappe.get_doc("Service Request", sr_name)
+	events = []
+
+	def add(at, title, detail="", ref_dt=None, ref=None):
+		if not at:
+			return
+		at = frappe.utils.get_datetime(at)
+		events.append(
+			{
+				"at": at,
+				"title": title,
+				"detail": detail,
+				"ref_doctype": ref_dt,
+				"ref_name": ref,
+			}
+		)
+
+	# ── Intake ───────────────────────────────────────────────────────────
+	add(
+		sr.creation,
+		"Device received at counter",
+		f"{sr.customer_name or sr.customer} — {sr.device_item_name or sr.device_item or ''}"
+		+ (f", serial {sr.serial_no}" if sr.serial_no else "")
+		+ (f" · via {sr.walkin_source}" if sr.get("walkin_source") else ""),
+		"Service Request",
+		sr.name,
+	)
+
+	# ── Ops-hub stage transitions ────────────────────────────────────────
+	for row in sr.get("status_log", []):
+		add(
+			row.changed_at,
+			f"Stage: {row.from_status or '—'} → {row.to_status}",
+			f"by {row.changed_by or ''}"
+			+ (
+				f" (after {frappe.utils.flt(row.time_in_previous_status_hours, 1)}h)"
+				if row.get("time_in_previous_status_hours")
+				else ""
+			),
+		)
+
+	# ── Estimates ────────────────────────────────────────────────────────
+	for ev in sr.get("estimate_versions", []):
+		add(
+			ev.get("creation"),
+			f"Estimate v{ev.version_number}: {frappe.utils.fmt_money(ev.estimate_amount, currency='INR')}",
+			f"labour {frappe.utils.fmt_money(ev.labor_cost or 0, currency='INR')}, "
+			f"spares {frappe.utils.fmt_money(ev.spare_cost or 0, currency='INR')} — {ev.status}",
+		)
+
+	if sr.get("accepted_datetime"):
+		add(sr.accepted_datetime, "Customer accepted — device left with us", f"by {sr.get('accepted_by') or ''}")
+
+	# ── Device transfers + logistics manifests ───────────────────────────
+	if sr.get("transfer_date"):
+		add(
+			sr.transfer_date,
+			f"Device transfer initiated → {sr.transferred_to_store}",
+			sr.get("transfer_reason") or "",
+		)
+	if sr.get("transfer_received_date"):
+		add(sr.transfer_received_date, f"Device received at service center ({sr.transferred_to_store})")
+	if sr.get("transfer_return_date"):
+		add(sr.transfer_return_date, f"Device returned to store ({sr.source_warehouse})")
+
+	transfer_ses = frappe.get_all(
+		"Stock Entry",
+		filters={
+			"stock_entry_type": "Material Transfer",
+			"remarks": ["like", f"%{sr.name}%"],
+			"docstatus": 1,
+		},
+		fields=["name", "posting_date", "custom_transfer_manifest"],
+	)
+	for se in transfer_ses:
+		if se.custom_transfer_manifest:
+			tm = frappe.db.get_value(
+				"CH Transfer Manifest",
+				se.custom_transfer_manifest,
+				["status", "driver_name", "driver", "vehicle_number", "trip", "modified"],
+				as_dict=True,
+			)
+			if tm:
+				add(
+					se.posting_date,
+					f"Logistics manifest {se.custom_transfer_manifest} ({tm.status})",
+					f"driver {tm.driver_name or tm.driver or '—'}, vehicle {tm.vehicle_number or '—'}"
+					+ (f", trip {tm.trip}" if tm.trip else ""),
+					"CH Transfer Manifest",
+					se.custom_transfer_manifest,
+				)
+
+	# ── Spares + procurement chain ───────────────────────────────────────
+	mr_names = {sl.material_request for sl in sr.get("spare_lines", []) if sl.get("material_request")}
+	if frappe.db.has_column("Material Request", "service_request"):
+		mr_names.update(
+			frappe.get_all(
+				"Material Request",
+				filters={"service_request": sr.name, "docstatus": ["<", 2]},
+				pluck="name",
+			)
+		)
+	for sl in sr.get("spare_lines", []):
+		add(
+			sl.get("creation"),
+			f"Spare requested: {sl.item_name or sl.spare_item} × {frappe.utils.flt(sl.qty)}",
+			f"rate {frappe.utils.fmt_money(sl.rate or 0, currency='INR')} — {sl.status}",
+		)
+	for mr_name in sorted(mr_names):
+		mr = frappe.db.get_value(
+			"Material Request", mr_name, ["transaction_date", "status"], as_dict=True
+		)
+		if mr:
+			add(
+				mr.transaction_date,
+				f"Material Request {mr_name} ({mr.status})",
+				"",
+				"Material Request",
+				mr_name,
+			)
+			pos = frappe.get_all(
+				"Purchase Order Item",
+				filters={"material_request": mr_name, "docstatus": 1},
+				fields=["parent"],
+				distinct=True,
+				pluck="parent",
+			)
+			for po in pos:
+				pod = frappe.db.get_value(
+					"Purchase Order", po, ["transaction_date", "supplier", "grand_total"], as_dict=True
+				)
+				add(
+					pod.transaction_date,
+					f"Purchase Order {po}",
+					f"supplier {pod.supplier}, {frappe.utils.fmt_money(pod.grand_total, currency='INR')}",
+					"Purchase Order",
+					po,
+				)
+				prs = frappe.get_all(
+					"Purchase Receipt Item",
+					filters={"purchase_order": po, "docstatus": 1},
+					fields=["parent", "warehouse"],
+					distinct=True,
+				)
+				for pr in prs:
+					prd = frappe.db.get_value("Purchase Receipt", pr.parent, "posting_date")
+					add(
+						prd,
+						f"Spare received: Purchase Receipt {pr.parent}",
+						f"at {pr.warehouse}",
+						"Purchase Receipt",
+						pr.parent,
+					)
+
+	# ── Technician work ──────────────────────────────────────────────────
+	for ja in frappe.get_all(
+		"Job Assignment",
+		filters={"service_request": sr.name},
+		fields=[
+			"name", "assignment_datetime", "service_engineer", "job_type",
+			"assignment_status", "start_datetime", "end_datetime",
+			"actual_hours", "estimated_hours", "repair_outcome",
+		],
+	):
+		engineer = (
+			frappe.db.get_value("Employee", ja.service_engineer, "employee_name")
+			if ja.service_engineer
+			else None
+		) or ja.service_engineer or "—"
+		add(
+			ja.assignment_datetime,
+			f"Job assigned to {engineer} ({ja.job_type})",
+			f"estimated {frappe.utils.flt(ja.estimated_hours)}h" if ja.estimated_hours else "",
+			"Job Assignment",
+			ja.name,
+		)
+		if ja.start_datetime:
+			add(ja.start_datetime, f"Repair work started — {engineer}", "", "Job Assignment", ja.name)
+		if ja.end_datetime:
+			add(
+				ja.end_datetime,
+				f"Repair work finished — {engineer}",
+				f"{frappe.utils.flt(ja.actual_hours, 1)}h logged"
+				+ (f", outcome: {ja.repair_outcome}" if ja.repair_outcome else ""),
+				"Job Assignment",
+				ja.name,
+			)
+
+	# ── QC + completion + billing ────────────────────────────────────────
+	if sr.service_order:
+		so = frappe.db.get_value(
+			"Sales Order", sr.service_order, ["qc_status", "workflow_state", "modified"], as_dict=True
+		)
+		if so and so.qc_status:
+			add(so.modified, f"QC {so.qc_status}", f"Service Order {sr.service_order} — {so.workflow_state}",
+				"Sales Order", sr.service_order)
+	if sr.get("actual_completion_date"):
+		add(sr.actual_completion_date, "Repair completed")
+	if sr.get("service_invoice"):
+		inv = frappe.db.get_value(
+			"Sales Invoice",
+			sr.service_invoice,
+			["posting_date", "grand_total", "status", "creation"],
+			as_dict=True,
+		)
+		if inv:
+			add(
+				inv.creation,
+				f"Invoiced {frappe.utils.fmt_money(inv.grand_total, currency='INR')} ({inv.status})",
+				f"Sales Invoice {sr.service_invoice}",
+				"Sales Invoice",
+				sr.service_invoice,
+			)
+
+	events.sort(key=lambda e: e["at"])
+	return events
+
+
+def _effective_repair_warehouse(sr):
+	"""Warehouse where the repair is physically happening.
+
+	A device transferred to a service hub consumes spares AT the hub —
+	availability checks, Material Issues and procurement follow the device
+	instead of always hitting the origin store.
+	"""
+	if sr.get("transfer_status") in ("In Transit", "Received at Service Center") and sr.get(
+		"transferred_to_store"
+	):
+		return sr.transferred_to_store
+	return sr.get("current_location") or sr.source_warehouse
+
+
+@frappe.whitelist()
 def get_spare_availability(item_code, warehouse) -> dict:
 	"""Public API: return stock availability for a spare + warehouse."""
 	return _get_spare_availability(item_code, warehouse)
@@ -1316,15 +1667,24 @@ def _get_spare_availability(item_code, warehouse) -> dict:
 		frappe.db.get_value("Bin", {"item_code": item_code, "warehouse": warehouse}, "actual_qty")
 	)
 
-	# Count already committed (reserved or consumed) across all SRs at this warehouse
+	# Count already committed (reserved or consumed) across all SRs whose
+	# repair is effectively happening at this warehouse — transferred devices
+	# reserve hub stock, not their origin store's.
 	reserved_qty = flt(frappe.db.sql("""
 		SELECT COALESCE(SUM(sl.qty), 0)
 		FROM `tabSR Spare Line` sl
 		JOIN `tabService Request` sr ON sr.name = sl.parent
 		WHERE sl.spare_item = %(item)s
-		  AND sr.source_warehouse = %(wh)s
 		  AND sl.status IN ('Reserved', 'Consumed')
 		  AND sl.parenttype = 'Service Request'
+		  AND (
+			CASE
+				WHEN sr.transfer_status IN ('In Transit', 'Received at Service Center')
+					AND COALESCE(sr.transferred_to_store, '') != ''
+				THEN sr.transferred_to_store
+				ELSE COALESCE(NULLIF(sr.current_location, ''), sr.source_warehouse)
+			END
+		  ) = %(wh)s
 	""", {"item": item_code, "wh": warehouse})[0][0])
 
 	return {
@@ -1365,7 +1725,9 @@ def raise_material_request(sr_name) -> dict:
 	if not pending_lines:
 		frappe.throw(_("No spares awaiting procurement on this ticket."))
 
-	warehouse = sr.source_warehouse
+	# Procure to wherever the repair is physically happening (hub when the
+	# device has been transferred, else the source store).
+	warehouse = _effective_repair_warehouse(sr)
 	if not warehouse:
 		frappe.throw(_("Source warehouse not set on Service Request."))
 
@@ -1375,6 +1737,7 @@ def raise_material_request(sr_name) -> dict:
 	mr.service_request = sr_name
 	mr.transaction_date = nowdate()
 	mr.schedule_date = add_days(nowdate(), 3)
+	mr.set_warehouse = warehouse
 	mr.title = f"Spares for {sr_name} — {sr.customer_name or sr.customer}"
 
 	for sl in pending_lines:
@@ -1743,6 +2106,10 @@ def create_ops_hub_invoice(sr_name) -> dict:
 		"decision": "Invoiced",
 		"workflow_state": "Invoiced",
 	}, update_modified=True)
+
+	from gofix.gofix_services.api import auto_close_service_order_after_billing
+
+	auto_close_service_order_after_billing(service_request=sr_name)
 
 	return {"ok": True, "invoice": inv.name, "grand_total": inv.grand_total}
 

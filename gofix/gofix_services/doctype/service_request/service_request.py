@@ -878,7 +878,11 @@ class ServiceRequest(Document):
 		self._set_optional_field("service_invoice", invoice.name)
 		self.db_set("status", "Invoiced", update_modified=True)
 		self.db_set("decision", "Invoiced", update_modified=False)
-		
+
+		from gofix.gofix_services.api import auto_close_service_order_after_billing
+
+		auto_close_service_order_after_billing(service_order=self.service_order)
+
 		frappe.msgprint(_("Service Invoice {0} created successfully").format(invoice.name))
 
 	def get_service_invoice_items(self):

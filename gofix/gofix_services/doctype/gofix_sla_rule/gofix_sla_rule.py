@@ -89,6 +89,34 @@ def check_gofix_sla_breach():
 			_send_sla_warning(sr.name, sla, elapsed=elapsed)
 
 
+def _scoped_escalation_users(role, sr_name):
+	"""Escalation-role holders scoped to the SR's store/company.
+
+	Routes through ch_erp15's notification router (CH User Scope, fail-closed
+	on company) so an SLA breach at one store never pings every role holder
+	site-wide. Falls back to plain role holders only when the router is
+	unavailable.
+	"""
+	sr = frappe.db.get_value(
+		"Service Request", sr_name, ["source_warehouse", "company"], as_dict=True
+	) or frappe._dict()
+	try:
+		from ch_erp15.ch_erp15.notification_router import (
+			filter_users_by_company,
+			get_scoped_users,
+		)
+
+		store = None
+		if sr.source_warehouse:
+			store = frappe.db.get_value("CH Store", {"warehouse": sr.source_warehouse}, "name")
+		users = get_scoped_users([role], store)
+		return filter_users_by_company(users, sr.company)
+	except ImportError:
+		return frappe.get_all(
+			"Has Role", filters={"role": role, "parenttype": "User"}, pluck="parent"
+		)
+
+
 def _send_sla_alert(sr_name, sla, level, elapsed):
 	"""Send in-app + optional email escalation notification for SLA breach."""
 	key = f"sla_escalation_{level}_{sr_name}"
@@ -96,8 +124,7 @@ def _send_sla_alert(sr_name, sla, level, elapsed):
 		return  # already sent
 
 	role = sla.escalation_1_role if level == 1 else sla.escalation_2_role
-	users = frappe.get_all("Has Role", filters={"role": role, "parenttype": "User"},
-						   pluck="parent")
+	users = _scoped_escalation_users(role, sr_name)
 
 	message = _("SLA Breach (Level {0}): Service Request {1} — {2:.1f}h elapsed (target: {3}h)").format(
 		level, sr_name, elapsed, sla.target_hours)

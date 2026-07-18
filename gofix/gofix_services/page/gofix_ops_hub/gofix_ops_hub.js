@@ -1014,61 +1014,84 @@ class GoFixOpsHub {
 
 		const STATUS_CLS = { Planned: "badge-muted", "In Progress": "badge-blue", "On Hold": "badge-orange", Completed: "badge-green", Skipped: "badge-yellow", Cancelled: "badge-red" };
 
-		const solCards = activeSols.map(sol => {
+		// ERP-standard compact rows: active work first, done work collapsed,
+		// one emphasised action per row, everything else quiet icons.
+		const ROW_STATE = { "In Progress": "active", "On Hold": "hold", Planned: "queued", Completed: "done", Skipped: "done" };
+		const solRow = (sol) => {
 			const isReworkItem = sol.technician_remarks && sol.technician_remarks.includes("[Rework]");
-			const failReasons = qcFailMap[sol.repair_solution] || qcFailMap["__general__"] || [];
+			const failReasons = isReworkItem ? (qcFailMap[sol.repair_solution] || qcFailMap["__general__"] || []) : [];
+			const state = ROW_STATE[sol.status] || "queued";
+			const unassigned = !sol.technician && !["Completed", "Skipped", "Cancelled"].includes(sol.status);
+			const lastRemark = (sol.technician_remarks || "").trim().split("\n").filter(Boolean).pop() || "";
+
+			const primary =
+				sol.status === "In Progress" ? `<button class="btn btn-xs btn-success goh-sol-complete" data-row="${esc(sol.name)}"><i class="fa fa-check"></i> ${__("Done")}</button>` :
+				sol.status === "On Hold" && !unassigned ? `<button class="btn btn-xs btn-primary goh-sol-start" data-row="${esc(sol.name)}"><i class="fa fa-play"></i> ${__("Resume")}</button>` :
+				sol.status === "Planned" && !unassigned ? `<button class="btn btn-xs btn-primary goh-sol-start" data-row="${esc(sol.name)}"><i class="fa fa-play"></i> ${__("Start")}</button>` :
+				(sol.status === "Completed" || sol.status === "Skipped") ? `<button class="btn btn-xs btn-default goh-sol-restart" data-row="${esc(sol.name)}"><i class="fa fa-undo"></i> ${__("Restart")}</button>` : "";
+
+			const quiet = ["Completed", "Skipped"].includes(sol.status) ? "" : `
+				${sol.status === "In Progress" ? `<button class="btn btn-xs btn-default goh-sol-hold" data-row="${esc(sol.name)}" title="${__("Hold — release the device (e.g. waiting for parts)")}"><i class="fa fa-pause"></i></button>` : ""}
+				${!unassigned && ["Planned", "In Progress", "On Hold"].includes(sol.status) ? `<button class="btn btn-xs btn-default goh-sol-reassign" data-row="${esc(sol.name)}" data-solution="${esc(sol.repair_solution || "")}" title="${__("Hand off this solution to another technician")}"><i class="fa fa-exchange"></i></button>` : ""}
+				<button class="btn btn-xs btn-default goh-sol-skip" data-row="${esc(sol.name)}" title="${__("Skip this solution")}"><i class="fa fa-step-forward"></i></button>
+				<button class="btn btn-xs btn-default goh-sol-cancel" data-row="${esc(sol.name)}" title="${__("Cancel this solution")}"><i class="fa fa-times text-danger"></i></button>`;
 
 			return `
-			<div class="goh-repair-card ${isReworkItem ? "goh-rework-card" : ""}" data-row="${esc(sol.name)}">
-				<div class="goh-repair-card-head">
-					<span class="goh-repair-sol-name">${esc(sol.repair_solution || "—")}</span>
-					<span class="goh-badge ${STATUS_CLS[sol.status] || "badge-muted"}">${esc(sol.status)}</span>
-					${isReworkItem ? `<span class="goh-badge badge-orange" title="${__("This item failed QC and needs rework")}"><i class="fa fa-refresh"></i> ${__("Rework")}</span>` : ""}
-				</div>
-				<div class="goh-repair-card-meta text-muted small">
-					<span><i class="fa fa-tag"></i> ${esc(sol.issue_category || "")}</span>
-					${sol.estimated_minutes ? `<span class="ml-2"><i class="fa fa-clock-o"></i> ${sol.estimated_minutes}min</span>` : ""}
-				</div>
-				${isReworkItem && failReasons.length ? `
-					<div class="goh-qc-fail-context">
-						<div class="small text-danger"><strong><i class="fa fa-exclamation-triangle"></i> ${__("QC Failed")}:</strong></div>
-						${failReasons.map(f => `
-							<div class="small text-danger ml-2">• ${esc(f.check)}${f.reason ? ": " + esc(f.reason) : ""}</div>
-						`).join("")}
+			<div class="goh-sol-row goh-sol-row--${state} ${isReworkItem ? "goh-sol-row--rework" : ""}" data-row="${esc(sol.name)}">
+				<span class="goh-sol-dot goh-sol-dot--${state}"></span>
+				<div class="goh-sol-main">
+					<div class="goh-sol-line1">
+						<span class="goh-sol-name">${esc(sol.repair_solution || "—")}</span>
+						<span class="goh-badge ${STATUS_CLS[sol.status] || "badge-muted"}">${__(sol.status)}</span>
+						${isReworkItem ? `<span class="goh-badge badge-orange" title="${__("This item failed QC and needs rework")}"><i class="fa fa-refresh"></i> ${__("Rework")}</span>` : ""}
 					</div>
-				` : ""}
-				${sol.technician_remarks ? `<div class="goh-repair-remarks">${esc(sol.technician_remarks)}</div>` : ""}
-				${sol.technician_name ? `<div class="small text-muted" style="margin:2px 0"><i class="fa fa-user"></i> ${esc(sol.technician_name)}</div>` : ""}
-				<div class="goh-repair-card-actions">
-					${!sol.technician && !["Completed", "Skipped", "Cancelled"].includes(sol.status)
-						? `<span class="indicator-pill orange" style="font-size:11px">${__("Unassigned — assign a qualified technician (Assign stage) before work can start")}</span>
-						   ${sol.status !== "Completed" ? `<button class="btn btn-xs btn-danger goh-sol-cancel" data-row="${esc(sol.name)}"><i class="fa fa-times"></i> ${__("Cancel")}</button>` : ""}`
-						: `
-					${sol.status === "Planned" ? `<button class="btn btn-xs btn-default goh-sol-start" data-row="${esc(sol.name)}"><i class="fa fa-play"></i> ${__("Start")}</button>` : ""}
-					${sol.status === "On Hold" ? `<button class="btn btn-xs btn-primary goh-sol-start" data-row="${esc(sol.name)}"><i class="fa fa-play"></i> ${__("Resume")}</button>` : ""}
-					${sol.status === "In Progress" ? `<button class="btn btn-xs btn-success goh-sol-complete" data-row="${esc(sol.name)}"><i class="fa fa-check"></i> ${__("Done")}</button>
-					<button class="btn btn-xs btn-warning goh-sol-hold" data-row="${esc(sol.name)}" title="${__("Release the device so other repairs can continue (e.g. waiting for parts)")}"><i class="fa fa-pause"></i> ${__("Hold")}</button>` : ""}
-					${sol.status === "Completed" || sol.status === "Skipped" ? `<button class="btn btn-xs btn-info goh-sol-restart" data-row="${esc(sol.name)}"><i class="fa fa-undo"></i> ${__("Restart")}</button>` : ""}
-					${sol.status !== "Completed" && sol.status !== "Skipped" ? `<button class="btn btn-xs btn-warning goh-sol-skip" data-row="${esc(sol.name)}">${__("Skip")}</button>` : ""}
-					${["Planned", "In Progress", "On Hold"].includes(sol.status) ? `<button class="btn btn-xs btn-default goh-sol-reassign" data-row="${esc(sol.name)}" data-solution="${esc(sol.repair_solution || "")}" title="${__("Hand off this solution to another technician")}"><i class="fa fa-exchange"></i></button>` : ""}
-					${sol.status !== "Completed" ? `<button class="btn btn-xs btn-danger goh-sol-cancel" data-row="${esc(sol.name)}"><i class="fa fa-times"></i> ${__("Cancel")}</button>` : ""}`}
+					<div class="goh-sol-meta text-muted">
+						${sol.issue_category ? `<span><i class="fa fa-tag"></i> ${esc(sol.issue_category)}</span>` : ""}
+						${sol.estimated_minutes ? `<span><i class="fa fa-clock-o"></i> ${sol.estimated_minutes}min</span>` : ""}
+						${sol.technician_name ? `<span><i class="fa fa-user"></i> ${esc(sol.technician_name)}</span>` : ""}
+						${unassigned ? `<span class="indicator-pill orange">${__("Unassigned — assign in the Assign step")}</span>` : ""}
+						${lastRemark ? `<span class="goh-sol-remark" title="${esc(sol.technician_remarks)}"><i class="fa fa-comment-o"></i> ${esc(lastRemark)}</span>` : ""}
+					</div>
+					${failReasons.length ? `
+					<div class="goh-qc-fail-context small text-danger">
+						<strong><i class="fa fa-exclamation-triangle"></i> ${__("QC Failed")}:</strong>
+						${failReasons.map(f => `<span class="ml-1">• ${esc(f.check)}${f.reason ? ": " + esc(f.reason) : ""}</span>`).join("")}
+					</div>` : ""}
 				</div>
-			</div>
-		`}).join("");
+				<div class="goh-sol-actions">${primary}${quiet}</div>
+			</div>`;
+		};
+
+		const activeRows = activeSols.filter(s => ["In Progress", "On Hold"].includes(s.status)).map(solRow).join("");
+		const queuedRows = activeSols.filter(s => s.status === "Planned").map(solRow).join("");
+		const doneSols = activeSols.filter(s => ["Completed", "Skipped"].includes(s.status));
+		const doneRows = doneSols.map(solRow).join("");
+
+		const solList = `
+			${activeRows ? `<div class="goh-sol-group-label">${__("In Progress")}</div>${activeRows}` : ""}
+			${queuedRows ? `<div class="goh-sol-group-label">${__("Queued")}</div>${queuedRows}` : ""}
+			${doneRows ? `
+				<details class="goh-sol-done-details" ${activeRows || queuedRows ? "" : "open"}>
+					<summary class="goh-sol-group-label" style="cursor:pointer">
+						<i class="fa fa-check-circle text-success"></i> ${__("Done")} (${doneSols.length}) <span class="text-muted small">${__("— click to expand")}</span>
+					</summary>
+					${doneRows}
+				</details>` : ""}
+		`;
 
 		const cancelledCards = cancelledSols.length ? `
-			<div class="goh-cancelled-section mt-3">
-				<div class="text-muted small mb-1"><i class="fa fa-ban"></i> ${__("Cancelled Solutions")}</div>
+			<details class="goh-sol-done-details">
+				<summary class="goh-sol-group-label" style="cursor:pointer"><i class="fa fa-ban"></i> ${__("Cancelled")} (${cancelledSols.length})</summary>
 				${cancelledSols.map(sol => `
-					<div class="goh-repair-card goh-cancelled-card" style="opacity:0.6">
-						<div class="goh-repair-card-head">
-							<span class="goh-repair-sol-name" style="text-decoration:line-through">${esc(sol.repair_solution || "—")}</span>
-							<span class="goh-badge badge-red">${__("Cancelled")}</span>
+					<div class="goh-sol-row goh-sol-row--cancelled">
+						<span class="goh-sol-dot"></span>
+						<div class="goh-sol-main">
+							<div class="goh-sol-line1"><span class="goh-sol-name" style="text-decoration:line-through">${esc(sol.repair_solution || "—")}</span></div>
+							<div class="goh-sol-meta text-danger"><i class="fa fa-comment"></i> ${esc(sol.cancel_reason || sol.technician_remarks || __("No reason provided"))}</div>
 						</div>
-						<div class="goh-repair-remarks text-danger small"><i class="fa fa-comment"></i> ${esc(sol.cancel_reason || sol.technician_remarks || "No reason provided")}</div>
 					</div>
 				`).join("")}
-			</div>
+			</details>
 		` : "";
 
 		// Spare parts — separate active and damaged
@@ -1143,16 +1166,17 @@ class GoFixOpsHub {
 
 		return `
 			<div class="goh-section">
-				<div class="goh-section-title">
-					<i class="fa fa-users"></i> ${__("Technician")}
-					${activeAssigns.length ? `<button class="btn btn-xs btn-primary ml-2" id="goh-device-handover"><i class="fa fa-mobile"></i> ${__("Hand Over Device")}</button>` : ""}
-					<span class="text-muted small ml-2">${__("⇄ on a card moves the solution; this button moves the device")}</span>
+				<div class="goh-section-title" style="display:flex;align-items:center;gap:8px">
+					<span><i class="fa fa-users"></i> ${__("Technicians")}</span>
+					<span style="flex:1"></span>
+					${activeAssigns.length ? `<button class="btn btn-xs btn-default" id="goh-device-handover" title="${__("Move the physical device to another technician on this ticket (⇄ on a card moves the solution instead)")}"><i class="fa fa-mobile"></i> ${__("Hand Over Device")}</button>` : ""}
 				</div>
 				<div class="goh-tech-chips">${techInfo || `<span class="text-muted">${__("None assigned")}</span>`}</div>
-				${custodyRows ? `<div style="margin-top:8px;padding-top:6px;border-top:1px dashed var(--border-color)">
-					<div class="small text-muted" style="font-weight:600;margin-bottom:2px">${__("Device Custody History")}</div>
-					${custodyRows}
-				</div>` : ""}
+				${custodyRows ? `
+				<details class="goh-custody-details">
+					<summary class="small text-muted" style="cursor:pointer;font-weight:600">${__("Device custody history")} (${(d.custody_log || []).length})</summary>
+					<div style="padding-top:4px">${custodyRows}</div>
+				</details>` : ""}
 			</div>
 
 			${isRework ? `
@@ -1167,12 +1191,15 @@ class GoFixOpsHub {
 			` : ""}
 
 			<div class="goh-section">
-				<div class="goh-section-title">
-					<i class="fa fa-wrench"></i> ${__("Repair Progress")}
-					<span class="goh-progress-count">${doneCount}/${activeSols.length}</span>
+				<div class="goh-section-title" style="display:flex;align-items:center;gap:10px">
+					<span><i class="fa fa-wrench"></i> ${__("Repair Progress")}</span>
+					<div class="goh-progressbar" title="${doneCount}/${activeSols.length} ${__("done")}">
+						<div class="goh-progressbar-fill" style="width:${activeSols.length ? Math.round((doneCount / activeSols.length) * 100) : 0}%"></div>
+					</div>
+					<span class="text-muted small" style="font-weight:400">${doneCount}/${activeSols.length} ${__("done")}</span>
 				</div>
-				${allDone ? `<div class="goh-all-done-banner"><i class="fa fa-check-circle"></i> ${__("All solutions completed!")}</div>` : ""}
-				<div class="goh-repair-cards">${solCards || `<p class="text-muted">${__("No solutions assigned")}</p>`}</div>
+				${allDone ? `<div class="goh-all-done-banner"><i class="fa fa-check-circle"></i> ${__("All solutions completed — submit for QC below.")}</div>` : ""}
+				<div class="goh-sol-list">${solList.trim() || `<p class="text-muted">${__("No solutions assigned")}</p>`}</div>
 				${cancelledCards}
 			</div>
 

@@ -18,6 +18,43 @@ class JobAssignment(Document):
 		self.validate_assignment()
 		self.set_assignment_datetime()
 		self.calculate_hours()
+		self.validate_single_active_technician()
+
+	def before_update_after_submit(self):
+		# validate() is skipped on submitted-doc saves — the custody rule
+		# must also guard status flips on submitted Job Assignments.
+		self.validate_single_active_technician()
+
+	def validate_single_active_technician(self):
+		"""Device custody rule: a ticket may be split across technicians
+		(L1/L2/L4 each taking their solutions), but the physical device is
+		with ONE technician at a time — only one Job Assignment per Service
+		Order may be In Progress. Others queue as Open until handoff."""
+		if self.assignment_status != "In Progress" or not self.service_order:
+			return
+		active = frappe.db.get_value(
+			"Job Assignment",
+			{
+				"service_order": self.service_order,
+				"assignment_status": "In Progress",
+				"name": ("!=", self.name or ""),
+				"docstatus": ("<", 2),
+			},
+			["name", "service_engineer"],
+			as_dict=True,
+		)
+		if active:
+			engineer = (
+				frappe.db.get_value("Employee", active.service_engineer, "employee_name")
+				or active.service_engineer
+			)
+			frappe.throw(
+				_(
+					"Device is currently with {0} ({1}). Complete or put that job On Hold "
+					"before starting this one — one technician holds the device at a time."
+				).format(engineer, active.name),
+				title=_("Device With Another Technician"),
+			)
 	
 	def validate_service_order(self):
 		"""Validate that service order exists"""

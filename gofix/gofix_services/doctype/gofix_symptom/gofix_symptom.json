@@ -11,6 +11,7 @@
  "field_order": [
   "device_type",
   "symptom_name",
+  "symptom_code",
   "display_order",
   "is_expert_check",
   "is_other",
@@ -34,6 +35,12 @@
    "label": "Symptom (customer-facing)",
    "reqd": 1,
    "description": "Text the customer sees, e.g. \"Screen cracked / broken\"."
+  },
+  {
+   "fieldname": "symptom_code",
+   "fieldtype": "Data",
+   "label": "Symptom Code",
+   "description": "IRIS-style symptom code (e.g. BAT-01) for OEM claim/analytics export"
   },
   {
    "default": "0",
@@ -73,7 +80,7 @@
   }
  ],
  "links": [],
- "modified": "2026-07-03 09:00:00.000000",
+ "modified": "2026-07-18 14:00:00.000000",
  "modified_by": "Administrator",
  "module": "GoFix Services",
  "name": "GoFix Symptom",

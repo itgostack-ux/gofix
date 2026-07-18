@@ -1640,11 +1640,15 @@ class GoFixOpsHub {
 						},
 						{ fieldname: "stock_html", fieldtype: "HTML" },
 						{ fieldname: "qty", label: __("Qty"), fieldtype: "Float", default: 1, reqd: 1 },
+						{ fieldname: "removed_part_serial", label: __("Removed Part Serial (old, KBB)"), fieldtype: "Data",
+							description: __("Serial/IMEI of the part taken OUT — needed for defective-return credit") },
+						{ fieldname: "installed_part_serial", label: __("Installed Part Serial (new, KGB)"), fieldtype: "Data" },
 						{ fieldname: "rate", label: __("Rate"), fieldtype: "Currency", default: 0 },
 					],
 					primary_action_label: __("Add"),
 					primary_action: v => {
-						frappe.xcall(`${API}.add_spare_to_ticket`, { sr_name: d.name, spare_item: v.spare_item, qty: v.qty, rate: v.rate || 0 })
+						frappe.xcall(`${API}.add_spare_to_ticket`, { sr_name: d.name, spare_item: v.spare_item, qty: v.qty, rate: v.rate || 0,
+							removed_part_serial: v.removed_part_serial || "", installed_part_serial: v.installed_part_serial || "" })
 							.then(r => {
 								dlg.hide();
 								if (r.status === "Awaiting Procurement") {

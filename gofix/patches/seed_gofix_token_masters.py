@@ -355,10 +355,22 @@ def _seed_brands() -> None:
 			_upsert("GoFix Brand Option", key, values)
 
 
+_CATEGORY_CODES = {
+	"Screen & Display": "SCR", "Battery": "BAT", "Charging & Power": "CHG",
+	"Board Diagnosis": "BRD", "Camera": "CAM", "Speaker & Mic": "AUD",
+	"Water Damage": "WTR", "Physical Damage": "PHY", "Software": "SFT",
+	"Network & Connectivity": "NET", "Sensors & Biometrics": "SNS",
+	"Buttons & Keys": "BTN", "Data Recovery": "DAT", "Accessories": "ACC",
+	"General Diagnosis": "GEN",
+}
+
+
 def _seed_issue_categories() -> None:
 	for row in _ISSUE_CATEGORIES:
 		values = dict(row)
 		values["is_active"] = 1
+		if row["category_name"] in _CATEGORY_CODES:
+			values["category_code"] = _CATEGORY_CODES[row["category_name"]]
 		# Don't overwrite ops-tuned repair-hour estimates on re-run — only set
 		# the estimate when the category is new or still unset.
 		existing = frappe.db.exists("Issue Category", row["category_name"])
@@ -381,6 +393,7 @@ def _seed_symptoms() -> None:
 					"is_other": is_other,
 					"display_order": order * 10,
 					"backend_category": category,
+					"symptom_code": f"{_CATEGORY_CODES.get(category, 'GEN')}-{order:02d}",
 				},
 			)
 

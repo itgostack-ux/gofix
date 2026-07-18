@@ -6,6 +6,7 @@
  "engine": "InnoDB",
  "field_order": [
   "issue_category",
+  "defect_code",
   "reported_by",
   "column_break_1",
   "description",
@@ -24,6 +25,12 @@
    "label": "Issue Category",
    "options": "Issue Category",
    "reqd": 1
+  },
+  {
+   "fieldname": "defect_code",
+   "fieldtype": "Data",
+   "label": "Defect Code",
+   "description": "Technician-diagnosed defect code (IRIS chain: symptom \u2192 category \u2192 defect \u2192 repair)"
   },
   {
    "default": "Customer",
@@ -88,7 +95,7 @@
  "index_web_pages_for_search": 0,
  "istable": 1,
  "links": [],
- "modified": "2026-04-04 12:00:00.000000",
+ "modified": "2026-07-18 14:00:00.000000",
  "modified_by": "Administrator",
  "module": "GoFix Services",
  "name": "SR Issue Line",

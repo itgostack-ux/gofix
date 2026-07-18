@@ -40,11 +40,10 @@ def _mark_sr_in_service(sr_name):
 	"""Advance SR decision & workflow_state to 'In Service' if still Accepted."""
 	current = frappe.db.get_value("Service Request", sr_name, "decision")
 	if current in ("Draft", "Accepted"):
-		frappe.db.set_value("Service Request", sr_name, {
-			"decision": "In Service",
-			"status": "In Service",
-			"workflow_state": "In Service",
-		}, update_modified=True)
+		updates = {"decision": "In Service", "status": "In Service"}
+		if frappe.db.has_column("Service Request", "workflow_state"):
+			updates["workflow_state"] = "In Service"
+		frappe.db.set_value("Service Request", sr_name, updates, update_modified=True)
 
 
 def _log_ops_stage(sr_name, from_stage, to_stage):
@@ -1181,7 +1180,10 @@ def _assert_technician_can_take_solutions(technician, repair_solutions) -> None:
 	solution_names = ", ".join(row.solution_name or row.name for row in blocked)
 	frappe.throw(
 		_(
-			"Technician {0} is {1}, but {2} requires L{3} or above."
+			"Technician {0} is {1}, but {2} requires L{3} or above. "
+			"Tip: uncheck the higher-grade solution(s) and assign them to a "
+			"qualified technician separately — one ticket can be split across "
+			"L1/L2/L3/L4 technicians, each taking the solutions their grade covers."
 		).format(
 			emp.employee_name or technician,
 			tech_grade.grade_name if tech_grade else emp.technician_grade,
@@ -1404,7 +1406,8 @@ def mark_spare_damaged(sr_name, spare_row_name, remarks="") -> dict:
 
 
 @frappe.whitelist()
-def add_spare_to_ticket(sr_name, spare_item, qty, rate=0, repair_solution=None) -> dict:
+def add_spare_to_ticket(sr_name, spare_item, qty, rate=0, repair_solution=None,
+		removed_part_serial=None, installed_part_serial=None) -> dict:
 	"""Add a spare part to the SR.  Checks warehouse stock first.
 
 	Returns:
@@ -1464,6 +1467,10 @@ def add_spare_to_ticket(sr_name, spare_item, qty, rate=0, repair_solution=None) 
 		"rate": rate,
 		"amount": qty * rate,
 		"status": status,
+		# Part genealogy (KBB/KGB): old part out, new part in — drives
+		# defective-return credit and OEM claim evidence.
+		"removed_part_serial": (removed_part_serial or "").strip(),
+		"installed_part_serial": (installed_part_serial or "").strip(),
 	})
 
 	sr.save()
@@ -1618,10 +1625,16 @@ def get_repair_history(sr_name) -> list:
 			)
 		)
 	for sl in sr.get("spare_lines", []):
+		genealogy = ""
+		if sl.get("removed_part_serial") or sl.get("installed_part_serial"):
+			genealogy = (
+				f" | out: {sl.get('removed_part_serial') or '—'}"
+				f" / in: {sl.get('installed_part_serial') or '—'}"
+			)
 		add(
 			sl.get("creation"),
 			f"Spare requested: {sl.item_name or sl.spare_item} × {frappe.utils.flt(sl.qty)}",
-			f"rate {frappe.utils.fmt_money(sl.rate or 0, currency='INR')} — {sl.status}",
+			f"rate {frappe.utils.fmt_money(sl.rate or 0, currency='INR')} — {sl.status}{genealogy}",
 		)
 	for mr_name in sorted(mr_names):
 		mr = frappe.db.get_value(

@@ -19,6 +19,8 @@
   "item_name",
   "column_break_11",
   "qty_used",
+  "installed_part_serial",
+  "removed_part_serial",
   "uom",
   "section_break_14",
   "purchase_cost",
@@ -147,6 +149,16 @@
    "label": "Qty Used",
    "precision": "2",
    "reqd": 1
+  },
+  {
+   "fieldname": "installed_part_serial",
+   "fieldtype": "Data",
+   "label": "Installed Part Serial (New)"
+  },
+  {
+   "fieldname": "removed_part_serial",
+   "fieldtype": "Data",
+   "label": "Removed Part Serial (Old)"
   },
   {
    "fetch_from": "spare_part_item.stock_uom",
@@ -414,7 +426,7 @@
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-04-16 00:00:00.000000",
+ "modified": "2026-07-18 14:00:00.000000",
  "modified_by": "Administrator",
  "module": "GoFix Services",
  "name": "Spare Parts Usage",

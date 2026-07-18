@@ -584,7 +584,7 @@ class GoFixOpsHub {
 			["Advance Paid", d.advance_amount ? `₹${format_number(d.advance_amount)}` : ""],
 		].filter(r => r[1]);
 
-		const assignRows = (d.assignments || []).map(a => `
+		const assignRows = (d.assignments || []).filter(a => a.assignment_status !== "Cancelled").map(a => `
 			<tr>
 				<td>${esc(a.engineer_display)}</td>
 				<td><span class="goh-badge badge-muted">${esc(a.job_type)}</span></td>

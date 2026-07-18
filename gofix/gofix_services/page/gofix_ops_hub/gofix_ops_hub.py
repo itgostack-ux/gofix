@@ -1555,49 +1555,12 @@ def update_solution_status(sr_name, solution_row_name, status, remarks="") -> di
 	if status in ("In Progress", "On Hold") and line.get("technician"):
 		_sync_job_assignment_custody(sr_name, solution_row_name, line.technician, status)
 
-	# All of this technician's work done? Release the device automatically —
-	# a technician with nothing left to do shouldn't keep custody.
+	# Terminal statuses may leave a technician with nothing to do — reconcile
+	# so finished technicians release the device automatically.
 	if status in ("Completed", "Skipped", "Cancelled"):
-		tech = frappe.db.get_value("SR Solution Line", solution_row_name, "technician")
-		if tech:
-			_complete_technician_ja_if_done(sr_name, tech)
+		_reconcile_device_custody(sr_name)
 
 	return {"ok": True}
-
-
-def _complete_technician_ja_if_done(sr_name, technician) -> None:
-	remaining = frappe.db.exists(
-		"SR Solution Line",
-		{
-			"parent": sr_name,
-			"parenttype": "Service Request",
-			"technician": technician,
-			"status": ("in", ("Planned", "In Progress", "On Hold")),
-		},
-	)
-	if remaining:
-		return
-	so_name = frappe.db.get_value("Service Request", sr_name, "service_order")
-	if not so_name:
-		return
-	ja_name = frappe.db.get_value(
-		"Job Assignment",
-		{
-			"service_order": so_name,
-			"service_engineer": technician,
-			"docstatus": ("<", 2),
-			"assignment_status": ("not in", ("Completed", "Cancelled")),
-		},
-		"name",
-	)
-	if not ja_name:
-		return
-	ja = frappe.get_doc("Job Assignment", ja_name)
-	ja.assignment_status = "Completed"
-	if not ja.end_datetime:
-		ja.end_datetime = now_datetime()
-	ja.flags.ignore_validate_update_after_submit = True
-	ja.save(ignore_permissions=True)
 
 
 @frappe.whitelist()
@@ -1703,11 +1666,55 @@ def _get_or_create_job_assignment(sr, technician, assignment_type, estimated_hou
 	return ja
 
 
+def _reconcile_device_custody(sr_name) -> None:
+	"""Self-heal custody drift: a Job Assignment that is still active while
+	its technician has NO active solution line on the ticket is a zombie
+	holder — it blocks everyone else's Start for no reason. Complete it
+	(they did work) or cancel it (they never had any). Safe to call from any
+	write path; no-ops when everything is consistent."""
+	so_name = frappe.db.get_value("Service Request", sr_name, "service_order")
+	if not so_name:
+		return
+	for ja_row in frappe.get_all(
+		"Job Assignment",
+		filters={
+			"service_order": so_name,
+			"docstatus": ("<", 2),
+			"assignment_status": ("not in", ("Completed", "Cancelled")),
+		},
+		fields=["name", "service_engineer"],
+	):
+		active_lines = frappe.db.exists(
+			"SR Solution Line",
+			{
+				"parent": sr_name,
+				"parenttype": "Service Request",
+				"technician": ja_row.service_engineer,
+				"status": ("in", ("Planned", "In Progress", "On Hold")),
+			},
+		)
+		if active_lines:
+			continue
+		ever_had = frappe.db.exists(
+			"SR Solution Line",
+			{"parent": sr_name, "parenttype": "Service Request", "technician": ja_row.service_engineer},
+		)
+		ja = frappe.get_doc("Job Assignment", ja_row.name)
+		ja.assignment_status = "Completed" if ever_had else "Cancelled"
+		if ever_had and not ja.end_datetime:
+			ja.end_datetime = now_datetime()
+		ja.flags.ignore_validate_update_after_submit = True
+		ja.save(ignore_permissions=True)
+
+
 def _assert_can_work_solution(sr_name, solution_row_name):
 	"""Grade-safety + device-custody gate for EVERY path that puts a solution
 	into active work (start, restart, complete): the line must have an
 	assigned technician, and no OTHER technician may currently hold the
 	device (active In Progress Job Assignment). Returns the line."""
+	# Heal zombie holders first so a finished technician's stale JA never
+	# blocks the next one from starting.
+	_reconcile_device_custody(sr_name)
 	line = frappe.db.get_value(
 		"SR Solution Line",
 		solution_row_name,
@@ -1787,6 +1794,21 @@ def _sync_job_assignment_custody(sr_name, solution_row_name, technician, status)
 		},
 		"name",
 	)
+	if not ja_name and status == "In Progress":
+		# Restarting after their JA auto-completed (e.g. rework of a finished
+		# solution) — reopen the latest Completed JA so the single-holder rule
+		# keeps applying and custody logging continues.
+		ja_name = frappe.db.get_value(
+			"Job Assignment",
+			{
+				"service_order": so_name,
+				"service_engineer": technician,
+				"docstatus": ("<", 2),
+				"assignment_status": "Completed",
+			},
+			"name",
+			order_by="modified desc",
+		)
 	if not ja_name:
 		return
 	if status == "On Hold":
@@ -2404,30 +2426,31 @@ def submit_for_qc(sr_name) -> dict:
 			row.status = "Completed"
 	sr.save()
 
-	# Complete any open Job Assignments so QC guard passes
+	# Complete any open Job Assignments so QC guard passes. Go through
+	# doc.save (NOT db_set) so custody periods close and actual_hours
+	# accumulate; include On Hold — QC submission releases every holder.
 	open_jobs = frappe.get_all(
 		"Job Assignment",
 		filters={
 			"service_request": sr_name,
 			"docstatus": ["in", [0, 1]],
-			"assignment_status": ["in", ["Open", "In Progress", "Planned"]],
+			"assignment_status": ["in", ["Open", "In Progress", "Planned", "On Hold"]],
 		},
 		pluck="name",
 	)
 	for ja_name in open_jobs:
 		ja = frappe.get_doc("Job Assignment", ja_name)
+		ja.assignment_status = "Completed"
+		ja.repair_outcome = "Repaired"
+		ja.work_performed = "Completed via Ops Hub QC submission"
+		if not ja.end_datetime:
+			ja.end_datetime = now_datetime()
+		ja.flags.ignore_mandatory = True
 		if ja.docstatus == 0:
-			ja.assignment_status = "Completed"
-			ja.repair_outcome = "Repaired"
-			ja.work_performed = "Completed via Ops Hub QC submission"
-			ja.flags.ignore_mandatory = True
 			ja.submit()
 		else:
-			frappe.db.set_value("Job Assignment", ja_name, {
-				"assignment_status": "Completed",
-				"repair_outcome": "Repaired",
-				"work_performed": "Completed via Ops Hub QC submission",
-			}, update_modified=True)
+			ja.flags.ignore_validate_update_after_submit = True
+			ja.save(ignore_permissions=True)
 
 	# Trigger QC on the Sales Order using the existing workflow helper
 	so = frappe.get_doc("Sales Order", sr.service_order)

@@ -52,6 +52,19 @@ const STAGE_BADGE = {
 const PRIORITY_COLOR = { Urgent: "#dc2626", High: "#f59e0b", Medium: "#3b82f6", Low: "#94a3b8" };
 const API = "gofix.gofix_services.page.gofix_ops_hub.gofix_ops_hub";
 
+function get_ops_stage_list_filters(queue, stage) {
+	const names = (queue || [])
+		.filter(sr => sr.ops_stage === stage)
+		.map(sr => sr.name)
+		.filter(Boolean);
+
+	return names.length ? { name: ["in", names] } : null;
+}
+
+if (typeof module !== "undefined" && module.exports) {
+	module.exports = { get_ops_stage_list_filters };
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════ */
 /*  Main Class                                                               */
 /* ═══════════════════════════════════════════════════════════════════════════ */
@@ -229,19 +242,6 @@ class GoFixOpsHub {
 		const stageCounts = {};
 		this.queue.forEach(sr => { stageCounts[sr.ops_stage] = (stageCounts[sr.ops_stage] || 0) + 1; });
 
-		const STAGE_LIST_FILTERS = {
-			analysis:  { decision: "Accepted" },
-			confirm:   { decision: "Accepted" },
-			solutions: { decision: "Accepted" },
-			assign:    { decision: "Accepted" },
-			repair:    { decision: "In Service" },
-			qc:        { decision: "Completed" },
-			invoice:   { decision: "Invoiced" },
-			rework:    { decision: "In Service" },
-			done:      { decision: ["in", ["Invoiced", "Delivered"]] },
-			closed:    { decision: "Delivered" },
-		};
-
 		const pillsHTML = [...STAGES, { key: "rework", label: "Rework", color: "#ef4444" }, { key: "done", label: "Done", color: "#059669" }]
 			.filter(s => stageCounts[s.key])
 			.map(s => `<span class="goh-stage-pill" data-stage="${s.key}"
@@ -261,12 +261,14 @@ class GoFixOpsHub {
 		container.find(".goh-stage-pill").on("click", (e) => {
 			e.stopPropagation();
 			const stage = $(e.currentTarget).data("stage");
-			const f = Object.assign({}, STAGE_LIST_FILTERS[stage] || {});
-			const co = this._active_company() || this.active_company || "";
-			if (co) f.company = co;
-			const wh = this.page.wrapper.find(".goh-tb-warehouse").val() || "";
-			if (wh) f.source_warehouse = wh;
-			frappe.set_route("List", "Service Request", f);
+			const filters = get_ops_stage_list_filters(this.queue, stage);
+			if (!filters) return;
+
+			// ops_stage is derived from the SR, child solution/assignment rows,
+			// and the linked Sales Order's QC state. No Service Request-only
+			// status filter can reproduce it, so open the exact queue snapshot
+			// behind the badge instead of using a broader decision filter.
+			frappe.set_route("List", "Service Request", filters);
 		});
 
 		// Bind queue card clicks
@@ -1098,18 +1100,38 @@ class GoFixOpsHub {
 			<tr style="opacity:0.6"><td colspan="5" class="text-danger small"><i class="fa fa-comment"></i> ${esc(sp.remarks || "")}</td></tr>
 		`).join("");
 
-		// Technician info
-		const techInfo = (d.assignments || []).filter(a => a.assignment_status !== "Cancelled").map(a => `
-			<span class="goh-assign-chip-sm"><i class="fa fa-user"></i> ${esc(a.engineer_display)} <span class="goh-badge badge-muted">${esc(a.job_type)}</span></span>
-		`).join("");
+		// Technician info — the current device holder glows; others queue
+		const activeAssigns = (d.assignments || []).filter(a => a.assignment_status !== "Cancelled");
+		const techInfo = activeAssigns.map(a => {
+			const holds = a.assignment_status === "In Progress";
+			return `
+			<span class="goh-assign-chip-sm" style="${holds ? "background:var(--green-100,#dcfce7);border:1.5px solid var(--green-600,#16a34a);font-weight:600" : ""}">
+				<i class="fa ${holds ? "fa-mobile" : "fa-user"}" ${holds ? 'style="color:var(--green-600,#16a34a)"' : ""}></i>
+				${esc(a.engineer_display)}
+				${holds ? `<span class="goh-badge badge-green">${__("has device")}</span>` : `<span class="goh-badge badge-muted">${esc(a.assignment_status)}</span>`}
+			</span>`;
+		}).join("");
+
+		const custodyRows = (d.custody_log || []).slice(0, 6).map(c => `
+			<div class="small" style="padding:1px 0">
+				<i class="fa fa-mobile text-muted"></i> <b>${esc(c.technician_name || c.technician)}</b>
+				${frappe.datetime.str_to_user(c.taken_at)} → ${c.released_at ? frappe.datetime.str_to_user(c.released_at) : `<span class="text-success">${__("holding now")}</span>`}
+				${c.released_at ? `<span class="text-muted">(${(c.hours || 0).toFixed(1)}h)</span>` : ""}
+				${c.note ? `<span class="text-muted">— ${esc(c.note)}</span>` : ""}
+			</div>`).join("");
 
 		return `
 			<div class="goh-section">
 				<div class="goh-section-title">
 					<i class="fa fa-users"></i> ${__("Technician")}
-					<span class="text-muted small ml-2">${__("hand off per solution via the ⇄ button on its card")}</span>
+					${activeAssigns.length ? `<button class="btn btn-xs btn-primary ml-2" id="goh-device-handover"><i class="fa fa-mobile"></i> ${__("Hand Over Device")}</button>` : ""}
+					<span class="text-muted small ml-2">${__("⇄ on a card moves the solution; this button moves the device")}</span>
 				</div>
 				<div class="goh-tech-chips">${techInfo || `<span class="text-muted">${__("None assigned")}</span>`}</div>
+				${custodyRows ? `<div style="margin-top:8px;padding-top:6px;border-top:1px dashed var(--border-color)">
+					<div class="small text-muted" style="font-weight:600;margin-bottom:2px">${__("Device Custody History")}</div>
+					${custodyRows}
+				</div>` : ""}
 			</div>
 
 			${isRework ? `
@@ -1769,6 +1791,38 @@ class GoFixOpsHub {
 				);
 			});
 
+			// Device handover — custody moves, solution assignments stay
+			content.find("#goh-device-handover").on("click", () => {
+				const holder = d.device_holder || "";
+				const opts = {};
+				(d.assignments || []).filter(a => a.assignment_status !== "Cancelled" && a.assignment_status !== "Completed").forEach(a => {
+					if (a.service_engineer && a.service_engineer !== holder) opts[a.service_engineer] = a.engineer_display;
+				});
+				(d.solution_lines || []).forEach(s => {
+					if (s.technician && s.technician !== holder && s.status !== "Cancelled") opts[s.technician] = s.technician_name || s.technician;
+				});
+				const keys = Object.keys(opts);
+				if (!keys.length) {
+					return frappe.show_alert({ message: __("No other technician on this ticket — assign them a solution first."), indicator: "orange" });
+				}
+				const holderName = (d.assignments || []).find(a => a.service_engineer === holder)?.engineer_display;
+				const dlg = new frappe.ui.Dialog({
+					title: __("Hand Over Device"),
+					fields: [
+						{ fieldname: "info", fieldtype: "HTML", options: `<div class="small text-muted" style="margin-bottom:8px">${holderName ? __("Device is currently with {0}.", [`<b>${holderName}</b>`]) : __("Nobody holds the device right now.")}</div>` },
+						{ fieldname: "to_technician", label: __("Hand over to"), fieldtype: "Select", reqd: 1,
+							options: keys.map(k => ({ label: opts[k], value: k })) },
+						{ fieldname: "remarks", label: __("Note"), fieldtype: "Small Text" },
+					],
+					primary_action_label: __("Hand Over"),
+					primary_action: v => {
+						frappe.xcall(`${API}.handover_device`, { sr_name: d.name, to_technician: v.to_technician, remarks: v.remarks || "" })
+							.then(() => { dlg.hide(); self._load_detail(d.name); frappe.show_alert({ message: __("Device handed over."), indicator: "green" }); });
+					},
+				});
+				dlg.show();
+			});
+
 			// Per-solution handoff (⇄ on the card) — operation-level reassignment
 			content.on("click", ".goh-sol-reassign", function () {
 				const btn = $(this);
@@ -1953,7 +2007,7 @@ class GoFixOpsHub {
 				"#goh-confirm-analysis", "#goh-send-wa", "#goh-mark-confirmed",
 				"#goh-back-to-analysis", "#goh-save-solutions", "#goh-back-to-confirm",
 				"#goh-back-to-solutions", "#goh-submit-qc",
-				"#goh-back-to-assign", "#goh-rework-assign",
+				"#goh-back-to-assign", "#goh-rework-assign", "#goh-device-handover",
 			];
 			// Assigning MORE technicians mid-repair is legitimate (a ticket can be
 			// split across L1/L2/L4) — keep the Assign action live while the

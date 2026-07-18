@@ -19,11 +19,83 @@ class JobAssignment(Document):
 		self.set_assignment_datetime()
 		self.calculate_hours()
 		self.validate_single_active_technician()
+		self.detect_custody_transition()
 
 	def before_update_after_submit(self):
 		# validate() is skipped on submitted-doc saves — the custody rule
 		# must also guard status flips on submitted Job Assignments.
 		self.validate_single_active_technician()
+		self.detect_custody_transition()
+
+	def detect_custody_transition(self):
+		"""Flag In-Progress transitions so the custody log can record who
+		physically held the device and for how long."""
+		self._custody_event = None
+		if self.is_new():
+			if self.assignment_status == "In Progress":
+				self._custody_event = "take"
+			return
+		old = frappe.db.get_value("Job Assignment", self.name, "assignment_status")
+		if old == self.assignment_status:
+			return
+		if self.assignment_status == "In Progress":
+			self._custody_event = "take"
+		elif old == "In Progress":
+			self._custody_event = "release"
+
+	def record_custody_event(self):
+		"""Open/close a GoFix Custody Log period after the status change is
+		saved. Released periods add into actual_hours — 'who spent how much
+		time with the device' comes straight from these rows."""
+		event = getattr(self, "_custody_event", None)
+		if not event or not frappe.db.exists("DocType", "GoFix Custody Log"):
+			return
+		self._custody_event = None
+		sr = self.service_request or frappe.db.get_value(
+			"Sales Order", self.service_order, "service_request"
+		)
+		if not sr:
+			return
+		now = frappe.utils.now_datetime()
+		if event == "take":
+			if not frappe.db.exists(
+				"GoFix Custody Log",
+				{"job_assignment": self.name, "released_at": ("is", "not set")},
+			):
+				frappe.get_doc({
+					"doctype": "GoFix Custody Log",
+					"service_request": sr,
+					"service_order": self.service_order,
+					"job_assignment": self.name,
+					"technician": self.service_engineer,
+					"technician_name": frappe.db.get_value(
+						"Employee", self.service_engineer, "employee_name"
+					) or self.service_engineer,
+					"taken_at": now,
+					"note": getattr(self, "_custody_note", "") or "",
+				}).insert(ignore_permissions=True)
+			if not self.start_datetime:
+				self.db_set("start_datetime", now, update_modified=False)
+		else:  # release
+			open_row = frappe.db.get_value(
+				"GoFix Custody Log",
+				{"job_assignment": self.name, "released_at": ("is", "not set")},
+				["name", "taken_at"],
+				as_dict=True,
+			)
+			if open_row:
+				from frappe.utils import flt, time_diff_in_hours
+
+				hours = max(flt(time_diff_in_hours(now, open_row.taken_at)), 0)
+				frappe.db.set_value("GoFix Custody Log", open_row.name, {
+					"released_at": now,
+					"hours": round(hours, 2),
+				}, update_modified=False)
+				self.db_set(
+					"actual_hours",
+					round(flt(self.actual_hours) + hours, 2),
+					update_modified=False,
+				)
 
 	def validate_single_active_technician(self):
 		"""Device custody rule: a ticket may be split across technicians
@@ -94,6 +166,14 @@ class JobAssignment(Document):
 	
 	def on_update(self):
 		"""Check if job sheet is completed and update Service Order"""
+		self.record_custody_event()
+		if self.assignment_status in ["Completed", "Closed"]:
+			self.update_service_order_status()
+
+	def on_update_after_submit(self):
+		# Submitted-doc saves fire this instead of on_update — custody status
+		# flips (start/hold/handover/complete) all happen post-submit.
+		self.record_custody_event()
 		if self.assignment_status in ["Completed", "Closed"]:
 			self.update_service_order_status()
 	

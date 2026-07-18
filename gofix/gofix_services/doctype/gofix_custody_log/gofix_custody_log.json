@@ -1,0 +1,139 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "hash",
+ "creation": "2026-07-18 15:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "service_request",
+  "service_order",
+  "job_assignment",
+  "column_break_1",
+  "technician",
+  "technician_name",
+  "section_break_time",
+  "taken_at",
+  "released_at",
+  "column_break_2",
+  "hours",
+  "note"
+ ],
+ "fields": [
+  {
+   "fieldname": "service_request",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Service Request",
+   "options": "Service Request",
+   "reqd": 1
+  },
+  {
+   "fieldname": "service_order",
+   "fieldtype": "Link",
+   "label": "Service Order",
+   "options": "Sales Order"
+  },
+  {
+   "fieldname": "job_assignment",
+   "fieldtype": "Link",
+   "label": "Job Assignment",
+   "options": "Job Assignment"
+  },
+  {
+   "fieldname": "column_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "technician",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Technician",
+   "options": "Employee",
+   "reqd": 1
+  },
+  {
+   "fieldname": "technician_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Technician Name"
+  },
+  {
+   "fieldname": "section_break_time",
+   "fieldtype": "Section Break",
+   "label": "Possession"
+  },
+  {
+   "fieldname": "taken_at",
+   "fieldtype": "Datetime",
+   "in_list_view": 1,
+   "label": "Device Taken At"
+  },
+  {
+   "fieldname": "released_at",
+   "fieldtype": "Datetime",
+   "in_list_view": 1,
+   "label": "Device Released At"
+  },
+  {
+   "fieldname": "column_break_2",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "hours",
+   "fieldtype": "Float",
+   "label": "Hours Held",
+   "precision": "2"
+  },
+  {
+   "fieldname": "note",
+   "fieldtype": "Data",
+   "label": "Note"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-07-18 15:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "GoFix Services",
+ "name": "GoFix Custody Log",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Service Manager",
+   "share": 1
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "role": "Service Engineer"
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "role": "Service Viewer"
+  }
+ ],
+ "sort_field": "taken_at",
+ "sort_order": "DESC",
+ "states": []
+}

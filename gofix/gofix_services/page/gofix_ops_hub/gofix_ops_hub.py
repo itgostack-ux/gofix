@@ -661,6 +661,16 @@ def get_ticket_detail(sr_name) -> dict:
 		"solution_lines": solution_lines,
 		"spare_lines": spare_lines,
 		"assignments": assignments,
+		"device_holder": next(
+			(a.service_engineer for a in assignments if a.assignment_status == "In Progress"), ""
+		),
+		"custody_log": frappe.get_all(
+			"GoFix Custody Log",
+			filters={"service_request": sr_name},
+			fields=["technician", "technician_name", "taken_at", "released_at", "hours", "note"],
+			order_by="taken_at desc",
+			limit=15,
+		) if frappe.db.exists("DocType", "GoFix Custody Log") else [],
 		"status_log": status_log,
 		"qc_status": qc_status,
 		"qc_checked_by": qc_checked_by,
@@ -1545,7 +1555,114 @@ def update_solution_status(sr_name, solution_row_name, status, remarks="") -> di
 	if status in ("In Progress", "On Hold") and line.get("technician"):
 		_sync_job_assignment_custody(sr_name, solution_row_name, line.technician, status)
 
+	# All of this technician's work done? Release the device automatically —
+	# a technician with nothing left to do shouldn't keep custody.
+	if status in ("Completed", "Skipped", "Cancelled"):
+		tech = frappe.db.get_value("SR Solution Line", solution_row_name, "technician")
+		if tech:
+			_complete_technician_ja_if_done(sr_name, tech)
+
 	return {"ok": True}
+
+
+def _complete_technician_ja_if_done(sr_name, technician) -> None:
+	remaining = frappe.db.exists(
+		"SR Solution Line",
+		{
+			"parent": sr_name,
+			"parenttype": "Service Request",
+			"technician": technician,
+			"status": ("in", ("Planned", "In Progress", "On Hold")),
+		},
+	)
+	if remaining:
+		return
+	so_name = frappe.db.get_value("Service Request", sr_name, "service_order")
+	if not so_name:
+		return
+	ja_name = frappe.db.get_value(
+		"Job Assignment",
+		{
+			"service_order": so_name,
+			"service_engineer": technician,
+			"docstatus": ("<", 2),
+			"assignment_status": ("not in", ("Completed", "Cancelled")),
+		},
+		"name",
+	)
+	if not ja_name:
+		return
+	ja = frappe.get_doc("Job Assignment", ja_name)
+	ja.assignment_status = "Completed"
+	if not ja.end_datetime:
+		ja.end_datetime = now_datetime()
+	ja.flags.ignore_validate_update_after_submit = True
+	ja.save(ignore_permissions=True)
+
+
+@frappe.whitelist()
+def handover_device(sr_name, to_technician, remarks="") -> dict:
+	"""Physically hand the device to another technician on this ticket.
+
+	Distinct from the per-solution ⇄ handoff: solutions keep their assignees;
+	only CUSTODY moves. Current holder's JA goes On Hold, the receiver's goes
+	In Progress — both transitions land in the GoFix Custody Log."""
+	_assert_sr_permission(sr_name, "write")
+	sr = frappe.get_doc("Service Request", sr_name)
+	if not sr.service_order:
+		frappe.throw(_("No Service Order linked to {0}.").format(sr_name), title=_("Validation Error"))
+
+	to_name = frappe.db.get_value("Employee", to_technician, "employee_name") or to_technician
+	holder = frappe.db.get_value(
+		"Job Assignment",
+		{"service_order": sr.service_order, "assignment_status": "In Progress", "docstatus": ("<", 2)},
+		["name", "service_engineer"],
+		as_dict=True,
+	)
+	if holder and holder.service_engineer == to_technician:
+		frappe.throw(_("{0} already has the device.").format(to_name), title=_("Validation Error"))
+
+	target_ja = frappe.db.get_value(
+		"Job Assignment",
+		{
+			"service_order": sr.service_order,
+			"service_engineer": to_technician,
+			"docstatus": ("<", 2),
+			"assignment_status": ("not in", ("Completed", "Cancelled")),
+		},
+		"name",
+	)
+	if not target_ja:
+		if frappe.db.exists(
+			"SR Solution Line",
+			{"parent": sr_name, "parenttype": "Service Request", "technician": to_technician,
+			 "status": ("not in", ("Cancelled",))},
+		):
+			target_ja = _get_or_create_job_assignment(sr, to_technician, "Technician Assignment").name
+		else:
+			frappe.throw(
+				_("{0} has no solution assigned on this ticket — assign one (Assign stage or ⇄) "
+				  "before handing over the device.").format(to_name),
+				title=_("Not On This Ticket"),
+			)
+
+	holder_name = ""
+	if holder:
+		holder_name = frappe.db.get_value("Employee", holder.service_engineer, "employee_name") or holder.service_engineer
+		hdoc = frappe.get_doc("Job Assignment", holder.name)
+		hdoc.assignment_status = "On Hold"
+		hdoc.flags.ignore_validate_update_after_submit = True
+		hdoc.save(ignore_permissions=True)
+
+	tdoc = frappe.get_doc("Job Assignment", target_ja)
+	tdoc.assignment_status = "In Progress"
+	tdoc._custody_note = remarks or (
+		f"Device handover from {holder_name}" if holder_name else "Device taken"
+	)
+	tdoc.flags.ignore_validate_update_after_submit = True
+	tdoc.save(ignore_permissions=True)
+
+	return {"ok": True, "holder": to_technician}
 
 
 def _get_or_create_job_assignment(sr, technician, assignment_type, estimated_hours=None,

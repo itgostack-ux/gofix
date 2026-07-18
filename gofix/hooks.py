@@ -120,6 +120,9 @@ doc_events = {
 		"on_submit": "gofix.overrides.delivery_note.update_service_request_on_delivery",
 		"on_cancel": "gofix.overrides.delivery_note.update_service_request_on_delivery"
 	},
+	"Purchase Receipt": {
+		"on_submit": "gofix.purchase_api.allocate_received_spares_to_tickets"
+	},
 	"Service Request": {
 		"on_update": "gofix.gofix_services.whatsapp_notifications.on_service_request_update",
 		"on_update_after_submit": "gofix.gofix_services.doctype.service_request.service_request.ensure_service_order_on_accept",

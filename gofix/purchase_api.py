@@ -5,6 +5,71 @@ from frappe import _
 from frappe.utils import nowdate, add_days
 
 
+def allocate_received_spares_to_tickets(doc, method=None):
+	"""Purchase Receipt on_submit hook — close the GRN → ticket loop.
+
+	When a receipt lands for a spare that a Service Request is waiting on
+	(spare line "Awaiting Procurement" whose Material Request traces to this
+	receipt), flip the line to Reserved, log it on the ticket timeline, and
+	ping the assigned technician. Without this, arrived spares sat unnoticed
+	until someone manually re-checked the ticket.
+	"""
+	try:
+		item_rows = doc.get("items") or []
+		mr_names = {row.get("material_request") for row in item_rows if row.get("material_request")}
+		if not mr_names:
+			return
+		for mr_name in mr_names:
+			sr_name = frappe.db.get_value("Material Request", mr_name, "service_request")
+			if not sr_name:
+				continue
+			received_items = {
+				row.get("item_code") for row in item_rows if row.get("material_request") == mr_name
+			}
+			lines = frappe.get_all(
+				"SR Spare Line",
+				filters={
+					"parent": sr_name,
+					"parenttype": "Service Request",
+					"status": "Awaiting Procurement",
+					"spare_item": ("in", list(received_items)),
+				},
+				fields=["name", "spare_item", "item_name", "qty"],
+			)
+			if not lines:
+				continue
+			for line in lines:
+				frappe.db.set_value(
+					"SR Spare Line", line.name, "status", "Reserved", update_modified=False
+				)
+			sr = frappe.get_doc("Service Request", sr_name)
+			sr.add_comment(
+				"Comment",
+				_("Spares received via {0}: {1} — reserved for this ticket.").format(
+					doc.name, ", ".join(f"{l.item_name or l.spare_item} × {l.qty:g}" for l in lines)
+				),
+			)
+			# Ping the assigned technician (best effort).
+			engineer = frappe.db.get_value(
+				"Job Assignment",
+				{"service_request": sr_name, "docstatus": ("<", 2)},
+				"service_engineer",
+				order_by="creation desc",
+			)
+			user = frappe.db.get_value("Employee", engineer, "user_id") if engineer else None
+			if user:
+				frappe.publish_realtime(
+					"msgprint",
+					{
+						"message": _("Spares for {0} have arrived ({1}).").format(sr_name, doc.name),
+						"alert": True,
+					},
+					user=user,
+				)
+	except Exception:
+		frappe.log_error(frappe.get_traceback(), f"Spare allocation on {doc.name} failed")
+
+
 @frappe.whitelist()
 def create_pos_from_material_request(material_request: str) -> dict:
     """Gap 14: Convert a spare-parts Material Request into POs grouped by default supplier.

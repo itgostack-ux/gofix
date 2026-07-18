@@ -6,8 +6,10 @@
 Where does a ticket spend its life? One row per ticket, one column per
 ops-hub stage with the hours spent there (from GoFix Status Log — the same
 data the ticket's Status Timeline shows), the still-ticking time of the
-current stage included. Bottleneck column flags the slowest stage per
-ticket; the chart shows average hours per stage across the filtered set."""
+current stage included — PLUS the spare-procurement chain (MR → PO →
+Receipt) and the device's store↔hub logistics leg, so the full end-to-end
+timeline is one row. Bottleneck flags the slowest leg per ticket; the
+chart shows average hours per leg across the filtered set."""
 
 import frappe
 from frappe import _
@@ -27,6 +29,20 @@ STAGES = [
 ]
 _ALIAS = {"draft": "Draft", "intake": "Draft"}
 
+# Parallel legs: spare procurement (MR raised → PO placed → goods received)
+# and the device's store↔hub transfer. They overlap the Repair stage, so
+# they are shown alongside it, not added into Total TAT twice.
+EXTRA_LEGS = [
+	("spare_mr_po", _("MR → PO (h)")),
+	("spare_po_receipt", _("PO → Receipt (h)")),
+	("device_logistics", _("Logistics (h)")),
+]
+_EXTRA_LABEL = {
+	"spare_mr_po": "Spare MR → PO",
+	"spare_po_receipt": "Spare PO → Receipt",
+	"device_logistics": "Device Logistics",
+}
+
 
 def execute(filters=None):
 	filters = frappe._dict(filters or {})
@@ -45,9 +61,11 @@ def get_columns():
 	]
 	for key, label in STAGES:
 		cols.append({"label": label, "fieldname": frappe.scrub(key), "fieldtype": "Float", "width": 90, "precision": 1})
+	for fieldname, label in EXTRA_LEGS:
+		cols.append({"label": label, "fieldname": fieldname, "fieldtype": "Float", "width": 100, "precision": 1})
 	cols += [
 		{"label": _("Total TAT (h)"), "fieldname": "total_hours", "fieldtype": "Float", "width": 100, "precision": 1},
-		{"label": _("Bottleneck"), "fieldname": "bottleneck", "fieldtype": "Data", "width": 150},
+		{"label": _("Bottleneck"), "fieldname": "bottleneck", "fieldtype": "Data", "width": 170},
 	]
 	return cols
 
@@ -80,7 +98,8 @@ def get_data(filters):
 		"Service Request",
 		filters=sr_filters,
 		fields=["name", "customer_name", "device_item_name", "device_item",
-			"source_warehouse", "creation", "decision"],
+			"source_warehouse", "creation", "decision",
+			"transfer_date", "transfer_received_date", "transfer_status"],
 		order_by="service_date desc",
 		limit=500,
 	)
@@ -107,13 +126,11 @@ def get_data(filters):
 	for row in techs:
 		tech_map.setdefault(row.parent, set()).add(row.technician_name or row.technician)
 
+	procurement = _procurement_times(names)
+
 	stage_fields = {key: frappe.scrub(key) for key, _l in STAGES}
 	out = []
 	for t in tickets:
-		if filters.get("technician"):
-			tech_emp = frappe.db.get_value("Employee", filters.technician, "employee_name")
-			if not {tech_emp, filters.technician} & tech_map.get(t.name, set()):
-				continue
 		rows = log_map.get(t.name, [])
 		hours = {key: 0.0 for key in stage_fields}
 		# Time before the first transition = intake/draft
@@ -130,7 +147,17 @@ def get_data(filters):
 			hours[current] += max(flt(time_diff_in_hours(now_datetime(), last_at)), 0)
 
 		total = sum(hours.values())
-		bottleneck = max(hours, key=hours.get) if total else ""
+
+		extras = dict(procurement.get(t.name) or {})
+		extras["device_logistics"] = _logistics_hours(t)
+
+		# Bottleneck across ops stages AND the parallel legs
+		all_legs = dict(hours)
+		for field, val in extras.items():
+			if val:
+				all_legs[_EXTRA_LABEL[field]] = val
+		bottleneck = max(all_legs, key=all_legs.get) if any(all_legs.values()) else ""
+
 		rec = {
 			"ticket": t.name,
 			"customer_name": t.customer_name,
@@ -139,25 +166,89 @@ def get_data(filters):
 			"technicians": ", ".join(sorted(tech_map.get(t.name, []))) or "—",
 			"current_stage": current,
 			"total_hours": round(total, 1),
-			"bottleneck": f"{bottleneck} ({round(hours[bottleneck], 1)}h)" if bottleneck else "",
+			"bottleneck": f"{bottleneck} ({round(all_legs[bottleneck], 1)}h)" if bottleneck else "",
 		}
 		for key, field in stage_fields.items():
 			rec[field] = round(hours[key], 1)
+		for field, _l in EXTRA_LEGS:
+			rec[field] = round(flt(extras.get(field)), 1)
 		out.append(rec)
 	return out
+
+
+def _procurement_times(names):
+	"""Per SR: hours MR→PO and PO→Receipt for spares requested on the ticket.
+	Open-ended legs keep ticking (no PO yet → MR→PO = since MR was raised)."""
+	mrs = frappe.get_all(
+		"Material Request",
+		filters={"service_request": ("in", names), "docstatus": ("<", 2)},
+		fields=["name", "service_request", "creation", "status"],
+	)
+	if not mrs:
+		return {}
+	mr_names = [m.name for m in mrs]
+
+	def _first_by_mr(doctype, item_doctype):
+		rows = frappe.db.sql(
+			f"""
+			SELECT i.material_request AS mr, MIN(p.creation) AS at
+			FROM `tab{doctype}` p
+			JOIN `tab{item_doctype}` i ON i.parent = p.name
+			WHERE i.material_request IN %(mrs)s AND p.docstatus = 1
+			GROUP BY i.material_request
+			""",
+			{"mrs": mr_names},
+			as_dict=True,
+		)
+		return {r.mr: r.at for r in rows}
+
+	po_at = _first_by_mr("Purchase Order", "Purchase Order Item")
+	pr_at = _first_by_mr("Purchase Receipt", "Purchase Receipt Item")
+
+	out = {}
+	for m in mrs:
+		rec = out.setdefault(m.service_request, {"spare_mr_po": 0.0, "spare_po_receipt": 0.0})
+		po = po_at.get(m.name)
+		pr = pr_at.get(m.name)
+		if po:
+			rec["spare_mr_po"] = max(rec["spare_mr_po"], flt(time_diff_in_hours(po, m.creation)))
+			end = pr or (now_datetime() if m.status not in ("Received", "Stopped", "Cancelled") else None)
+			if end:
+				rec["spare_po_receipt"] = max(rec["spare_po_receipt"], flt(time_diff_in_hours(end, po)))
+		elif m.status not in ("Received", "Stopped", "Cancelled"):
+			# MR raised, purchase hasn't acted yet — still waiting
+			rec["spare_mr_po"] = max(rec["spare_mr_po"], flt(time_diff_in_hours(now_datetime(), m.creation)))
+	return out
+
+
+def _logistics_hours(t):
+	"""Device transfer leg: store → hub (and still-in-transit keeps ticking)."""
+	if not t.get("transfer_date"):
+		return 0.0
+	end = t.get("transfer_received_date")
+	if not end and t.get("transfer_status") == "In Transit":
+		end = now_datetime()
+	if not end:
+		return 0.0
+	return max(flt(time_diff_in_hours(end, t.transfer_date)), 0.0)
+
+
+def _all_leg_fields():
+	legs = [(frappe.scrub(key), str(label).replace(" (h)", "")) for key, label in STAGES]
+	legs += [(field, _EXTRA_LABEL[field]) for field, _l in EXTRA_LEGS]
+	return legs
 
 
 def get_chart(data):
 	if not data:
 		return None
 	labels, values = [], []
-	for key, label in STAGES:
-		field = frappe.scrub(key)
+	for field, label in _all_leg_fields():
 		vals = [r[field] for r in data if r.get(field)]
-		labels.append(str(label).replace(" (h)", ""))
+		labels.append(label)
 		values.append(round(sum(vals) / len(vals), 1) if vals else 0)
 	return {
-		"data": {"labels": labels, "datasets": [{"name": _("Avg hours in stage"), "values": values}]},
+		"data": {"labels": labels, "datasets": [{"name": _("Avg hours in leg"), "values": values}]},
 		"type": "bar",
 		"colors": ["#7c3aed"],
 	}
@@ -167,13 +258,12 @@ def get_summary(data):
 	if not data:
 		return []
 	avg_tat = round(sum(r["total_hours"] for r in data) / len(data), 1)
-	stage_totals = {}
-	for key, _l in STAGES:
-		field = frappe.scrub(key)
-		stage_totals[key] = sum(r.get(field) or 0 for r in data)
-	slowest = max(stage_totals, key=stage_totals.get)
+	leg_totals = {}
+	for field, label in _all_leg_fields():
+		leg_totals[label] = sum(r.get(field) or 0 for r in data)
+	slowest = max(leg_totals, key=leg_totals.get)
 	return [
 		{"label": _("Tickets"), "value": len(data), "datatype": "Int"},
 		{"label": _("Avg TAT (h)"), "value": avg_tat, "datatype": "Float"},
-		{"label": _("Slowest Stage (overall)"), "value": f"{slowest} — {round(stage_totals[slowest], 1)}h", "datatype": "Data", "indicator": "Orange"},
+		{"label": _("Slowest Leg (overall)"), "value": f"{slowest} — {round(leg_totals[slowest], 1)}h", "datatype": "Data", "indicator": "Orange"},
 	]

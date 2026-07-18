@@ -24,12 +24,6 @@ frappe.query_reports["GoFix Ticket Stage Time"] = {
 			get_query: () => ({ filters: { is_group: 0, disabled: 0 } }),
 		},
 		{
-			fieldname: "technician",
-			label: __("Technician"),
-			fieldtype: "Link",
-			options: "Employee",
-		},
-		{
 			fieldname: "from_date",
 			label: __("From Date"),
 			fieldtype: "Date",

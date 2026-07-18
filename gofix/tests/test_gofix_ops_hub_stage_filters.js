@@ -8,6 +8,7 @@ global.frappe = {
 };
 
 const {
+	format_assignment_hours,
 	get_ops_stage_list_filters,
 } = require(path.resolve(
 	__dirname,
@@ -36,4 +37,10 @@ assert.deepEqual(get_ops_stage_list_filters(queue, "done"), {
 });
 assert.equal(get_ops_stage_list_filters(queue, "closed"), null);
 
-console.log("GoFix Ops Hub stage list filters: PASS");
+assert.equal(format_assignment_hours(null), "—");
+assert.equal(format_assignment_hours(0), "0h");
+assert.equal(format_assignment_hours(0.25), "15m");
+assert.equal(format_assignment_hours(1.05), "1h 3m");
+assert.equal(format_assignment_hours(3.84), "3h 50m");
+
+console.log("GoFix Ops Hub stage filters and assignment hours: PASS");

@@ -1,9 +1,214 @@
 # Copyright (c) 2024, Frappe Technologies Pvt. Ltd. and contributors
 # For license information, please see license.txt
 
+import json
+
 import frappe
-from frappe.model.document import Document
 from frappe import _
+from frappe.model.document import Document
+from frappe.utils import flt, get_datetime, now_datetime, time_diff_in_hours
+
+
+def _job_assignment_status_transitions(job_assignment):
+	"""Return assignment-status transitions recorded in Version history."""
+	transitions = []
+	for row in frappe.get_all(
+		"Version",
+		filters={
+			"ref_doctype": "Job Assignment",
+			"docname": job_assignment,
+		},
+		fields=["creation", "data"],
+		order_by="creation asc",
+	):
+		try:
+			data = json.loads(row.data or "{}")
+		except (TypeError, ValueError):
+			continue
+		for change in data.get("changed") or []:
+			if len(change) >= 3 and change[0] == "assignment_status":
+				transitions.append(
+					(get_datetime(row.creation), change[1] or "", change[2] or "")
+				)
+	return transitions
+
+
+def _reconstruct_in_progress_periods(transitions, terminal_end=None):
+	"""Rebuild active-work periods and return ``(closed_periods, open_start)``."""
+	periods = []
+	open_start = None
+
+	for changed_at, old_status, new_status in sorted(transitions, key=lambda row: row[0]):
+		changed_at = get_datetime(changed_at)
+		if new_status == "In Progress" and old_status != "In Progress":
+			if open_start is None:
+				open_start = changed_at
+			elif changed_at < open_start:
+				open_start = changed_at
+		elif old_status == "In Progress" and new_status != "In Progress":
+			if open_start and changed_at >= open_start:
+				periods.append((open_start, changed_at))
+			open_start = None
+
+	if open_start and terminal_end:
+		terminal_end = get_datetime(terminal_end)
+		if terminal_end >= open_start:
+			periods.append((open_start, terminal_end))
+			open_start = None
+
+	return periods, open_start
+
+
+def _same_moment(left, right, tolerance_seconds=2):
+	if not left or not right:
+		return False
+	return abs((get_datetime(left) - get_datetime(right)).total_seconds()) <= tolerance_seconds
+
+
+def _custody_period_exists(existing_rows, started_at, ended_at):
+	return any(
+		_same_moment(row.taken_at, started_at)
+		and _same_moment(row.released_at, ended_at)
+		for row in existing_rows
+	)
+
+
+def _insert_custody_period(assignment, started_at, ended_at, note):
+	hours = max(flt(time_diff_in_hours(ended_at, started_at)), 0)
+	service_request = assignment.service_request or frappe.db.get_value(
+		"Sales Order",
+		assignment.service_order,
+		"service_request",
+	)
+	frappe.get_doc({
+		"doctype": "GoFix Custody Log",
+		"service_request": service_request,
+		"service_order": assignment.service_order,
+		"job_assignment": assignment.name,
+		"technician": assignment.service_engineer,
+		"technician_name": (
+			frappe.db.get_value("Employee", assignment.service_engineer, "employee_name")
+			or assignment.service_engineer
+		),
+		"taken_at": started_at,
+		"released_at": ended_at,
+		"hours": round(hours, 2),
+		"note": note,
+	}).insert(ignore_permissions=True)
+	return hours
+
+
+def reconcile_job_assignment_actual_hours(job_assignments=None, commit=False):
+	"""Backfill missing actual hours from status history.
+
+	Only submitted, completed assignments whose actual hours are zero are
+	changed. Re-running is safe: repaired assignments no longer qualify and
+	matching custody periods are not inserted twice.
+	"""
+	if not frappe.db.exists("DocType", "GoFix Custody Log"):
+		return {
+			"examined": 0,
+			"repaired": 0,
+			"skipped": 0,
+			"custody_logs_created": 0,
+		}
+
+	if isinstance(job_assignments, str):
+		job_assignments = [job_assignments]
+
+	filters = {
+		"docstatus": 1,
+		"assignment_status": ("in", ("Completed", "Closed")),
+	}
+	if job_assignments:
+		filters["name"] = ("in", tuple(job_assignments))
+
+	rows = frappe.get_all(
+		"Job Assignment",
+		filters=filters,
+		fields=[
+			"name", "service_request", "service_order", "service_engineer",
+			"start_datetime", "end_datetime", "actual_hours",
+		],
+		order_by="creation asc",
+	)
+	summary = {
+		"examined": 0,
+		"repaired": 0,
+		"skipped": 0,
+		"custody_logs_created": 0,
+		"results": [],
+	}
+
+	for row in rows:
+		if flt(row.actual_hours) > 0:
+			continue
+		summary["examined"] += 1
+		transitions = _job_assignment_status_transitions(row.name)
+		periods, _open_start = _reconstruct_in_progress_periods(
+			transitions,
+			terminal_end=row.end_datetime,
+		)
+
+		# Older manually-maintained assignments may have timestamps but no
+		# status Version rows. Keep that established calculation as fallback.
+		if not periods and row.start_datetime and row.end_datetime:
+			started_at = get_datetime(row.start_datetime)
+			ended_at = get_datetime(row.end_datetime)
+			if ended_at >= started_at:
+				periods = [(started_at, ended_at)]
+
+		total_hours = sum(
+			max(flt(time_diff_in_hours(ended_at, started_at)), 0)
+			for started_at, ended_at in periods
+		)
+		if total_hours <= 0:
+			summary["skipped"] += 1
+			summary["results"].append({
+				"job_assignment": row.name,
+				"status": "SKIPPED",
+				"reason": "No recoverable In Progress period",
+			})
+			continue
+
+		existing_periods = frappe.get_all(
+			"GoFix Custody Log",
+			filters={"job_assignment": row.name},
+			fields=["taken_at", "released_at"],
+		)
+		for started_at, ended_at in periods:
+			if _custody_period_exists(existing_periods, started_at, ended_at):
+				continue
+			_insert_custody_period(
+				row,
+				started_at,
+				ended_at,
+				"Backfilled from Job Assignment status history.",
+			)
+			summary["custody_logs_created"] += 1
+
+		updates = {"actual_hours": round(total_hours, 2)}
+		if not row.start_datetime:
+			updates["start_datetime"] = periods[0][0]
+		if not row.end_datetime:
+			updates["end_datetime"] = periods[-1][1]
+		frappe.db.set_value(
+			"Job Assignment",
+			row.name,
+			updates,
+			update_modified=False,
+		)
+		summary["repaired"] += 1
+		summary["results"].append({
+			"job_assignment": row.name,
+			"status": "REPAIRED",
+			"actual_hours": round(total_hours, 2),
+			"periods": len(periods),
+		})
+
+	if commit:
+		frappe.db.commit()
+	return summary
 
 
 class JobAssignment(Document):
@@ -56,7 +261,7 @@ class JobAssignment(Document):
 		)
 		if not sr:
 			return
-		now = frappe.utils.now_datetime()
+		now = now_datetime()
 		if event == "take":
 			if not frappe.db.exists(
 				"GoFix Custody Log",
@@ -84,8 +289,6 @@ class JobAssignment(Document):
 				as_dict=True,
 			)
 			if open_row:
-				from frappe.utils import flt, time_diff_in_hours
-
 				hours = max(flt(time_diff_in_hours(now, open_row.taken_at)), 0)
 				frappe.db.set_value("GoFix Custody Log", open_row.name, {
 					"released_at": now,
@@ -96,6 +299,29 @@ class JobAssignment(Document):
 					round(flt(self.actual_hours) + hours, 2),
 					update_modified=False,
 				)
+			else:
+				# The custody DocType was introduced after some assignments
+				# were already In Progress. Recover that last active interval
+				# from Version history instead of silently recording zero.
+				_transitions = _job_assignment_status_transitions(self.name)
+				_periods, open_start = _reconstruct_in_progress_periods(_transitions)
+				if open_start and not frappe.db.exists(
+					"GoFix Custody Log",
+					{"job_assignment": self.name, "taken_at": open_start},
+				):
+					hours = _insert_custody_period(
+						self,
+						open_start,
+						now,
+						"Recovered from Job Assignment status history.",
+					)
+					if not self.start_datetime:
+						self.db_set("start_datetime", open_start, update_modified=False)
+					self.db_set(
+						"actual_hours",
+						round(flt(self.actual_hours) + hours, 2),
+						update_modified=False,
+					)
 
 	def validate_single_active_technician(self):
 		"""Device custody rule: a ticket may be split across technicians
@@ -155,14 +381,22 @@ class JobAssignment(Document):
 	def calculate_hours(self):
 		"""Calculate actual hours from start and end datetime"""
 		if self.start_datetime and self.end_datetime:
-			from frappe.utils import get_datetime, time_diff_in_hours
 			start = get_datetime(self.start_datetime)
 			end = get_datetime(self.end_datetime)
 			
 			if end < start:
 				frappe.throw(_("End Date & Time cannot be before Start Date & Time"), title=_("Job Assignment Error"))
-			
-			self.actual_hours = time_diff_in_hours(end, start)
+
+			# Custody rows exclude On Hold periods and are the authoritative
+			# source once tracking has started. The legacy wall-clock fallback
+			# remains for assignments that have no custody history.
+			has_custody_history = (
+				self.name
+				and frappe.db.exists("DocType", "GoFix Custody Log")
+				and frappe.db.exists("GoFix Custody Log", {"job_assignment": self.name})
+			)
+			if not has_custody_history:
+				self.actual_hours = time_diff_in_hours(end, start)
 	
 	def on_update(self):
 		"""Check if job sheet is completed and update Service Order"""

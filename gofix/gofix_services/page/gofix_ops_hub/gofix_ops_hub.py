@@ -531,7 +531,11 @@ def get_ticket_detail(sr_name) -> dict:
 
 	assignments = frappe.get_all(
 		"Job Assignment",
-		filters={"service_request": sr_name, "docstatus": 1},
+		filters={
+			"service_request": sr_name,
+			"docstatus": 1,
+			"assignment_status": ("!=", "Cancelled"),
+		},
 		fields=[
 			"name", "service_engineer", "job_type", "assignment_status",
 			"assignment_date", "priority", "estimated_hours", "actual_hours",
@@ -1305,7 +1309,7 @@ def _solution_rows_for_assignment(sr, row_names=None) -> list:
 
 @frappe.whitelist()
 def assign_technician(sr_name, technician, job_type="Repair", estimated_hours=None) -> dict:
-	"""Create a submitted Job Assignment for the SR."""
+	"""Create or reuse a submitted Job Assignment for the SR."""
 	frappe.has_permission("Job Assignment", "create", throw=True)
 
 	sr = frappe.get_doc("Service Request", sr_name)
@@ -1319,19 +1323,13 @@ def assign_technician(sr_name, technician, job_type="Repair", estimated_hours=No
 		[row.repair_solution for row in _solution_rows_for_assignment(sr)],
 	)
 
-	ja = frappe.new_doc("Job Assignment")
-	ja.service_order = sr.service_order
-	ja.service_request = sr_name
-	ja.service_engineer = technician
-	ja.job_type = job_type
-	ja.assignment_type = "Technician Assignment"
-	ja.assigned_by = frappe.session.user
-	ja.priority = sr.priority
-	if estimated_hours:
-		ja.estimated_hours = flt(estimated_hours)
-
-	ja.insert()
-	ja.submit()
+	ja = _get_or_create_job_assignment(
+		sr,
+		technician,
+		"Technician Assignment",
+		estimated_hours=estimated_hours,
+		job_type=job_type,
+	)
 	frappe.db.commit()
 
 	_log_ops_stage(sr_name, "assign", "repair")

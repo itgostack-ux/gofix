@@ -61,8 +61,29 @@ function get_ops_stage_list_filters(queue, stage) {
 	return names.length ? { name: ["in", names] } : null;
 }
 
+function format_assignment_hours(value) {
+	if (value === null || value === undefined || value === "") {
+		return "—";
+	}
+	const hours = Number(value);
+	if (!Number.isFinite(hours) || hours < 0) {
+		return "—";
+	}
+	if (hours === 0) {
+		return "0h";
+	}
+
+	let minutes = Math.max(1, Math.round(hours * 60));
+	const wholeHours = Math.floor(minutes / 60);
+	minutes %= 60;
+	if (!wholeHours) {
+		return `${minutes}m`;
+	}
+	return minutes ? `${wholeHours}h ${minutes}m` : `${wholeHours}h`;
+}
+
 if (typeof module !== "undefined" && module.exports) {
-	module.exports = { get_ops_stage_list_filters };
+	module.exports = { format_assignment_hours, get_ops_stage_list_filters };
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════ */
@@ -590,7 +611,7 @@ class GoFixOpsHub {
 				<td><span class="goh-badge badge-muted">${esc(a.job_type)}</span></td>
 				<td><span class="goh-badge ${a.assignment_status === "Completed" ? "badge-green" : a.assignment_status === "In Progress" ? "badge-blue" : "badge-muted"}">${esc(a.assignment_status)}</span></td>
 				<td>${a.estimated_hours || "—"}</td>
-				<td>${a.actual_hours || "—"}</td>
+				<td>${format_assignment_hours(a.actual_hours)}</td>
 			</tr>
 		`).join("");
 

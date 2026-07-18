@@ -59,18 +59,22 @@ def _stage_key(label):
 
 def get_data(filters):
 	sr_filters = {"docstatus": 1}
-	if filters.get("company"):
-		sr_filters["company"] = filters.company
-	if filters.get("store"):
-		sr_filters["source_warehouse"] = filters.store
-	if filters.get("from_date"):
-		sr_filters["service_date"] = (">=", filters.from_date)
-	if filters.get("to_date") and filters.get("from_date"):
-		sr_filters["service_date"] = ("between", [filters.from_date, filters.to_date])
-	elif filters.get("to_date"):
-		sr_filters["service_date"] = ("<=", filters.to_date)
-	if filters.get("open_only"):
-		sr_filters["decision"] = ("not in", ["Closed", "Cancelled", "Rejected", "Expired"])
+	if filters.get("service_request"):
+		# An explicit SR number wins — don't let the date-range default hide it
+		sr_filters["name"] = filters.service_request
+	else:
+		if filters.get("company"):
+			sr_filters["company"] = filters.company
+		if filters.get("store"):
+			sr_filters["source_warehouse"] = filters.store
+		if filters.get("from_date"):
+			sr_filters["service_date"] = (">=", filters.from_date)
+		if filters.get("to_date") and filters.get("from_date"):
+			sr_filters["service_date"] = ("between", [filters.from_date, filters.to_date])
+		elif filters.get("to_date"):
+			sr_filters["service_date"] = ("<=", filters.to_date)
+		if filters.get("open_only"):
+			sr_filters["decision"] = ("not in", ["Closed", "Cancelled", "Rejected", "Expired"])
 
 	tickets = frappe.get_all(
 		"Service Request",

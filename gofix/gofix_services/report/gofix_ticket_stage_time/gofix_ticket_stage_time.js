@@ -11,6 +11,12 @@ frappe.query_reports["GoFix Ticket Stage Time"] = {
 			default: frappe.defaults.get_user_default("Company"),
 		},
 		{
+			fieldname: "service_request",
+			label: __("SR Number"),
+			fieldtype: "Link",
+			options: "Service Request",
+		},
+		{
 			fieldname: "store",
 			label: __("Store / Location"),
 			fieldtype: "Link",

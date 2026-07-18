@@ -89,6 +89,12 @@ def verify_delivery_otp(service_order, otp_input) -> dict:
 	if not so.is_service_order:
 		frappe.throw(_("Not a Service Order"), title=_("API Error"))
 
+	from ch_item_master.ch_core.shadow_live import master_otp_matches
+
+	if master_otp_matches(otp_input):
+		so.db_set("delivery_otp_verified", 1, update_modified=False)
+		return {"message": _("Shadow-live master OTP accepted."), "verified": True}
+
 	stored_otp = so.delivery_otp
 	if not stored_otp:
 		frappe.throw(_("No OTP generated. Please generate OTP first."), title=_("API Error"))
@@ -176,6 +182,12 @@ def complete_delivery(service_order, remarks=None) -> dict:
 
 def _send_delivery_otp(so, otp):
 	"""Send delivery OTP via SMS and/or email."""
+	from ch_item_master.ch_core.shadow_live import suppress_customer_comms
+
+	if suppress_customer_comms():
+		frappe.logger("shadow_live").info(f"Delivery OTP suppressed (shadow live) for {so.name}")
+		return
+
 	sr = None
 	if so.service_request:
 		sr = frappe.get_doc("Service Request", so.service_request)
@@ -298,6 +310,17 @@ def request_remote_billing_otp(service_request) -> dict:
 		expires_in_sec=_REMOTE_BILLING_OTP_TTL,
 	)
 
+	from ch_item_master.ch_core.shadow_live import suppress_customer_comms
+
+	if suppress_customer_comms():
+		# Shadow-live pilot: nothing goes to the customer — staff use the
+		# configured master OTP instead.
+		return {
+			"otp_sent": True,
+			"channels": ["Shadow Live"],
+			"message": _("Shadow live — no OTP sent to the customer. Enter the master OTP."),
+		}
+
 	channels = []
 	phone = (sr.contact_number or "").strip()
 	email = (sr.get("email") or "").strip()
@@ -366,6 +389,23 @@ def request_remote_billing_otp(service_request) -> dict:
 def verify_remote_billing_otp(service_request, otp) -> dict:
 	"""Verify the customer's billing-consent OTP; consent stays valid 30 minutes."""
 	frappe.only_for(_BILLING_ROLES)
+	from ch_item_master.ch_core.shadow_live import master_otp_matches
+
+	if master_otp_matches(otp):
+		frappe.cache().delete_value(f"gofix_remote_billing_otp::{service_request}")
+		frappe.cache().set_value(
+			f"gofix_remote_billing_ok::{service_request}", 1, expires_in_sec=_REMOTE_BILLING_CONSENT_TTL
+		)
+		try:
+			sr = frappe.get_doc("Service Request", service_request)
+			sr.add_comment(
+				"Comment",
+				_("Off-store billing unlocked via shadow-live master OTP (by {0}).").format(frappe.session.user),
+			)
+		except Exception:
+			pass
+		return {"verified": True, "message": _("Shadow-live master OTP accepted — billing unlocked.")}
+
 	stored = frappe.cache().get_value(f"gofix_remote_billing_otp::{service_request}")
 	if not stored:
 		frappe.throw(_("No active OTP for {0} — send a new one.").format(service_request), title=_("OTP Expired"))

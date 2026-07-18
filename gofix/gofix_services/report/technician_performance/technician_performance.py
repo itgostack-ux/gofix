@@ -56,18 +56,20 @@ def get_data(filters):
 
 	query = f"""
 		SELECT
-			COALESCE(ja.service_engineer, ja.user, 'Unassigned') as technician,
+			COALESCE(emp.employee_name, ja.service_engineer, ja.user, 'Unassigned') as technician,
+			COALESCE(ja.service_engineer, ja.user, 'Unassigned') as technician_id,
 			SUM(CASE WHEN ja.assignment_status IN ('Completed', 'Closed') THEN 1 ELSE 0 END) as jobs_completed,
 			SUM(CASE WHEN ja.assignment_status IN ('Open', 'In Progress') THEN 1 ELSE 0 END) as jobs_open,
 			AVG(ja.actual_hours) as avg_hours,
 			SUM(COALESCE(ja.actual_hours, 0)) as total_hours,
 			SUM(CASE WHEN ja.repair_outcome = 'Not Repairable' THEN 1 ELSE 0 END) as not_repairable
 		FROM `tabJob Assignment` ja
+		LEFT JOIN `tabEmployee` emp ON emp.name = ja.service_engineer
 		{so_join}
 		{sr_join}
 		WHERE ja.docstatus < 2
 		{conditions}{scope_sql}
-		GROUP BY COALESCE(ja.service_engineer, ja.user, 'Unassigned')
+		GROUP BY COALESCE(ja.service_engineer, ja.user, 'Unassigned'), COALESCE(emp.employee_name, ja.service_engineer, ja.user, 'Unassigned')
 		ORDER BY jobs_completed DESC
 	"""
 
@@ -75,7 +77,7 @@ def get_data(filters):
 
 	# Calculate QC pass rate and rework from Sales Orders
 	for row in data:
-		tech = row.technician
+		tech = row.get("technician_id") or row.technician
 		if tech and tech != "Unassigned":
 			# Get SO names for this technician's completed jobs
 			extra = ""

@@ -173,7 +173,9 @@ def get_service_hub_data(company=None, store=None, from_date=None, to_date=None)
                    sr.device_item_name,
                    sr.brand, sr.decision, sr.status,
                    DATEDIFF(%(today)s, sr.creation) AS days_in_service,
-                   (SELECT ja.service_engineer FROM `tabJob Assignment` ja
+                   (SELECT COALESCE(e.employee_name, ja.service_engineer)
+                    FROM `tabJob Assignment` ja
+                    LEFT JOIN `tabEmployee` e ON e.name = ja.service_engineer
                     WHERE ja.service_request = sr.name ORDER BY ja.creation DESC LIMIT 1) AS technician
             FROM `tabService Request` sr
             WHERE sr.decision = 'In Service' {co} {wh}
@@ -201,18 +203,19 @@ def get_service_hub_data(company=None, store=None, from_date=None, to_date=None)
             ORDER BY sr.expected_completion_date ASC LIMIT 50""", prm, as_dict=True
     )
 
-    # Technician workload
+    # Technician workload — display names, never HR-EMP IDs
     technician_load = frappe.db.sql(
         f"""SELECT
-                ja.service_engineer AS technician,
+                COALESCE(emp.employee_name, ja.service_engineer) AS technician,
                 SUM(CASE WHEN sr.decision IN ('Accepted','In Service') THEN 1 ELSE 0 END) AS active_jobs,
                 SUM(CASE WHEN sr.decision IN ('Completed','Delivered','Invoiced') THEN 1 ELSE 0 END) AS completed,
                 ROUND(AVG(CASE WHEN sr.decision IN ('Completed','Delivered','Invoiced')
                     THEN DATEDIFF(sr.modified, sr.creation) END), 1) AS avg_tat
             FROM `tabJob Assignment` ja
             JOIN `tabService Request` sr ON sr.name = ja.service_request
+            LEFT JOIN `tabEmployee` emp ON emp.name = ja.service_engineer
             WHERE ja.docstatus < 2 {co} {wh} {dc('sr.creation')}
-            GROUP BY ja.service_engineer
+            GROUP BY ja.service_engineer, COALESCE(emp.employee_name, ja.service_engineer)
             ORDER BY active_jobs DESC LIMIT 20""", prm, as_dict=True
     )
 

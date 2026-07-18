@@ -1073,7 +1073,7 @@ class GoFixOpsHub {
 			${doneRows ? `
 				<details class="goh-sol-done-details" ${activeRows || queuedRows ? "" : "open"}>
 					<summary class="goh-sol-group-label" style="cursor:pointer">
-						<i class="fa fa-check-circle text-success"></i> ${__("Done")} (${doneSols.length}) <span class="text-muted small">${__("— click to expand")}</span>
+						<span class="goh-caret"></span><i class="fa fa-check-circle text-success"></i> ${__("Done")} (${doneSols.length})
 					</summary>
 					${doneRows}
 				</details>` : ""}
@@ -1081,7 +1081,7 @@ class GoFixOpsHub {
 
 		const cancelledCards = cancelledSols.length ? `
 			<details class="goh-sol-done-details">
-				<summary class="goh-sol-group-label" style="cursor:pointer"><i class="fa fa-ban"></i> ${__("Cancelled")} (${cancelledSols.length})</summary>
+				<summary class="goh-sol-group-label" style="cursor:pointer"><span class="goh-caret"></span><i class="fa fa-ban"></i> ${__("Cancelled")} (${cancelledSols.length})</summary>
 				${cancelledSols.map(sol => `
 					<div class="goh-sol-row goh-sol-row--cancelled">
 						<span class="goh-sol-dot"></span>
@@ -1174,7 +1174,7 @@ class GoFixOpsHub {
 				<div class="goh-tech-chips">${techInfo || `<span class="text-muted">${__("None assigned")}</span>`}</div>
 				${custodyRows ? `
 				<details class="goh-custody-details">
-					<summary class="small text-muted" style="cursor:pointer;font-weight:600">${__("Device custody history")} (${(d.custody_log || []).length})</summary>
+					<summary class="small text-muted goh-sol-group-label" style="cursor:pointer;margin:0"><span class="goh-caret"></span>${__("Device custody history")} (${(d.custody_log || []).length})</summary>
 					<div style="padding-top:4px">${custodyRows}</div>
 				</details>` : ""}
 			</div>

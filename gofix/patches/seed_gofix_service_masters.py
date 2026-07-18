@@ -175,6 +175,85 @@ _QC_TEMPLATES = {
 		("Liquid damage indicators photographed", 1, 0, "Photo"),
 		("24-hour soak test completed", 1, 0, "Pass-Fail"),
 	]),
+	# Outgoing-inspection packs modelled on OEM service-centre QC
+	# (Apple AST 2 diagnostics suite / Samsung GSPN final inspection).
+	"Charging & Power QC": ("Charging & Power", [
+		("Wired charging at rated wattage", 1, 1, "Measurement"),
+		("Charging port seated — no debris or wobble", 1, 0, "Pass-Fail"),
+		("Wireless charging working (if supported)", 0, 0, "Pass-Fail"),
+		("No abnormal heat while charging", 1, 1, "Pass-Fail"),
+		("Battery percentage rises consistently", 1, 0, "Pass-Fail"),
+	]),
+	"Board Diagnosis QC": ("Board Diagnosis", [
+		("All power rails at spec voltage", 1, 1, "Measurement"),
+		("Repaired area inspected under microscope", 1, 1, "Pass-Fail"),
+		("No boot loop across 5 restarts", 1, 1, "Pass-Fail"),
+		("Baseband / WiFi chips detected in diagnostics", 1, 1, "Pass-Fail"),
+		("30-minute stress test — no thermal shutdown", 1, 0, "Pass-Fail"),
+		("Board photos taken before reassembly", 1, 0, "Photo"),
+	]),
+	"Camera QC": ("Camera", [
+		("Rear camera photo and video sample clear", 1, 1, "Pass-Fail"),
+		("Front camera photo and video sample clear", 1, 1, "Pass-Fail"),
+		("Autofocus / OIS working — no rattle", 1, 0, "Pass-Fail"),
+		("No dust or fingerprints inside lens", 1, 0, "Pass-Fail"),
+		("Flash fires and exposure normal", 0, 0, "Pass-Fail"),
+		("Portrait / depth mode working (if supported)", 0, 0, "Pass-Fail"),
+	]),
+	"Speaker & Mic QC": ("Speaker & Mic", [
+		("Loudspeaker clear at max volume — no distortion", 1, 1, "Pass-Fail"),
+		("Earpiece clear on live call test", 1, 1, "Pass-Fail"),
+		("Microphone recording clear (voice memo test)", 1, 1, "Pass-Fail"),
+		("Noise-cancellation mic working on call", 0, 0, "Pass-Fail"),
+		("Speaker mesh clean and sealed", 0, 0, "Pass-Fail"),
+	]),
+	"Physical Damage QC": ("Physical Damage", [
+		("Frame and housing aligned — no gaps", 1, 1, "Pass-Fail"),
+		("All screws present and torqued", 1, 0, "Pass-Fail"),
+		("Buttons click and return correctly", 1, 0, "Pass-Fail"),
+		("Water-seal adhesive reapplied", 1, 0, "Pass-Fail"),
+		("Before / after photos on record", 1, 0, "Photo"),
+	]),
+	"Software QC": ("Software", [
+		("Device boots to latest supported OS", 1, 1, "Pass-Fail"),
+		("Built-in diagnostics suite passes", 1, 1, "Pass-Fail"),
+		("No test profiles / developer artifacts left on device", 1, 1, "Pass-Fail"),
+		("Activation and sign-in screens reachable", 1, 0, "Pass-Fail"),
+		("Idle battery drain normal over 30 minutes", 0, 0, "Pass-Fail"),
+	]),
+	"Network & Connectivity QC": ("Network & Connectivity", [
+		("SIM detected in all slots", 1, 1, "Pass-Fail"),
+		("Live call completes both ways", 1, 1, "Pass-Fail"),
+		("Mobile data browsing works", 1, 0, "Pass-Fail"),
+		("WiFi connects on 2.4GHz and 5GHz", 1, 0, "Pass-Fail"),
+		("Bluetooth pairs and streams audio", 0, 0, "Pass-Fail"),
+		("GPS gets a location lock outdoors", 0, 0, "Pass-Fail"),
+	]),
+	"Sensors & Biometrics QC": ("Sensors & Biometrics", [
+		("Fingerprint enrols and unlocks reliably", 1, 1, "Pass-Fail"),
+		("Face unlock working (if supported)", 1, 1, "Pass-Fail"),
+		("Proximity sensor blanks screen on call", 1, 0, "Pass-Fail"),
+		("Gyro / accelerometer — rotation test", 1, 0, "Pass-Fail"),
+		("Ambient light auto-brightness responds", 0, 0, "Pass-Fail"),
+		("Compass calibrates correctly", 0, 0, "Pass-Fail"),
+	]),
+	"Buttons & Keys QC": ("Buttons & Keys", [
+		("Power button tactile — no sticking", 1, 1, "Pass-Fail"),
+		("Volume rocker both directions working", 1, 0, "Pass-Fail"),
+		("Mute / action switch working (if present)", 0, 0, "Pass-Fail"),
+		("No key ghosting on keyboard (laptops)", 0, 0, "Pass-Fail"),
+	]),
+	"Data Recovery QC": ("Data Recovery", [
+		("Recovered data verified against customer list", 1, 1, "Pass-Fail"),
+		("Data handed over on agreed medium", 1, 1, "Pass-Fail"),
+		("No customer data retained on shop systems", 1, 1, "Pass-Fail"),
+		("File integrity spot-checked (opens correctly)", 1, 0, "Pass-Fail"),
+	]),
+	"Accessories QC": ("Accessories", [
+		("Accessory pairs / connects to device", 1, 1, "Pass-Fail"),
+		("Genuine-part verification done", 1, 0, "Pass-Fail"),
+		("Accessory physically undamaged and clean", 1, 0, "Pass-Fail"),
+	]),
 }
 
 
@@ -294,21 +373,30 @@ def _seed_qc_templates() -> None:
 		existing = frappe.db.exists("GoFix QC Template", template_name)
 		if existing:
 			doc = frappe.get_doc("GoFix QC Template", existing)
+			changed = False
+			# QC packs are master data, not company data — a company value
+			# (inherited from the seeding user's default) hides the template
+			# from every other company's tickets. Heal to universal.
+			if doc.company:
+				doc.company = ""
+				changed = True
 			have = {c.check_name for c in doc.checks}
 			new = [c for c in checks if c[0] not in have]
-			if new:
-				for check_name, mandatory, critical, check_type in new:
-					doc.append("checks", {
-						"check_name": check_name,
-						"is_mandatory": mandatory,
-						"is_critical": critical,
-						"check_type": check_type,
-					})
+			for check_name, mandatory, critical, check_type in new:
+				doc.append("checks", {
+					"check_name": check_name,
+					"is_mandatory": mandatory,
+					"is_critical": critical,
+					"check_type": check_type,
+				})
+				changed = True
+			if changed:
 				doc.save(ignore_permissions=True)
 			continue
 		doc = frappe.new_doc("GoFix QC Template")
 		doc.template_name = template_name
 		doc.issue_category = category
+		doc.company = ""
 		doc.is_active = 1
 		for check_name, mandatory, critical, check_type in checks:
 			doc.append("checks", {
@@ -318,6 +406,9 @@ def _seed_qc_templates() -> None:
 				"check_type": check_type,
 			})
 		doc.insert(ignore_permissions=True)
+		if doc.company:
+			# Company field may auto-default on insert — force universal.
+			doc.db_set("company", "", update_modified=False)
 
 
 def _seed_spare_category_mapping() -> None:

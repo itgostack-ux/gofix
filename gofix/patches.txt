@@ -22,3 +22,4 @@ gofix.patches.seed_gofix_service_masters #2026-07-17 v4 — seed Service Order S
 gofix.patches.seed_gofix_service_masters #2026-07-18 v5 — spare-category→device-category applicability mapping
 gofix.patches.seed_gofix_token_masters #2026-07-18 v4 — IRIS-style category + symptom codes
 gofix.patches.backfill_job_assignment_actual_hours #2026-07-18 - recover active technician time from status history
+gofix.patches.seed_gofix_service_masters #2026-07-18 v6 — OEM-style QC packs for all categories, universal (company-blank) templates

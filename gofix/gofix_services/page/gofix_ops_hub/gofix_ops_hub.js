@@ -1243,7 +1243,9 @@ class GoFixOpsHub {
 			<span class="goh-badge ${s.status === "Completed" ? "badge-green" : "badge-yellow"}">${esc(s.repair_solution)}</span>
 		`).join(" ");
 
-		const checkRows = checklist.map(row => `
+		// Group checks by the solution they verify (OEM-style: each repair is
+		// QC'd on its own, then a final whole-device inspection).
+		const checkRow = row => `
 			<tr class="goh-qc-row" data-name="${esc(row.name)}">
 				<td>${esc(row.check_name)}</td>
 				<td>
@@ -1255,8 +1257,19 @@ class GoFixOpsHub {
 					</select>
 				</td>
 				<td><input class="form-control input-xs goh-qc-remarks" data-name="${esc(row.name)}" data-check="${esc(row.check_name)}" value="${esc(row.remarks || "")}" placeholder="${__("Remarks")}"></td>
-			</tr>
-		`).join("");
+			</tr>`;
+		const qcGroups = {};
+		checklist.forEach(row => {
+			const key = row.linked_solution || "";
+			(qcGroups[key] = qcGroups[key] || []).push(row);
+		});
+		const groupHeader = label => `
+			<tr class="goh-qc-group-row"><td colspan="3" style="background:var(--goh-bg);font-size:11px;text-transform:uppercase;letter-spacing:0.5px;font-weight:700;color:var(--goh-muted);padding:6px 10px">
+				<i class="fa fa-wrench"></i> ${esc(label)}
+			</td></tr>`;
+		const checkRows = Object.keys(qcGroups).filter(k => k).map(sol =>
+			groupHeader(sol) + qcGroups[sol].map(checkRow).join("")
+		).join("") + (qcGroups[""] ? groupHeader(__("Final Inspection — whole device")) + qcGroups[""].map(checkRow).join("") : "");
 
 		return `
 			<div class="goh-section">

@@ -333,8 +333,11 @@ def get_ticket_detail(sr_name) -> dict:
 
 	sr = frappe.get_doc("Service Request", sr_name)
 
-	if not sr.service_order:
-		frappe.throw(_("This Service Request has no Service Order. It cannot be managed in the Ops Hub."), title=_("Validation Error"))
+	# No Service Order yet = the ticket is in its intake phase (SAP
+	# notification→order pattern: the execution order is born at acceptance).
+	# The payload below is null-safe for SO-less tickets, so the hub manages
+	# the full lifecycle — intake, analysis, estimate — and the Service Order
+	# appears once the customer accepts.
 
 	customer_info = {}
 	if sr.customer:

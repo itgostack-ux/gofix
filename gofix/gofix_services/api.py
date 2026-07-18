@@ -1193,6 +1193,20 @@ def get_compatible_spare_items(doctype, txt, searchfield, start, page_len, filte
 	group_join = ""
 	if item_group:
 		node = frappe.db.get_value("Item Group", item_group, ["lft", "rgt"], as_dict=True)
+		if not node:
+			# Group naming drifts between environments ("Spare Parts" vs
+			# "Spares") — fall back to the closest spare-ish group instead of
+			# silently dropping the filter and flooding the picker with the
+			# whole catalogue.
+			for candidate in ("Spares", "Spare Parts"):
+				node = frappe.db.get_value("Item Group", candidate, ["lft", "rgt"], as_dict=True)
+				if node:
+					break
+			if not node:
+				alt = frappe.db.get_value(
+					"Item Group", {"name": ("like", "%spare%")}, ["lft", "rgt"], as_dict=True
+				)
+				node = alt
 		if node:
 			group_join = (
 				"JOIN `tabItem Group` ig ON ig.name = i.item_group "

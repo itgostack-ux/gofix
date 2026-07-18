@@ -411,17 +411,22 @@ class GoFixOpsHub {
 		this._bind_invoice_print_actions();
 	}
 
-	_print_invoice(invoice_name) {
-		if (!invoice_name) return;
-		const qs = new URLSearchParams({
-			doctype: "Sales Invoice",
-			name: invoice_name,
-			format: "GoFix Service Invoice",
-			no_letterhead: "1",
-			trigger_print: "1",
-		});
-		window.open(`/printview?${qs.toString()}`, "_blank");
-	}
+		_print_invoice(invoice_name) {
+			if (!invoice_name) return;
+			const open_print = (settings = {}) => {
+				const qs = new URLSearchParams({
+					doctype: "Sales Invoice",
+					name: invoice_name,
+					format: settings.print_format || "GoFix Service Invoice",
+					no_letterhead: String(settings.no_letterhead !== undefined ? cint(settings.no_letterhead) : 1),
+					trigger_print: "1",
+				});
+				window.open(`/printview?${qs.toString()}`, "_blank");
+			};
+			frappe.xcall("ch_erp15.ch_erp15.print_helpers.get_sales_invoice_print_settings", {
+				invoice_name,
+			}).then(open_print).catch(() => open_print());
+		}
 
 	_bind_invoice_print_actions() {
 		this.parent.off("click", ".goh-print-invoice").on("click", ".goh-print-invoice", (e) => {
@@ -1589,7 +1594,7 @@ class GoFixOpsHub {
 						{ fieldname: "spare_item", label: __("Spare Part"), fieldtype: "Link", options: "Item", reqd: 1,
 							get_query: () => ({
 								query: "gofix.gofix_services.api.get_compatible_spare_items",
-								filters: { device_item: d.device_item || "", item_group: "Spare Parts" }
+								filters: { device_item: d.device_item || "", item_group: "Spares" }
 							}),
 							change: () => {
 								const item = dlg.get_value("spare_item");

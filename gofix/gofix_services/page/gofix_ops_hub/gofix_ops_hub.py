@@ -638,6 +638,35 @@ def save_issue_lines(sr_name, issues_json) -> dict:
 
 	sr.save()
 	active_count = sum(1 for r in sr.issue_lines if r.status != "Deleted")
+
+	# Late-identified issue: if the ticket already reached QC, pull it back
+	# to repair — the new issue must be solved before QC can run.
+	if sr.service_order:
+		from gofix.gofix_services.doctype.service_request.service_request import (
+			get_unresolved_issue_gaps,
+		)
+
+		gaps = get_unresolved_issue_gaps(sr)
+		so_state = frappe.db.get_value(
+			"Sales Order", sr.service_order, ["qc_status", "workflow_state"], as_dict=True
+		)
+		if not gaps["ready_for_qc"] and so_state and so_state.workflow_state == "QC Awaiting":
+			frappe.db.set_value("Sales Order", sr.service_order, {
+				"qc_status": "Pending",
+				"workflow_state": "Work in Progress",
+			}, update_modified=False)
+			sr.add_comment(
+				"Comment",
+				_("Returned to repair from QC — newly identified issue(s) need solutions: {0}").format(
+					", ".join(gaps["uncovered_issues"] + gaps["open_solutions"])
+				),
+			)
+			frappe.msgprint(
+				_("Ticket returned to Repair — the new issue must be solved before QC."),
+				indicator="orange",
+				alert=True,
+			)
+
 	return {"ok": True, "issue_count": active_count}
 
 
@@ -1889,6 +1918,23 @@ def submit_for_qc(sr_name) -> dict:
 	if not sr.service_order:
 		frappe.throw(_("No Service Order linked to {0}. Cannot submit for QC.").format(sr_name), title=_("Validation Error"))
 
+	# Every identified issue needs a solution before QC — submit_for_qc
+	# force-completes assigned solutions, but it must never paper over an
+	# issue that has no solution at all.
+	from gofix.gofix_services.doctype.service_request.service_request import (
+		get_unresolved_issue_gaps,
+	)
+
+	gaps = get_unresolved_issue_gaps(sr)
+	if gaps["uncovered_issues"]:
+		frappe.throw(
+			_("Cannot submit for QC — these issues have no repair solution yet: {0}. "
+			  "Assign a solution (or cancel the issue with a reason) first.").format(
+				", ".join(gaps["uncovered_issues"])
+			),
+			title=_("All Issues Must Be Solved Before QC"),
+		)
+
 	# Mark remaining In-Progress / Planned solutions as Completed (skip Cancelled)
 	sr.flags.ignore_validate_update_after_submit = True
 	sr.flags.ignore_mandatory = True
@@ -1978,6 +2024,21 @@ def complete_qc(sr_name, qc_result) -> dict:
 	sr = frappe.get_doc("Service Request", sr_name)
 	if not sr.service_order:
 		frappe.throw(_("No Service Order linked to {0}.").format(sr_name), title=_("Validation Error"))
+
+	# Defence-in-depth: never pass/fail QC while an identified issue is
+	# unsolved (e.g. added by the technician after the ticket reached QC).
+	from gofix.gofix_services.doctype.service_request.service_request import (
+		get_unresolved_issue_gaps,
+	)
+
+	gaps = get_unresolved_issue_gaps(sr)
+	if not gaps["ready_for_qc"]:
+		frappe.throw(
+			_("QC blocked — every identified issue must be solved first. Unresolved: {0}").format(
+				", ".join(gaps["uncovered_issues"] + gaps["open_solutions"])
+			),
+			title=_("All Issues Must Be Solved Before QC"),
+		)
 
 	so = frappe.get_doc("Sales Order", sr.service_order)
 	so.db_set("qc_status", qc_result, update_modified=True)

@@ -529,6 +529,24 @@ def move_service_order_to_qc_if_ready(doc):
 			doc.db_set("workflow_state", repair_outcome, update_modified=False)
 		return
 
+	# Every identified issue must be solved before QC — including issues the
+	# technician added mid-repair.
+	if doc.service_request:
+		from gofix.gofix_services.doctype.service_request.service_request import (
+			get_unresolved_issue_gaps,
+		)
+
+		gaps = get_unresolved_issue_gaps(doc.service_request)
+		if not gaps["ready_for_qc"]:
+			doc.db_set("workflow_state", "Work in Progress", update_modified=False)
+			doc.add_comment(
+				"Comment",
+				_("QC entry blocked — unresolved: {0}").format(
+					", ".join(gaps["uncovered_issues"] + gaps["open_solutions"])
+				),
+			)
+			return
+
 	# Always reset to Awaiting (handles first QC and re-QC after rework)
 	doc.db_set("qc_status", "Awaiting", update_modified=False)
 	doc.db_set("workflow_state", "QC Awaiting", update_modified=False)

@@ -1662,6 +1662,42 @@ def reject_service_request(service_request, rejection_reason) -> bool:
 	return True
 
 
+def get_unresolved_issue_gaps(sr) -> dict:
+	"""QC-entry gate: every identified issue must be solved before QC.
+
+	Returns:
+	  uncovered_issues — active issue categories with NO non-cancelled solution
+	  open_solutions   — solutions not yet Completed/Skipped/Cancelled
+	  ready_for_qc     — True only when both lists are empty
+
+	Applies equally to issues added later by the technician: an issue
+	identified mid-repair re-opens the coverage gate.
+	"""
+	if isinstance(sr, str):
+		sr = frappe.get_doc("Service Request", sr)
+
+	active_issues = {
+		row.issue_category
+		for row in sr.get("issue_lines", [])
+		if row.status in ("Open", "In Progress") and row.issue_category
+	}
+	covered = set()
+	open_solutions = []
+	for row in sr.get("solution_lines", []):
+		if row.status == "Cancelled":
+			continue
+		covered.add(row.issue_category)
+		if row.status not in ("Completed", "Skipped"):
+			open_solutions.append(f"{row.repair_solution} ({row.issue_category})")
+
+	uncovered = sorted(active_issues - covered)
+	return {
+		"uncovered_issues": uncovered,
+		"open_solutions": open_solutions,
+		"ready_for_qc": not uncovered and not open_solutions,
+	}
+
+
 def complete_service_request(service_request, completion_date=None):
 	"""Mark a Service Request completed and create monetization artifacts."""
 	doc = frappe.get_doc("Service Request", service_request)

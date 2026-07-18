@@ -135,15 +135,35 @@ class JobAssignment(Document):
 							indicator="red",
 						)
 			else:
-				# Set to QC Awaiting for repairable items
-				so.db_set("qc_status", "Awaiting", update_modified=False)
-				so.db_set("workflow_state", "QC Awaiting", update_modified=False)
+				# QC gate: every identified issue must have a completed
+				# solution — including issues added mid-repair.
+				gaps = None
+				if self.service_request:
+					from gofix.gofix_services.doctype.service_request.service_request import (
+						get_unresolved_issue_gaps,
+					)
 
-				frappe.msgprint(
-					_("Service Order {0} is now awaiting QC").format(self.service_order),
-					indicator="green",
-					alert=True,
-				)
+					gaps = get_unresolved_issue_gaps(self.service_request)
+				if gaps and not gaps["ready_for_qc"]:
+					so.db_set("workflow_state", "Work in Progress", update_modified=False)
+					frappe.msgprint(
+						_("Job done, but QC is blocked — unresolved: {0}. Assign and complete "
+						  "solutions for every identified issue first.").format(
+							", ".join(gaps["uncovered_issues"] + gaps["open_solutions"])
+						),
+						title=_("All Issues Must Be Solved Before QC"),
+						indicator="orange",
+					)
+				else:
+					# Set to QC Awaiting for repairable items
+					so.db_set("qc_status", "Awaiting", update_modified=False)
+					so.db_set("workflow_state", "QC Awaiting", update_modified=False)
+
+					frappe.msgprint(
+						_("Service Order {0} is now awaiting QC").format(self.service_order),
+						indicator="green",
+						alert=True,
+					)
 	
 	def update_service_request(self):
 		"""Update service request with latest assignment (uses db_set to avoid re-triggering validate)"""

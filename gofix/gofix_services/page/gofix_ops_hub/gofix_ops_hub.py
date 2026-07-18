@@ -1396,6 +1396,42 @@ def update_solution_status(sr_name, solution_row_name, status, remarks="") -> di
 	if status not in valid:
 		frappe.throw(_("Invalid status. Must be one of: {0}").format(", ".join(valid)), title=_("Validation Error"))
 
+	# Grade-safety gate: work can only start/finish on a solution that has an
+	# assigned technician, and only while THAT technician holds the device —
+	# otherwise an L1 holding the phone could "Start" L4 board work that was
+	# never assigned to them.
+	if status in ("In Progress", "Completed"):
+		line = frappe.db.get_value(
+			"SR Solution Line",
+			solution_row_name,
+			["technician", "repair_solution"],
+			as_dict=True,
+		) or frappe._dict()
+		if not line.technician:
+			frappe.throw(
+				_("{0} has no technician assigned — assign it (Assign stage) to a "
+				  "technician whose grade covers it before starting.").format(
+					line.repair_solution or _("This solution")
+				),
+				title=_("Unassigned Solution"),
+			)
+		so_name = frappe.db.get_value("Service Request", sr_name, "service_order")
+		active = frappe.db.get_value(
+			"Job Assignment",
+			{"service_order": so_name, "assignment_status": "In Progress", "docstatus": ("<", 2)},
+			"service_engineer",
+		) if so_name else None
+		if active and active != line.technician:
+			holder = frappe.db.get_value("Employee", active, "employee_name") or active
+			assignee = frappe.db.get_value("Employee", line.technician, "employee_name") or line.technician
+			frappe.throw(
+				_("{0} is assigned to {1}, but the device is currently with {2}. "
+				  "Hand off the device before working this solution.").format(
+					line.repair_solution, assignee, holder
+				),
+				title=_("Not Your Solution"),
+			)
+
 	update_fields = {"status": status, "technician_remarks": remarks}
 	if status == "Cancelled":
 		update_fields["cancel_reason"] = remarks

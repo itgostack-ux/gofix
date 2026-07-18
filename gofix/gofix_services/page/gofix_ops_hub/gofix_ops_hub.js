@@ -1015,12 +1015,17 @@ class GoFixOpsHub {
 					</div>
 				` : ""}
 				${sol.technician_remarks ? `<div class="goh-repair-remarks">${esc(sol.technician_remarks)}</div>` : ""}
+				${sol.technician_name ? `<div class="small text-muted" style="margin:2px 0"><i class="fa fa-user"></i> ${esc(sol.technician_name)}</div>` : ""}
 				<div class="goh-repair-card-actions">
+					${!sol.technician && !["Completed", "Skipped", "Cancelled"].includes(sol.status)
+						? `<span class="indicator-pill orange" style="font-size:11px">${__("Unassigned — assign a qualified technician (Assign stage) before work can start")}</span>
+						   ${sol.status !== "Completed" ? `<button class="btn btn-xs btn-danger goh-sol-cancel" data-row="${esc(sol.name)}"><i class="fa fa-times"></i> ${__("Cancel")}</button>` : ""}`
+						: `
 					${sol.status === "Planned" ? `<button class="btn btn-xs btn-default goh-sol-start" data-row="${esc(sol.name)}"><i class="fa fa-play"></i> ${__("Start")}</button>` : ""}
 					${sol.status === "In Progress" ? `<button class="btn btn-xs btn-success goh-sol-complete" data-row="${esc(sol.name)}"><i class="fa fa-check"></i> ${__("Done")}</button>` : ""}
 					${sol.status === "Completed" || sol.status === "Skipped" ? `<button class="btn btn-xs btn-info goh-sol-restart" data-row="${esc(sol.name)}"><i class="fa fa-undo"></i> ${__("Restart")}</button>` : ""}
 					${sol.status !== "Completed" && sol.status !== "Skipped" ? `<button class="btn btn-xs btn-warning goh-sol-skip" data-row="${esc(sol.name)}">${__("Skip")}</button>` : ""}
-					${sol.status !== "Completed" ? `<button class="btn btn-xs btn-danger goh-sol-cancel" data-row="${esc(sol.name)}"><i class="fa fa-times"></i> ${__("Cancel")}</button>` : ""}
+					${sol.status !== "Completed" ? `<button class="btn btn-xs btn-danger goh-sol-cancel" data-row="${esc(sol.name)}"><i class="fa fa-times"></i> ${__("Cancel")}</button>` : ""}`}
 				</div>
 			</div>
 		`}).join("");

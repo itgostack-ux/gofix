@@ -91,7 +91,7 @@
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "Status",
-   "options": "Planned\nIn Progress\nCompleted\nSkipped\nCancelled"
+   "options": "Planned\nIn Progress\nOn Hold\nCompleted\nSkipped\nCancelled"
   },
   {
    "fieldname": "technician_remarks",
@@ -99,10 +99,10 @@
    "label": "Technician Remarks"
   },
   {
+   "depends_on": "eval:doc.status=='Cancelled'",
    "fieldname": "cancel_reason",
    "fieldtype": "Small Text",
    "label": "Cancel Reason",
-   "depends_on": "eval:doc.status=='Cancelled'",
    "read_only": 1
   }
  ],

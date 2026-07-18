@@ -384,14 +384,19 @@ def accept_and_create_service_order(sr_name) -> dict:
 
 @frappe.whitelist()
 def update_spare_genealogy(sr_name, spare_row_name, removed_part_serial=None,
-		installed_part_serial=None, removed_part_condition=None) -> dict:
+		installed_part_serial=None, removed_part_condition=None, consume=0) -> dict:
 	"""Record the removed/installed part serials and condition on a spare line
-	after the physical swap — required before the ticket can close."""
+	after the physical swap — required before the ticket can close.
+
+	With consume=1 an arrived-but-uninstalled line (Reserved/Issued/Pending —
+	e.g. a spare that came in via purchase after the ticket raised an MR) is
+	flipped to Consumed: recording the new serial IS the install step."""
 	_assert_sr_permission(sr_name, "write")
 	row = frappe.db.get_value(
 		"SR Spare Line",
 		{"name": spare_row_name, "parent": sr_name, "parenttype": "Service Request"},
-		["name"],
+		["name", "status"],
+		as_dict=True,
 	)
 	if not row:
 		frappe.throw(_("Spare line not found on {0}.").format(sr_name))
@@ -402,9 +407,16 @@ def update_spare_genealogy(sr_name, spare_row_name, removed_part_serial=None,
 		updates["installed_part_serial"] = installed_part_serial.strip()
 	if removed_part_condition is not None:
 		updates["removed_part_condition"] = removed_part_condition.strip()
+	if cint(consume) and row.status in ("Reserved", "Issued", "Pending"):
+		if not (updates.get("installed_part_serial") or "").strip():
+			frappe.throw(
+				_("Record the new part's serial/IMEI to install this spare."),
+				title=_("New Part Serial Missing"),
+			)
+		updates["status"] = "Consumed"
 	if updates:
 		frappe.db.set_value("SR Spare Line", spare_row_name, updates, update_modified=False)
-	return {"ok": True}
+	return {"ok": True, "status": updates.get("status") or row.status}
 
 
 def _assert_removed_part_details_complete(sr) -> None:
@@ -412,14 +424,29 @@ def _assert_removed_part_details_complete(sr) -> None:
 		missing_removed_part_details,
 	)
 
+	if isinstance(sr, str):
+		sr = frappe.get_doc("Service Request", sr)
+
+	pending = [
+		(row.item_name or row.spare_item)
+		for row in sr.get("spare_lines", [])
+		if row.status in ("Awaiting Procurement", "Pending", "Reserved", "Issued")
+	]
+	if pending:
+		frappe.throw(
+			_("Cannot close — spare part(s) still awaited / not installed: {0}. "
+			  "Install them (✎ on the spare line) or remove the line.").format(", ".join(pending)),
+			title=_("Parts Not Installed"),
+		)
+
 	missing = missing_removed_part_details(sr)
 	if missing:
 		frappe.throw(
-			_("Cannot close — removed-part details (old serial + condition) are missing "
-			  "for: {0}. Record them via the spare line's genealogy (✎) button.").format(
+			_("Cannot close — part genealogy (old serial + condition, new serial) is missing "
+			  "for: {0}. Record it via the spare line's genealogy (✎) button.").format(
 				", ".join(missing)
 			),
-			title=_("Removed Spare Details Required"),
+			title=_("Spare Serial Details Required"),
 		)
 
 
@@ -1392,7 +1419,7 @@ def update_solution_status(sr_name, solution_row_name, status, remarks="") -> di
 	"""Update a solution line status during repair."""
 	_assert_sr_permission(sr_name, "write")
 
-	valid = ("Planned", "In Progress", "Completed", "Skipped", "Cancelled")
+	valid = ("Planned", "In Progress", "On Hold", "Completed", "Skipped", "Cancelled")
 	if status not in valid:
 		frappe.throw(_("Invalid status. Must be one of: {0}").format(", ".join(valid)), title=_("Validation Error"))
 
@@ -1432,6 +1459,17 @@ def update_solution_status(sr_name, solution_row_name, status, remarks="") -> di
 				title=_("Not Your Solution"),
 			)
 
+	# Parts-readiness gate (SAP "waiting for parts" pattern): a solution
+	# cannot be marked Done while a spare attributed to it is still on order
+	# or fitted without the NEW part's serial recorded.
+	if status == "Completed":
+		_assert_solution_parts_ready(sr_name, line.repair_solution)
+
+	if status == "On Hold":
+		line = frappe.db.get_value(
+			"SR Solution Line", solution_row_name, ["technician", "repair_solution"], as_dict=True
+		) or frappe._dict()
+
 	update_fields = {"status": status, "technician_remarks": remarks}
 	if status == "Cancelled":
 		update_fields["cancel_reason"] = remarks
@@ -1442,7 +1480,85 @@ def update_solution_status(sr_name, solution_row_name, status, remarks="") -> di
 		update_fields,
 		update_modified=True,
 	)
+
+	# Device custody follows the work: starting takes the device (Job
+	# Assignment → In Progress, single-holder rule enforced there); holding
+	# releases it so another technician can work their own solution meanwhile.
+	if status in ("In Progress", "On Hold") and line.get("technician"):
+		_sync_job_assignment_custody(sr_name, solution_row_name, line.technician, status)
+
 	return {"ok": True}
+
+
+def _assert_solution_parts_ready(sr_name, repair_solution) -> None:
+	"""Block Done while this solution's spares are on order / uninstalled /
+	missing the installed (new) part serial. Universal consumables and
+	non-stock lines are exempt — they carry no serial."""
+	if not repair_solution:
+		return
+	for row in frappe.get_all(
+		"SR Spare Line",
+		filters={"parent": sr_name, "parenttype": "Service Request", "repair_solution": repair_solution},
+		fields=["item_name", "spare_item", "status", "installed_part_serial"],
+	):
+		item_flags = frappe.db.get_value(
+			"Item", row.spare_item, ["is_stock_item", "gofix_universal_spare"], as_dict=True
+		) or frappe._dict()
+		if not item_flags.get("is_stock_item") or item_flags.get("gofix_universal_spare"):
+			continue
+		label = row.item_name or row.spare_item
+		if row.status in ("Awaiting Procurement", "Pending", "Reserved", "Issued"):
+			frappe.throw(
+				_("{0} is not installed yet (status: {1}). Receive/install the part and record "
+				  "its serial via the spare line's ✎ button — or put this solution On Hold so "
+				  "other repairs can continue meanwhile.").format(label, _(row.status)),
+				title=_("Parts Not Installed"),
+			)
+		if row.status == "Consumed" and not (row.installed_part_serial or "").strip():
+			frappe.throw(
+				_("New part serial/IMEI is missing for {0}. Record it via the spare line's "
+				  "✎ button before marking this solution Done.").format(label),
+				title=_("New Part Serial Missing"),
+			)
+
+
+def _sync_job_assignment_custody(sr_name, solution_row_name, technician, status) -> None:
+	so_name = frappe.db.get_value("Service Request", sr_name, "service_order")
+	if not so_name:
+		return
+	ja_name = frappe.db.get_value(
+		"Job Assignment",
+		{
+			"service_order": so_name,
+			"service_engineer": technician,
+			"docstatus": ("<", 2),
+			"assignment_status": ("not in", ("Completed", "Cancelled")),
+		},
+		"name",
+	)
+	if not ja_name:
+		return
+	if status == "On Hold":
+		# Only release the device if this technician has nothing else running.
+		other_running = frappe.db.exists(
+			"SR Solution Line",
+			{
+				"parent": sr_name,
+				"parenttype": "Service Request",
+				"technician": technician,
+				"status": "In Progress",
+				"name": ("!=", solution_row_name),
+			},
+		)
+		if other_running:
+			return
+	target = "On Hold" if status == "On Hold" else "In Progress"
+	ja = frappe.get_doc("Job Assignment", ja_name)
+	if ja.assignment_status == target:
+		return
+	ja.assignment_status = target
+	ja.flags.ignore_validate_update_after_submit = True
+	ja.save(ignore_permissions=True)
 
 
 @frappe.whitelist()

@@ -989,7 +989,7 @@ class GoFixOpsHub {
 			}
 		}
 
-		const STATUS_CLS = { Planned: "badge-muted", "In Progress": "badge-blue", Completed: "badge-green", Skipped: "badge-yellow", Cancelled: "badge-red" };
+		const STATUS_CLS = { Planned: "badge-muted", "In Progress": "badge-blue", "On Hold": "badge-orange", Completed: "badge-green", Skipped: "badge-yellow", Cancelled: "badge-red" };
 
 		const solCards = activeSols.map(sol => {
 			const isReworkItem = sol.technician_remarks && sol.technician_remarks.includes("[Rework]");
@@ -1022,7 +1022,9 @@ class GoFixOpsHub {
 						   ${sol.status !== "Completed" ? `<button class="btn btn-xs btn-danger goh-sol-cancel" data-row="${esc(sol.name)}"><i class="fa fa-times"></i> ${__("Cancel")}</button>` : ""}`
 						: `
 					${sol.status === "Planned" ? `<button class="btn btn-xs btn-default goh-sol-start" data-row="${esc(sol.name)}"><i class="fa fa-play"></i> ${__("Start")}</button>` : ""}
-					${sol.status === "In Progress" ? `<button class="btn btn-xs btn-success goh-sol-complete" data-row="${esc(sol.name)}"><i class="fa fa-check"></i> ${__("Done")}</button>` : ""}
+					${sol.status === "On Hold" ? `<button class="btn btn-xs btn-primary goh-sol-start" data-row="${esc(sol.name)}"><i class="fa fa-play"></i> ${__("Resume")}</button>` : ""}
+					${sol.status === "In Progress" ? `<button class="btn btn-xs btn-success goh-sol-complete" data-row="${esc(sol.name)}"><i class="fa fa-check"></i> ${__("Done")}</button>
+					<button class="btn btn-xs btn-warning goh-sol-hold" data-row="${esc(sol.name)}" title="${__("Release the device so other repairs can continue (e.g. waiting for parts)")}"><i class="fa fa-pause"></i> ${__("Hold")}</button>` : ""}
 					${sol.status === "Completed" || sol.status === "Skipped" ? `<button class="btn btn-xs btn-info goh-sol-restart" data-row="${esc(sol.name)}"><i class="fa fa-undo"></i> ${__("Restart")}</button>` : ""}
 					${sol.status !== "Completed" && sol.status !== "Skipped" ? `<button class="btn btn-xs btn-warning goh-sol-skip" data-row="${esc(sol.name)}">${__("Skip")}</button>` : ""}
 					${sol.status !== "Completed" ? `<button class="btn btn-xs btn-danger goh-sol-cancel" data-row="${esc(sol.name)}"><i class="fa fa-times"></i> ${__("Cancel")}</button>` : ""}`}
@@ -1063,16 +1065,20 @@ class GoFixOpsHub {
 			const actionBtn = removable
 				? `<button class="btn btn-xs btn-outline-secondary goh-spare-remove" data-row="${esc(sp.name)}" title="${__("Remove")}"><i class="fa fa-times"></i></button>`
 				: `<button class="btn btn-xs btn-outline-danger goh-spare-damage" data-row="${esc(sp.name)}" title="${__("Mark Damaged")}"><i class="fa fa-exclamation-triangle"></i></button>`;
-			const needsGenealogy = sp.status === "Consumed" && (!sp.removed_part_serial || !sp.removed_part_condition);
-			const genBtn = sp.status === "Consumed"
+			const arrived = ["Reserved", "Issued", "Pending"].includes(sp.status);
+			const needsGenealogy = (sp.status === "Consumed" && (!sp.removed_part_serial || !sp.removed_part_condition || !sp.installed_part_serial)) || arrived;
+			const genBtn = sp.status === "Consumed" || arrived || sp.status === "Awaiting Procurement"
 				? `<button class="btn btn-xs ${needsGenealogy ? "btn-warning" : "btn-outline-secondary"} goh-spare-genealogy"
-					data-row="${esc(sp.name)}" data-serial="${esc(sp.removed_part_serial || "")}"
+					data-row="${esc(sp.name)}" data-serial="${esc(sp.removed_part_serial || "")}" data-mode="${arrived ? "install" : "edit"}"
 					data-installed="${esc(sp.installed_part_serial || "")}" data-condition="${esc(sp.removed_part_condition || "")}"
-					title="${__("Removed-part details (required before close)")}"><i class="fa fa-pencil"></i></button>`
+					title="${arrived ? __("Install part — record old + new serials") : __("Part serial details (required before close)")}"><i class="fa fa-pencil"></i></button>`
 				: "";
+			const pill = arrived
+				? ` <span class="indicator-pill blue" style="font-size:10px">${__("arrived — install & record new serial")}</span>`
+				: (needsGenealogy ? ` <span class="indicator-pill orange" style="font-size:10px">${__("serial details missing")}</span>` : "");
 			return `
 			<tr data-spare-row="${esc(sp.name)}">
-				<td>${esc(sp.item_name || sp.spare_item)}${needsGenealogy ? ` <span class="indicator-pill orange" style="font-size:10px">${__("old-part details missing")}</span>` : ""}</td>
+				<td>${esc(sp.item_name || sp.spare_item)}${pill}</td>
 				<td class="text-center">${sp.qty} ${esc(sp.uom || "")}</td>
 				<td class="text-right">₹${format_number(sp.rate)}</td>
 				<td class="text-center">${spare_badge(sp.status)}</td>
@@ -1578,6 +1584,22 @@ class GoFixOpsHub {
 					.then(() => self._load_detail(d.name));
 			});
 
+			content.on("click", ".goh-sol-hold", function () {
+				const rowName = $(this).data("row");
+				const dlg = new frappe.ui.Dialog({
+					title: __("Put Solution On Hold"),
+					fields: [{ fieldname: "remarks", label: __("Reason"), fieldtype: "Small Text",
+						default: __("Waiting for spare parts"),
+						description: __("The device is released — another technician can work their own solution meanwhile.") }],
+					primary_action_label: __("Hold"),
+					primary_action: v => {
+						frappe.xcall(`${API}.update_solution_status`, { sr_name: d.name, solution_row_name: rowName, status: "On Hold", remarks: v.remarks || "" })
+							.then(() => { dlg.hide(); self._load_detail(d.name); });
+					},
+				});
+				dlg.show();
+			});
+
 			content.on("click", ".goh-sol-cancel", function () {
 				const rowName = $(this).data("row");
 				const dlg = new frappe.ui.Dialog({
@@ -1610,26 +1632,30 @@ class GoFixOpsHub {
 			content.on("click", ".goh-spare-genealogy", function () {
 				const btn = $(this);
 				const rowName = btn.data("row");
+				const installMode = btn.data("mode") === "install";
 				const dlg = new frappe.ui.Dialog({
-					title: __("Removed Part Details"),
+					title: installMode ? __("Install Part — Record Serials") : __("Part Serial Details"),
 					fields: [
+						...(installMode ? [{ fieldname: "install_note", fieldtype: "HTML",
+							options: `<div class="text-muted small" style="margin-bottom:8px">${__("The purchased spare has arrived. Recording the new serial installs it on this ticket (line becomes Consumed).")}</div>` }] : []),
 						{ fieldname: "removed_part_serial", label: __("Removed Part Serial (old, KBB)"), fieldtype: "Data",
 							reqd: 1, default: btn.data("serial") || "" },
 						{ fieldname: "removed_part_condition", label: __("Condition"), fieldtype: "Select",
 							options: "\nGood\nFaulty\nDamaged\nScrap", reqd: 1, default: btn.data("condition") || "" },
-						{ fieldname: "installed_part_serial", label: __("Installed Part Serial (new, KGB)"), fieldtype: "Data",
-							default: btn.data("installed") || "" },
+						{ fieldname: "installed_part_serial", label: __("Installed Part Serial / IMEI (new, KGB)"), fieldtype: "Data",
+							reqd: installMode ? 1 : 0, default: btn.data("installed") || "" },
 					],
-					primary_action_label: __("Save"),
+					primary_action_label: installMode ? __("Install") : __("Save"),
 					primary_action: v => {
 						frappe.xcall(`${API}.update_spare_genealogy`, {
 							sr_name: d.name, spare_row_name: rowName,
 							removed_part_serial: v.removed_part_serial,
 							installed_part_serial: v.installed_part_serial || "",
 							removed_part_condition: v.removed_part_condition,
+							consume: installMode ? 1 : 0,
 						}).then(() => {
 							dlg.hide();
-							frappe.show_alert({ message: __("Removed-part details saved."), indicator: "green" });
+							frappe.show_alert({ message: installMode ? __("Part installed — serials recorded.") : __("Part serial details saved."), indicator: "green" });
 							self._load_detail(d.name);
 						}).catch(err => frappe.msgprint({ title: __("Error"), message: err.message || String(err), indicator: "red" }));
 					},
@@ -1702,6 +1728,7 @@ class GoFixOpsHub {
 					primary_action_label: __("Add"),
 					primary_action: v => {
 						frappe.xcall(`${API}.add_spare_to_ticket`, { sr_name: d.name, spare_item: v.spare_item, qty: v.qty, rate: v.rate || 0,
+							repair_solution: (scopeSols[0] || {}).repair_solution || "",
 							removed_part_serial: v.removed_part_serial || "", installed_part_serial: v.installed_part_serial || "",
 							removed_part_condition: v.removed_part_condition || "" })
 							.then(r => {

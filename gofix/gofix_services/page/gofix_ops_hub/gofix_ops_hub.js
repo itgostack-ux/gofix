@@ -1941,12 +1941,17 @@ class GoFixOpsHub {
 
 		/* ── Hide stage-transition buttons when viewing a previous step ── */
 		if (isViewing) {
-			content.find(
-				"#goh-confirm-analysis, #goh-send-wa, #goh-mark-confirmed, " +
-				"#goh-back-to-analysis, #goh-save-solutions, #goh-back-to-confirm, " +
-				"#goh-do-assign, #goh-back-to-solutions, #goh-submit-qc, " +
-				"#goh-handoff-btn, #goh-back-to-assign, #goh-rework-assign"
-			).hide();
+			const hideSel = [
+				"#goh-confirm-analysis", "#goh-send-wa", "#goh-mark-confirmed",
+				"#goh-back-to-analysis", "#goh-save-solutions", "#goh-back-to-confirm",
+				"#goh-back-to-solutions", "#goh-submit-qc",
+				"#goh-handoff-btn", "#goh-back-to-assign", "#goh-rework-assign",
+			];
+			// Assigning MORE technicians mid-repair is legitimate (a ticket can be
+			// split across L1/L2/L4) — keep the Assign action live while the
+			// ticket is still in repair; hide it once work has moved past that.
+			if (d.ops_stage !== "repair") hideSel.push("#goh-do-assign", "#goh-proceed-repair");
+			content.find(hideSel.join(", ")).hide();
 		}
 	}
 

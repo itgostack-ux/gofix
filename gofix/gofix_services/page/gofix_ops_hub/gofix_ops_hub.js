@@ -1469,7 +1469,8 @@ class GoFixOpsHub {
 		/* ── Assign ──────────────────────────────────────────────────── */
 		if (activeStage === "assign") {
 			this._init_link_field("#goh-tech-field", "Employee", __("Search technician..."), {
-				status: "Active",
+				query: "gofix.gofix_services.api.technician_query",
+				sr_name: d.name,
 			});
 
 			content.find("#goh-back-to-solutions").on("click", () => {
@@ -1789,7 +1790,8 @@ class GoFixOpsHub {
 		/* ── Rework ──────────────────────────────────────────────────── */
 		if (activeStage === "rework") {
 			this._init_link_field("#goh-rework-tech-field", "Employee", __("Select technician..."), {
-				status: "Active",
+				query: "gofix.gofix_services.api.technician_query",
+				sr_name: d.name,
 			}, "_rework_tech");
 
 			content.find("#goh-rework-assign").on("click", () => {
@@ -1862,8 +1864,17 @@ class GoFixOpsHub {
 	_init_link_field(selector, doctype, placeholder, filters, propName) {
 		const wrapper = this.parent.find(selector);
 		if (!wrapper.length) return;
+		// filters.query switches to a custom server-side Link query;
+		// remaining keys are passed through as its filters.
+		const get_query = () => {
+			if (filters && filters.query) {
+				const { query, ...rest } = filters;
+				return { query, filters: rest };
+			}
+			return { filters };
+		};
 		const ctrl = frappe.ui.form.make_control({
-			df: { fieldname: propName || "tech", fieldtype: "Link", options: doctype, placeholder, get_query: () => ({ filters }) },
+			df: { fieldname: propName || "tech", fieldtype: "Link", options: doctype, placeholder, get_query },
 			parent: wrapper, render_input: true,
 		});
 		if (propName) this[propName] = ctrl;

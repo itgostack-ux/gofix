@@ -23,6 +23,14 @@ def create_employee_custom_fields():
 				"insert_after": "designation",
 				"description": "Technician skill grade for GoFix service assignment"
 			},
+			{
+				"fieldname": "gofix_service_warehouse",
+				"label": "Service Center / Store",
+				"fieldtype": "Link",
+				"options": "Warehouse",
+				"insert_after": "technician_grade",
+				"description": "Warehouse (store or hub) where this technician is based — technician pickers show staff of the ticket's repair location first",
+			},
 		]
 	}
 

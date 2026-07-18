@@ -1022,6 +1022,8 @@ def get_spares_for_solution(repair_solution, device_item=None) -> list:
 	)
 	if device_item:
 		rows = [r for r in rows if is_spare_compatible_with_device(r.spare_item, device_item)]
+		if not rows:
+			rows = _suggest_spares_for_solution(repair_solution, device_item)
 	return rows
 
 
@@ -1051,6 +1053,10 @@ def get_spares_for_solutions(repair_solutions, device_item=None) -> list:
 	)
 	if device_item:
 		rows = [r for r in rows if is_spare_compatible_with_device(r.spare_item, device_item)]
+		covered = {r.repair_solution for r in rows}
+		for sol in repair_solutions:
+			if sol not in covered:
+				rows.extend(_suggest_spares_for_solution(sol, device_item))
 	return rows
 
 
@@ -1102,16 +1108,152 @@ def get_eligible_technicians(issue_categories, warehouse=None) -> list:
 	if not eligible_grades:
 		return []
 
-	# Find employees with these grades
+	# Find employees with these grades — technicians based at the repair
+	# location first; fall back to all graded technicians when the location
+	# has no dedicated staff (rollout-friendly).
 	filters = {"technician_grade": ["in", eligible_grades], "status": "Active"}
-	if warehouse:
-		filters["default_shift"] = warehouse  # or use a custom field for store assignment
-
-	return frappe.get_all("Employee",
+	rows = frappe.get_all("Employee",
 		filters=filters,
-		fields=["name", "employee_name", "technician_grade", "designation"],
+		fields=["name", "employee_name", "technician_grade", "designation",
+			"gofix_service_warehouse" if frappe.db.has_column("Employee", "gofix_service_warehouse") else "designation"],
 		order_by="employee_name"
 	)
+	if warehouse and frappe.db.has_column("Employee", "gofix_service_warehouse"):
+		local = [r for r in rows if r.get("gofix_service_warehouse") == warehouse]
+		if local:
+			return local
+	return rows
+
+
+@frappe.whitelist()
+@frappe.validate_and_sanitize_search_inputs
+def technician_query(doctype, txt, searchfield, start, page_len, filters) -> list:
+	"""Link-field query for technician pickers — repair-location aware.
+
+	filters.sr_name — resolve the ticket's EFFECTIVE repair warehouse (hub
+	when transferred) and rank its technicians first; when the location has
+	dedicated technicians, only they are shown. Only Active employees with a
+	Technician Grade appear.
+	"""
+	if isinstance(filters, str):
+		filters = json.loads(filters)
+	filters = filters or {}
+
+	warehouse = filters.get("warehouse")
+	if not warehouse and filters.get("sr_name"):
+		try:
+			from gofix.gofix_services.page.gofix_ops_hub.gofix_ops_hub import (
+				_effective_repair_warehouse,
+			)
+
+			sr = frappe.get_doc("Service Request", filters["sr_name"])
+			warehouse = _effective_repair_warehouse(sr)
+		except Exception:
+			warehouse = None
+
+	has_wh_col = frappe.db.has_column("Employee", "gofix_service_warehouse")
+	values = {
+		"txt": f"%{txt}%" if txt else "%",
+		"start": cint(start),
+		"page_len": cint(page_len) or 20,
+		"warehouse": warehouse or "",
+	}
+	wh_rank = (
+		"CASE WHEN e.gofix_service_warehouse = %(warehouse)s THEN 0 "
+		"WHEN IFNULL(e.gofix_service_warehouse, '') = '' THEN 1 ELSE 2 END"
+		if has_wh_col and warehouse
+		else "0"
+	)
+	rows = frappe.db.sql(
+		f"""
+		SELECT e.name, e.employee_name, e.technician_grade,
+		       {wh_rank} AS wh_rank
+		FROM `tabEmployee` e
+		WHERE e.status = 'Active'
+		  AND IFNULL(e.technician_grade, '') != ''
+		  AND (e.name LIKE %(txt)s OR e.employee_name LIKE %(txt)s)
+		ORDER BY wh_rank, e.employee_name
+		LIMIT %(start)s, %(page_len)s
+		""",
+		values,
+	)
+	# When the location has dedicated technicians, hide other stores' staff.
+	if has_wh_col and warehouse and any(r[3] == 0 for r in rows):
+		rows = [r for r in rows if r[3] == 0]
+	return [r[:3] for r in rows]
+
+
+# Keyword profiles per solution-code prefix — used to SUGGEST compatible
+# spares from the live catalogue when no explicit Solution Spare Mapping
+# exists yet (longest prefix wins).
+_SPARE_SUGGESTION_KEYWORDS = {
+	"SCR": ["display", "screen", "touch", "glass", "lcd", "folder"],
+	"BAT": ["battery"],
+	"CHG": ["charg", "port", "adapter", "power"],
+	"CAM": ["camera", "lens"],
+	"AUD-SPK": ["speaker"],
+	"AUD-MIC": ["mic"],
+	"AUD": ["speaker", "mic", "audio", "earpiece", "ringer"],
+	"BTN-KBD": ["keyboard"],
+	"BTN-TPD": ["touchpad", "trackpad"],
+	"BTN": ["button", "flex", "volume", "power"],
+	"PHY-BCK": ["back panel", "back glass", "housing", "back cover"],
+	"PHY-STR": ["strap", "band"],
+	"PHY-HNG": ["hinge"],
+	"PHY": ["housing", "panel", "frame", "body"],
+	"SNS-FPR": ["fingerprint"],
+	"SNS": ["sensor"],
+	"NET": ["wifi", "antenna", "network", "bluetooth"],
+}
+
+
+def _suggest_spares_for_solution(repair_solution, device_item, limit=8) -> list:
+	"""Device-compatible catalogue spares matching the solution's keyword
+	profile — returned with ``suggested=1`` so the UI can distinguish them
+	from explicit BOM mappings."""
+	code = frappe.db.get_value("Repair Solution", repair_solution, "solution_code") or ""
+	keywords = None
+	for prefix in sorted(_SPARE_SUGGESTION_KEYWORDS, key=len, reverse=True):
+		if code.startswith(prefix):
+			keywords = _SPARE_SUGGESTION_KEYWORDS[prefix]
+			break
+	if not keywords:
+		return []
+
+	like = " OR ".join(f"i.item_name LIKE %(kw{n})s" for n in range(len(keywords)))
+	values = {f"kw{n}": f"%{kw}%" for n, kw in enumerate(keywords)}
+	values["limit"] = limit * 4
+	candidates = frappe.db.sql(
+		f"""
+		SELECT i.name, i.item_name, i.stock_uom
+		FROM `tabItem` i
+		WHERE i.disabled = 0 AND i.has_variants = 0 AND i.is_stock_item = 1
+		  AND i.item_group = 'Spares' AND ({like})
+		ORDER BY i.item_name
+		LIMIT %(limit)s
+		""",
+		values,
+		as_dict=True,
+	)
+	out = []
+	for c in candidates:
+		if not is_spare_compatible_with_device(c.name, device_item):
+			continue
+		out.append(
+			{
+				"name": None,
+				"repair_solution": repair_solution,
+				"spare_item": c.name,
+				"item_name": c.item_name,
+				"default_qty": 1,
+				"uom": c.stock_uom or "Nos",
+				"is_mandatory": 0,
+				"suggested": 1,
+			}
+		)
+		if len(out) >= limit:
+			break
+	return out
 
 
 @frappe.whitelist()

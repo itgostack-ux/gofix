@@ -672,6 +672,12 @@ def create_service_transfer(service_request, to_store, reason=None) -> dict:
 	sr.db_set("transfer_date", today(), update_modified=False)
 	sr.db_set("transfer_reason", reason or "", update_modified=False)
 
+	# Parts follow the device (SAP parts-routing): repoint open spare
+	# MRs/POs to the destination so deliveries land where the repair happens.
+	from gofix.purchase_api import reroute_open_spare_procurement
+
+	reroute_open_spare_procurement(sr, to_store)
+
 	# Update current location
 	sr.db_set("current_location", None, update_modified=False)  # In transit
 
@@ -720,6 +726,12 @@ def return_service_transfer(service_request) -> dict:
 
 	sr.db_set("transfer_status", "Return In Transit", update_modified=True)
 	sr.db_set("current_location", None, update_modified=False)
+
+	# Device is heading home — any spares still being procured should now
+	# deliver to the origin store, not the hub the device is leaving.
+	from gofix.purchase_api import reroute_open_spare_procurement
+
+	reroute_open_spare_procurement(sr, sr.source_warehouse)
 
 	frappe.msgprint(_("Return transfer initiated"), indicator="blue")
 	return {"status": "Return In Transit"}

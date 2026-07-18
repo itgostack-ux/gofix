@@ -1058,13 +1058,20 @@ class GoFixOpsHub {
 			const actionBtn = removable
 				? `<button class="btn btn-xs btn-outline-secondary goh-spare-remove" data-row="${esc(sp.name)}" title="${__("Remove")}"><i class="fa fa-times"></i></button>`
 				: `<button class="btn btn-xs btn-outline-danger goh-spare-damage" data-row="${esc(sp.name)}" title="${__("Mark Damaged")}"><i class="fa fa-exclamation-triangle"></i></button>`;
+			const needsGenealogy = sp.status === "Consumed" && (!sp.removed_part_serial || !sp.removed_part_condition);
+			const genBtn = sp.status === "Consumed"
+				? `<button class="btn btn-xs ${needsGenealogy ? "btn-warning" : "btn-outline-secondary"} goh-spare-genealogy"
+					data-row="${esc(sp.name)}" data-serial="${esc(sp.removed_part_serial || "")}"
+					data-installed="${esc(sp.installed_part_serial || "")}" data-condition="${esc(sp.removed_part_condition || "")}"
+					title="${__("Removed-part details (required before close)")}"><i class="fa fa-pencil"></i></button>`
+				: "";
 			return `
 			<tr data-spare-row="${esc(sp.name)}">
-				<td>${esc(sp.item_name || sp.spare_item)}</td>
+				<td>${esc(sp.item_name || sp.spare_item)}${needsGenealogy ? ` <span class="indicator-pill orange" style="font-size:10px">${__("old-part details missing")}</span>` : ""}</td>
 				<td class="text-center">${sp.qty} ${esc(sp.uom || "")}</td>
 				<td class="text-right">₹${format_number(sp.rate)}</td>
 				<td class="text-center">${spare_badge(sp.status)}</td>
-				<td class="text-center">${actionBtn}</td>
+				<td class="text-center">${genBtn} ${actionBtn}</td>
 			</tr>`;
 		}).join("");
 
@@ -1594,6 +1601,37 @@ class GoFixOpsHub {
 				dlg.show();
 			});
 
+			// Removed-part genealogy (required before the ticket can close)
+			content.on("click", ".goh-spare-genealogy", function () {
+				const btn = $(this);
+				const rowName = btn.data("row");
+				const dlg = new frappe.ui.Dialog({
+					title: __("Removed Part Details"),
+					fields: [
+						{ fieldname: "removed_part_serial", label: __("Removed Part Serial (old, KBB)"), fieldtype: "Data",
+							reqd: 1, default: btn.data("serial") || "" },
+						{ fieldname: "removed_part_condition", label: __("Condition"), fieldtype: "Select",
+							options: "\nGood\nFaulty\nDamaged\nScrap", reqd: 1, default: btn.data("condition") || "" },
+						{ fieldname: "installed_part_serial", label: __("Installed Part Serial (new, KGB)"), fieldtype: "Data",
+							default: btn.data("installed") || "" },
+					],
+					primary_action_label: __("Save"),
+					primary_action: v => {
+						frappe.xcall(`${API}.update_spare_genealogy`, {
+							sr_name: d.name, spare_row_name: rowName,
+							removed_part_serial: v.removed_part_serial,
+							installed_part_serial: v.installed_part_serial || "",
+							removed_part_condition: v.removed_part_condition,
+						}).then(() => {
+							dlg.hide();
+							frappe.show_alert({ message: __("Removed-part details saved."), indicator: "green" });
+							self._load_detail(d.name);
+						}).catch(err => frappe.msgprint({ title: __("Error"), message: err.message || String(err), indicator: "red" }));
+					},
+				});
+				dlg.show();
+			});
+
 			content.on("click", ".goh-spare-damage", function () {
 				const rowName = $(this).data("row");
 				const dlg = new frappe.ui.Dialog({
@@ -1643,12 +1681,15 @@ class GoFixOpsHub {
 						{ fieldname: "removed_part_serial", label: __("Removed Part Serial (old, KBB)"), fieldtype: "Data",
 							description: __("Serial/IMEI of the part taken OUT — needed for defective-return credit") },
 						{ fieldname: "installed_part_serial", label: __("Installed Part Serial (new, KGB)"), fieldtype: "Data" },
+						{ fieldname: "removed_part_condition", label: __("Removed Part Condition"), fieldtype: "Select",
+							options: "\nGood\nFaulty\nDamaged\nScrap" },
 						{ fieldname: "rate", label: __("Rate"), fieldtype: "Currency", default: 0 },
 					],
 					primary_action_label: __("Add"),
 					primary_action: v => {
 						frappe.xcall(`${API}.add_spare_to_ticket`, { sr_name: d.name, spare_item: v.spare_item, qty: v.qty, rate: v.rate || 0,
-							removed_part_serial: v.removed_part_serial || "", installed_part_serial: v.installed_part_serial || "" })
+							removed_part_serial: v.removed_part_serial || "", installed_part_serial: v.installed_part_serial || "",
+							removed_part_condition: v.removed_part_condition || "" })
 							.then(r => {
 								dlg.hide();
 								if (r.status === "Awaiting Procurement") {

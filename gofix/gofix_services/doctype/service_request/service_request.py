@@ -1698,6 +1698,30 @@ def get_unresolved_issue_gaps(sr) -> dict:
 	}
 
 
+def missing_removed_part_details(sr) -> list:
+	"""Consumed spares whose removed-part genealogy is incomplete.
+
+	Every physically-fitted spare must record the OLD part's serial and
+	condition before the ticket can close (defective-return credit + OEM
+	evidence chain). Universal consumables (thermal paste, screws) and
+	non-stock lines are exempt — they don't produce a removed part.
+	"""
+	if isinstance(sr, str):
+		sr = frappe.get_doc("Service Request", sr)
+	missing = []
+	for row in sr.get("spare_lines", []):
+		if row.status != "Consumed":
+			continue
+		item_flags = frappe.db.get_value(
+			"Item", row.spare_item, ["is_stock_item", "gofix_universal_spare"], as_dict=True
+		) or frappe._dict()
+		if not item_flags.get("is_stock_item") or item_flags.get("gofix_universal_spare"):
+			continue
+		if not (row.get("removed_part_serial") or "").strip() or not (row.get("removed_part_condition") or "").strip():
+			missing.append(row.item_name or row.spare_item)
+	return missing
+
+
 def complete_service_request(service_request, completion_date=None):
 	"""Mark a Service Request completed and create monetization artifacts."""
 	doc = frappe.get_doc("Service Request", service_request)

@@ -77,8 +77,13 @@ def normalise_customer_address_rows(doc, method=None):
 def sync_standard_customer_address(doc, method=None):
 	"""Mirror the active CH billing address into ERPNext Address.
 
-	This runs after Customer insert/update and is intentionally idempotent.
+	Data Import must finish persisting the Customer before an Address can safely
+	link to it. Successful imported customers are reconciled in one pass by
+	``on_data_import_change``.
 	"""
+	if getattr(frappe.flags, "in_import", False):
+		return
+
 	customer = doc.name if hasattr(doc, "name") else cstr(doc)
 	if customer:
 		sync_customer_address(customer)
@@ -99,7 +104,7 @@ def on_data_import_change(doc, method=None):
 			filters={"data_import": doc.name, "success": 1},
 			pluck="docname",
 		)
-		customer_names = _filter_customers_needing_sync(customer_names)
+		customer_names = list(dict.fromkeys(filter(None, customer_names)))
 		if customer_names:
 			sync_customer_addresses(customer_names=customer_names, commit=True)
 	except Exception:
@@ -453,48 +458,6 @@ def _customers_with_ch_addresses(limit=None):
 		sql += " LIMIT %(limit)s"
 		return frappe.db.sql_list(sql, {"limit": cint(limit)})
 	return frappe.db.sql_list(sql)
-
-
-def _filter_customers_needing_sync(customer_names):
-	customer_names = list(dict.fromkeys(filter(None, customer_names or [])))
-	if not customer_names:
-		return []
-
-	needs_sync = []
-	for batch in frappe.utils.create_batch(customer_names, 500):
-		needs_sync.extend(
-			frappe.db.sql_list(
-				"""
-				SELECT DISTINCT c.name
-				  FROM `tabCustomer` c
-				  JOIN `tabCH Customer Address` a
-				    ON a.parent = c.name
-				   AND a.parenttype = 'Customer'
-				   AND a.parentfield = 'billing_addresses'
-				  LEFT JOIN `tabDynamic Link` dl
-				    ON dl.parenttype = 'Address'
-				   AND dl.parent = c.customer_primary_address
-				   AND dl.link_doctype = 'Customer'
-				   AND dl.link_name = c.name
-				 WHERE c.name IN %(customers)s
-				   AND (
-					   IFNULL(c.customer_primary_address, '') = ''
-					OR dl.name IS NULL
-					OR NOT EXISTS (
-						SELECT 1
-						  FROM `tabCH Customer Address` active_addr
-						 WHERE active_addr.parent = c.name
-						   AND active_addr.parenttype = 'Customer'
-						   AND active_addr.parentfield = 'billing_addresses'
-						   AND IFNULL(active_addr.is_active, 0) = 1
-						   AND active_addr.address_type IN ('Billing', 'Both')
-					)
-				   )
-				""",
-				{"customers": tuple(batch)},
-			)
-		)
-	return needs_sync
 
 
 def _data_import_is_complete(doc):

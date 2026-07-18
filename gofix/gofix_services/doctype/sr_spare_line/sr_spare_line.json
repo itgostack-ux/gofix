@@ -17,6 +17,7 @@
   "rate",
   "installed_part_serial",
   "removed_part_serial",
+  "removed_part_condition",
   "amount",
   "section_break_status",
   "status",
@@ -104,6 +105,13 @@
    "description": "Serial/IMEI of the part taken OUT of the device (KBB) \u2014 drives defective-return credit"
   },
   {
+   "fieldname": "removed_part_condition",
+   "fieldtype": "Select",
+   "label": "Removed Part Condition",
+   "options": "\nGood\nFaulty\nDamaged\nScrap",
+   "description": "Condition of the part taken out \u2014 drives return-credit disposition"
+  },
+  {
    "fieldname": "amount",
    "fieldtype": "Currency",
    "label": "Amount",
@@ -137,7 +145,7 @@
  "index_web_pages_for_search": 0,
  "istable": 1,
  "links": [],
- "modified": "2026-07-18 14:00:00.000000",
+ "modified": "2026-07-18 16:00:00.000000",
  "modified_by": "Administrator",
  "module": "GoFix Services",
  "name": "SR Spare Line",

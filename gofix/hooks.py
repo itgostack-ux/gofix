@@ -129,7 +129,6 @@ doc_events = {
 	},
 	"Customer": {
 		"validate": "gofix.gofix_services.customer_address.validate_single_active_address",
-		"after_insert": "gofix.gofix_services.customer_address.sync_standard_customer_address",
 		"on_update": "gofix.gofix_services.customer_address.sync_standard_customer_address",
 	},
 	"Data Import": {

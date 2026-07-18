@@ -517,6 +517,16 @@
   {
    "hidden": 0,
    "is_query_report": 1,
+   "label": "GoFix Removed Spares Register",
+   "link_count": 0,
+   "link_to": "GoFix Removed Spares Register",
+   "link_type": "Report",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 1,
    "label": "Repair Profitability",
    "link_count": 0,
    "link_to": "Repair Profitability",
@@ -565,7 +575,7 @@
    "type": "Link"
   }
  ],
- "modified": "2026-07-17 02:56:58.613915",
+ "modified": "2026-07-18 16:10:00.000000",
  "modified_by": "Administrator",
  "module": "GoFix Services",
  "name": "GoFix",

@@ -383,6 +383,47 @@ def accept_and_create_service_order(sr_name) -> dict:
 
 
 @frappe.whitelist()
+def update_spare_genealogy(sr_name, spare_row_name, removed_part_serial=None,
+		installed_part_serial=None, removed_part_condition=None) -> dict:
+	"""Record the removed/installed part serials and condition on a spare line
+	after the physical swap — required before the ticket can close."""
+	_assert_sr_permission(sr_name, "write")
+	row = frappe.db.get_value(
+		"SR Spare Line",
+		{"name": spare_row_name, "parent": sr_name, "parenttype": "Service Request"},
+		["name"],
+	)
+	if not row:
+		frappe.throw(_("Spare line not found on {0}.").format(sr_name))
+	updates = {}
+	if removed_part_serial is not None:
+		updates["removed_part_serial"] = removed_part_serial.strip()
+	if installed_part_serial is not None:
+		updates["installed_part_serial"] = installed_part_serial.strip()
+	if removed_part_condition is not None:
+		updates["removed_part_condition"] = removed_part_condition.strip()
+	if updates:
+		frappe.db.set_value("SR Spare Line", spare_row_name, updates, update_modified=False)
+	return {"ok": True}
+
+
+def _assert_removed_part_details_complete(sr) -> None:
+	from gofix.gofix_services.doctype.service_request.service_request import (
+		missing_removed_part_details,
+	)
+
+	missing = missing_removed_part_details(sr)
+	if missing:
+		frappe.throw(
+			_("Cannot close — removed-part details (old serial + condition) are missing "
+			  "for: {0}. Record them via the spare line's genealogy (✎) button.").format(
+				", ".join(missing)
+			),
+			title=_("Removed Spare Details Required"),
+		)
+
+
+@frappe.whitelist()
 def get_ticket_detail(sr_name) -> dict:
 	"""Return full SR data with child tables and computed ops_stage."""
 	_assert_sr_permission(sr_name, "read")
@@ -448,6 +489,9 @@ def get_ticket_detail(sr_name) -> dict:
 			"status": row.status,
 			"repair_solution": row.repair_solution or "",
 			"remarks": row.get("remarks") or "",
+			"removed_part_serial": row.get("removed_part_serial") or "",
+			"installed_part_serial": row.get("installed_part_serial") or "",
+			"removed_part_condition": row.get("removed_part_condition") or "",
 		}
 		for row in sr.get("spare_lines", [])
 	]
@@ -1407,7 +1451,7 @@ def mark_spare_damaged(sr_name, spare_row_name, remarks="") -> dict:
 
 @frappe.whitelist()
 def add_spare_to_ticket(sr_name, spare_item, qty, rate=0, repair_solution=None,
-		removed_part_serial=None, installed_part_serial=None) -> dict:
+		removed_part_serial=None, installed_part_serial=None, removed_part_condition=None) -> dict:
 	"""Add a spare part to the SR.  Checks warehouse stock first.
 
 	Returns:
@@ -1471,6 +1515,7 @@ def add_spare_to_ticket(sr_name, spare_item, qty, rate=0, repair_solution=None,
 		# defective-return credit and OEM claim evidence.
 		"removed_part_serial": (removed_part_serial or "").strip(),
 		"installed_part_serial": (installed_part_serial or "").strip(),
+		"removed_part_condition": (removed_part_condition or "").strip(),
 	})
 
 	sr.save()
@@ -1948,6 +1993,8 @@ def submit_for_qc(sr_name) -> dict:
 			title=_("All Issues Must Be Solved Before QC"),
 		)
 
+	_assert_removed_part_details_complete(sr)
+
 	# Mark remaining In-Progress / Planned solutions as Completed (skip Cancelled)
 	sr.flags.ignore_validate_update_after_submit = True
 	sr.flags.ignore_mandatory = True
@@ -2052,6 +2099,8 @@ def complete_qc(sr_name, qc_result) -> dict:
 			),
 			title=_("All Issues Must Be Solved Before QC"),
 		)
+
+	_assert_removed_part_details_complete(sr)
 
 	so = frappe.get_doc("Sales Order", sr.service_order)
 	so.db_set("qc_status", qc_result, update_modified=True)
@@ -2169,6 +2218,8 @@ def create_ops_hub_invoice(sr_name, remote_otp=None) -> dict:
 
 	if not sr.is_completed_status():
 		frappe.throw(_("Service Request must be in Completed status to create an invoice."), title=_("Validation Error"))
+
+	_assert_removed_part_details_complete(sr)
 
 	# Bill only at the device's home store — off-store billing needs customer OTP.
 	from gofix.gofix_services.api import assert_billing_location

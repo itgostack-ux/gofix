@@ -50,6 +50,9 @@ fixtures = [
     },
 ]
 
+# Old apps-screen route lives on in bookmarks/history — redirect it.
+website_redirects = [{"source": "/GoFix", "target": "/desk/gofix"}]
+
 add_to_apps_screen = [
 	{
 		"name": "gofix",

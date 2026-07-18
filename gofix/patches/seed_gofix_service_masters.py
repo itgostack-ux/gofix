@@ -320,6 +320,30 @@ def _seed_qc_templates() -> None:
 		doc.insert(ignore_permissions=True)
 
 
+def _seed_spare_category_mapping() -> None:
+	"""Map each spares catalogue category to the device category it serves.
+
+	Drives the category tier of spare applicability (a laptop spare never
+	shows for a mobile repair). No-op until the custom field exists.
+	"""
+
+	if not frappe.db.has_column("CH Category", "gofix_spares_for_category"):
+		return
+	mapping = {
+		"Mobile Spares": "Smart Phones",
+		"Laptop Spares": "Laptops",
+		"Tablet Spares": "Tablets",
+		"Smart Watch Spares": "Watches",
+	}
+	for spares_cat, device_cat in mapping.items():
+		if not (frappe.db.exists("CH Category", spares_cat) and frappe.db.exists("CH Category", device_cat)):
+			continue
+		if not frappe.db.get_value("CH Category", spares_cat, "gofix_spares_for_category"):
+			frappe.db.set_value(
+				"CH Category", spares_cat, "gofix_spares_for_category", device_cat, update_modified=False
+			)
+
+
 def _seed_service_order_state_machine() -> None:
 	"""Mirror the active Service Order Workflow into the Service Order
 	State/Transition masters.
@@ -397,6 +421,7 @@ def execute() -> None:
 	_seed_withdrawal_reasons()
 	_seed_qc_templates()
 	_seed_service_order_state_machine()
+	_seed_spare_category_mapping()
 
 	from gofix.setup.seed_default_rules import seed_approval_rules, seed_sla_rules
 

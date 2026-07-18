@@ -36,10 +36,40 @@ def create_item_custom_fields():
 				"fieldtype": "Table",
 				"options": "GoFix Spare Compatible Model",
 				"insert_after": "gofix_spare_compatibility_section",
-				"description": "Device models this spare part fits. Leave empty if the spare fits any device.",
+				"description": "Exact device models this spare fits (most specific tier — overrides brand/category matching). Same spare may list many models.",
 			},
-		]
+			{
+				"fieldname": "gofix_universal_spare",
+				"label": "Universal Spare / Consumable",
+				"fieldtype": "Check",
+				"insert_after": "gofix_compatible_models",
+				"description": "Tick for consumables (thermal paste, adhesive, screws) usable on any device — bypasses brand/category/model matching.",
+			},
+		],
+		# The spare's own catalogue category declares which DEVICE category it
+		# serves (Laptop Spares → Laptops). Drives the category tier of spare
+		# compatibility so a laptop keyboard never shows for a mobile repair.
+		"CH Category": [
+			{
+				"fieldname": "gofix_spares_for_category",
+				"label": "Spares For (Device Category)",
+				"fieldtype": "Link",
+				"options": "CH Category",
+				"insert_after": "item_group",
+				"description": "If this is a spares category, the device category its parts serve (e.g. Laptop Spares → Laptops).",
+			},
+		],
 	}
 
 	create_custom_fields(custom_fields, update=True)
 	frappe.logger("gofix").info("GoFix: Item spare-compatibility custom fields created/updated.")
+
+	# The spares→device category mapping depends on the CH Category custom
+	# field created just above — seed it here (idempotent) because the patch
+	# in patches.txt runs BEFORE after_migrate creates the column.
+	try:
+		from gofix.patches.seed_gofix_service_masters import _seed_spare_category_mapping
+
+		_seed_spare_category_mapping()
+	except Exception:
+		frappe.log_error(frappe.get_traceback(), "spare category mapping seed failed")

@@ -1004,12 +1004,15 @@ def get_solutions_for_issues(issue_categories) -> list:
 
 
 @frappe.whitelist()
-def get_spares_for_solution(repair_solution) -> list:
-	"""Return active mapped spares for a given Repair Solution."""
+def get_spares_for_solution(repair_solution, device_item=None) -> list:
+	"""Return active mapped spares for a given Repair Solution.
+
+	When ``device_item`` is passed, spares that fail the device applicability
+	ladder (brand / category / model fitment) are filtered out."""
 	if not repair_solution:
 		return []
 
-	return frappe.get_all("Solution Spare Mapping",
+	rows = frappe.get_all("Solution Spare Mapping",
 		filters={
 			"repair_solution": repair_solution,
 			"is_active": 1
@@ -1017,13 +1020,18 @@ def get_spares_for_solution(repair_solution) -> list:
 		fields=["name", "spare_item", "item_name", "default_qty", "uom", "is_mandatory"],
 		order_by="is_mandatory desc, item_name"
 	)
+	if device_item:
+		rows = [r for r in rows if is_spare_compatible_with_device(r.spare_item, device_item)]
+	return rows
 
 
 @frappe.whitelist()
-def get_spares_for_solutions(repair_solutions) -> list:
+def get_spares_for_solutions(repair_solutions, device_item=None) -> list:
 	"""Return active mapped spares for multiple Repair Solutions.
 	Args:
 		repair_solutions: JSON list of Repair Solution names
+		device_item: optional — drop spares that fail the device
+			applicability ladder (brand / category / model fitment)
 	"""
 	import json
 	if isinstance(repair_solutions, str):
@@ -1032,7 +1040,7 @@ def get_spares_for_solutions(repair_solutions) -> list:
 	if not repair_solutions:
 		return []
 
-	return frappe.get_all("Solution Spare Mapping",
+	rows = frappe.get_all("Solution Spare Mapping",
 		filters={
 			"repair_solution": ["in", repair_solutions],
 			"is_active": 1
@@ -1041,6 +1049,9 @@ def get_spares_for_solutions(repair_solutions) -> list:
 				"default_qty", "uom", "is_mandatory"],
 		order_by="repair_solution, is_mandatory desc, item_name"
 	)
+	if device_item:
+		rows = [r for r in rows if is_spare_compatible_with_device(r.spare_item, device_item)]
+	return rows
 
 
 @frappe.whitelist()
@@ -1139,26 +1150,66 @@ def get_mapped_spare_items(doctype, txt, searchfield, start, page_len, filters) 
 # This lets the repair flow only offer spares that match the device being
 # repaired, so technicians cannot pick the wrong part.
 
+def _device_brand_and_category(item_code):
+	"""Brand + CH Category of a device item, falling back to its variant template."""
+	row = frappe.db.get_value("Item", item_code, ["brand", "ch_category", "variant_of"], as_dict=True)
+	if not row:
+		return None, None
+	brand, category = row.brand, row.ch_category
+	if row.variant_of and (not brand or not category):
+		t = frappe.db.get_value("Item", row.variant_of, ["brand", "ch_category"], as_dict=True)
+		if t:
+			brand = brand or t.brand
+			category = category or t.ch_category
+	return brand, category
+
+
 def is_spare_compatible_with_device(spare_item, device_item) -> bool:
 	"""Return True if `spare_item` may be used on `device_item`.
 
-	Universal spares (no compatibility rows) are always compatible. When the
-	spare declares specific models, the device must be one of them.
+	Market-standard applicability ladder (most specific tier wins):
+	  1. Universal spare / consumable flag        → always compatible.
+	  2. Explicit compatible-model rows (fitment) → device must be listed
+	     (the same spare may list many models — interchangeability).
+	  3. Category tier — the spare's CH Category declares which device
+	     category it serves (Laptop Spares → Laptops): a laptop spare never
+	     fits a mobile.
+	  4. Brand tier — a branded spare only fits devices of the same brand
+	     (Apple spare never fits a Samsung); unbranded spares are
+	     brand-agnostic.
 	"""
 	if not spare_item or not device_item:
+		return True
+
+	spare = frappe.db.get_value(
+		"Item", spare_item, ["brand", "ch_category", "gofix_universal_spare"], as_dict=True
+	)
+	if spare and cint(spare.gofix_universal_spare):
 		return True
 
 	has_any = frappe.db.exists(
 		"GoFix Spare Compatible Model",
 		{"parent": spare_item, "parenttype": "Item"},
 	)
-	if not has_any:
-		return True
+	if has_any:
+		return bool(frappe.db.exists(
+			"GoFix Spare Compatible Model",
+			{"parent": spare_item, "parenttype": "Item", "device_model": device_item},
+		))
 
-	return bool(frappe.db.exists(
-		"GoFix Spare Compatible Model",
-		{"parent": spare_item, "parenttype": "Item", "device_model": device_item},
-	))
+	device_brand, device_category = _device_brand_and_category(device_item)
+
+	# Category tier — only enforced when both sides are resolvable.
+	if spare and spare.ch_category and device_category:
+		serves = frappe.db.get_value("CH Category", spare.ch_category, "gofix_spares_for_category")
+		if serves and serves != device_category:
+			return False
+
+	# Brand tier.
+	if spare and spare.brand and device_brand and spare.brand.strip().lower() != device_brand.strip().lower():
+		return False
+
+	return True
 
 
 @frappe.whitelist()
@@ -1217,17 +1268,46 @@ def get_compatible_spare_items(doctype, txt, searchfield, start, page_len, filte
 
 	if device_item:
 		values["device_item"] = device_item
-		# Universal spares (no rows) OR spares explicitly mapped to this device.
-		conditions.append(
+		device_brand, device_category = _device_brand_and_category(device_item)
+		values["device_brand"] = device_brand or ""
+		values["device_category"] = device_category or ""
+		has_universal_col = frappe.db.has_column("Item", "gofix_universal_spare")
+		has_serves_col = frappe.db.has_column("CH Category", "gofix_spares_for_category")
+		universal_clause = "i.gofix_universal_spare = 1" if has_universal_col else "1 = 0"
+		category_clause = (
 			"""(
-				NOT EXISTS (
-					SELECT 1 FROM `tabGoFix Spare Compatible Model` m
-					WHERE m.parent = i.name AND m.parenttype = 'Item'
+				%(device_category)s = '' OR i.ch_category IS NULL OR i.ch_category = ''
+				OR NOT EXISTS (
+					SELECT 1 FROM `tabCH Category` sc
+					WHERE sc.name = i.ch_category
+					  AND IFNULL(sc.gofix_spares_for_category, '') != ''
+					  AND sc.gofix_spares_for_category != %(device_category)s
 				)
+			)"""
+			if has_serves_col
+			else "1 = 1"
+		)
+		# Applicability ladder: universal consumable → explicit model fitment →
+		# category tier (Laptop Spares only for Laptops) + brand tier (Apple
+		# spare never for a Samsung device).
+		conditions.append(
+			f"""(
+				{universal_clause}
 				OR EXISTS (
 					SELECT 1 FROM `tabGoFix Spare Compatible Model` m2
 					WHERE m2.parent = i.name AND m2.parenttype = 'Item'
 					  AND m2.device_model = %(device_item)s
+				)
+				OR (
+					NOT EXISTS (
+						SELECT 1 FROM `tabGoFix Spare Compatible Model` m
+						WHERE m.parent = i.name AND m.parenttype = 'Item'
+					)
+					AND {category_clause}
+					AND (
+						IFNULL(i.brand, '') = '' OR %(device_brand)s = ''
+						OR LOWER(i.brand) = LOWER(%(device_brand)s)
+					)
 				)
 			)"""
 		)

@@ -944,7 +944,13 @@ def save_solution_assignment(sr_name, solutions_json) -> dict:
 		})
 
 		if sol.get("auto_add_spares"):
+			from gofix.gofix_services.api import is_spare_compatible_with_device
+
 			for sp in spare_mapping_by_sol.get(sol.get("repair_solution"), []):
+				# Never auto-add a spare that doesn't fit this device
+				# (brand / category / model applicability ladder).
+				if not is_spare_compatible_with_device(sp.spare_item, sr.device_item):
+					continue
 				spare_rate = spare_price_map.get(sp.spare_item) or spare_std_rate_map.get(sp.spare_item, 0.0)
 				sr.append("spare_lines", {
 					"repair_solution": sol.get("repair_solution"),

@@ -19,3 +19,4 @@ gofix.patches.seed_gofix_token_masters #2026-07-17 v3 — link brand options to 
 gofix.patches.seed_gofix_service_masters #2026-07-17 v3 - merge duplicate legacy L3 Expert grade
 gofix.patches.sync_customer_addresses #2026-07-17 - activate imported customer billing rows and sync ERPNext Address links
 gofix.patches.seed_gofix_service_masters #2026-07-17 v4 — seed Service Order State/Transition matrix from active workflow
+gofix.patches.seed_gofix_service_masters #2026-07-18 v5 — spare-category→device-category applicability mapping

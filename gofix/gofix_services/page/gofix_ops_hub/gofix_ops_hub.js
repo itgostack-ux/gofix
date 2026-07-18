@@ -372,6 +372,7 @@ class GoFixOpsHub {
 		// Choose which content panel to render based on ops_stage
 		let contentHtml = "";
 		const renderer = {
+			draft:     () => this._html_draft(d),
 			analysis:  () => this._html_analysis(d),
 			confirm:   () => this._html_confirm(d),
 			solutions: () => this._html_solutions(d),
@@ -1345,6 +1346,26 @@ class GoFixOpsHub {
 		/* If past QC (qc / invoice / done), previous steps are read-only */
 		if (isViewing && ["qc", "invoice", "done"].includes(d.ops_stage)) return;
 
+		/* ── Draft: accept & create the Service Order from the hub ───── */
+		if (activeStage === "draft") {
+			content.find("#goh-accept-create-so").on("click", (e) => {
+				const btn = $(e.currentTarget);
+				btn.prop("disabled", true).html(`<i class="fa fa-spinner fa-spin"></i> ${__("Accepting…")}`);
+				frappe.xcall(`${API}.accept_and_create_service_order`, { sr_name: d.name })
+					.then((r) => {
+						frappe.show_alert({
+							message: __("Accepted — Service Order {0} created.", [r.service_order]),
+							indicator: "green",
+						});
+						self._refresh_all();
+					})
+					.catch((err) => {
+						frappe.msgprint({ title: __("Could not accept"), message: err.message || String(err), indicator: "red" });
+						btn.prop("disabled", false).html(`<i class="fa fa-check"></i> ${__("Accept & Create Service Order")}`);
+					});
+			});
+		}
+
 		/* ── Analysis ────────────────────────────────────────────────── */
 		if (activeStage === "analysis") {
 			// Load categories
@@ -1879,6 +1900,29 @@ class GoFixOpsHub {
 		});
 		if (propName) this[propName] = ctrl;
 		else this._tech_field = ctrl;
+	}
+
+	_html_draft(d) {
+		const esc = frappe.utils.escape_html;
+		return `
+		<div class="goh-section p-3">
+			<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+				<i class="fa fa-inbox" style="font-size:20px;color:var(--text-muted)"></i>
+				<div>
+					<div style="font-weight:700">${__("New ticket — awaiting acceptance")}</div>
+					<div class="text-muted" style="font-size:12px">
+						${__("Issue")}: ${esc(d.issue_category || "—")}
+						${d.estimated_cost ? ` · ${__("Est.")} ₹${format_number(d.estimated_cost)}` : ""}
+					</div>
+				</div>
+			</div>
+			<p class="text-muted" style="font-size:12px">
+				${__("Accepting confirms the diagnosis, records estimate v1 as customer-approved and creates the Service Order — the ticket then moves into Solutions → Assign → Repair. For a detailed diagnosis or a formal estimate approval first, use the stepper stages instead.")}
+			</p>
+			<button class="btn btn-primary" id="goh-accept-create-so">
+				<i class="fa fa-check"></i> ${__("Accept & Create Service Order")}
+			</button>
+		</div>`;
 	}
 
 	async _load_solutions_for_categories(d) {

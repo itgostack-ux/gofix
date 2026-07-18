@@ -327,6 +327,63 @@ def _derive_stage(sr):
 # ── Ticket Detail ─────────────────────────────────────────────────────────────
 
 @frappe.whitelist()
+def accept_and_create_service_order(sr_name) -> dict:
+	"""Express acceptance from the hub's Draft stage.
+
+	Walks the sanctioned chain in one step — issue line (seeded from the
+	header category when diagnosis hasn't added any), analysis confirmed,
+	repairability Repairable, estimate v1 recorded as customer-approved —
+	which births the Service Order (SAP notification→order moment). Every
+	step lands in the ops stage log / estimate versions for audit.
+	"""
+	_assert_sr_permission(sr_name, "write")
+	sr = frappe.get_doc("Service Request", sr_name)
+	if sr.docstatus != 1:
+		frappe.throw(_("Submit the Service Request before accepting."), title=_("Validation Error"))
+	if sr.service_order:
+		frappe.throw(_("Service Order {0} already exists.").format(sr.service_order), title=_("Validation Error"))
+
+	sr.flags.ignore_validate_update_after_submit = True
+	sr.flags.ignore_mandatory = True
+
+	active_issues = [r for r in sr.get("issue_lines", []) if r.status not in ("Deleted", "Cancelled")]
+	if not active_issues:
+		if not sr.issue_category:
+			frappe.throw(
+				_("Add at least one issue (or set the Issue Category) before accepting."),
+				title=_("Validation Error"),
+			)
+		sr.append("issue_lines", {
+			"issue_category": sr.issue_category,
+			"reported_by": "Customer",
+			"status": "Open",
+		})
+		sr.save(ignore_permissions=True)
+
+	frappe.db.set_value("Service Request", sr_name, {
+		"analysis_confirmed": 1,
+		"repairability_status": "Repairable",
+	}, update_modified=False)
+	_log_ops_stage(sr_name, "draft", "confirm")
+
+	from gofix.gofix_services import orchestration
+
+	estimate = orchestration.create_estimate_version(sr_name, reason=None, send_to_customer=False)
+	orchestration.customer_approve_estimate(sr_name, remarks=_("Accepted at Ops Hub — express acceptance"))
+
+	sr.reload()
+	if not sr.service_order:
+		frappe.throw(_("Acceptance completed but Service Order was not created — check estimate gates."))
+
+	updates = {"decision": "Accepted", "walkin_status": "Accepted", "status": "In Service"}
+	if frappe.db.has_column("Service Request", "accepted_by"):
+		updates["accepted_by"] = frappe.session.user
+	frappe.db.set_value("Service Request", sr_name, updates, update_modified=False)
+
+	return {"ok": True, "service_order": sr.service_order, "estimate": estimate}
+
+
+@frappe.whitelist()
 def get_ticket_detail(sr_name) -> dict:
 	"""Return full SR data with child tables and computed ops_stage."""
 	_assert_sr_permission(sr_name, "read")

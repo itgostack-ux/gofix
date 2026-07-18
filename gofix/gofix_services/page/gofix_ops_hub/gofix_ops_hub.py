@@ -1361,19 +1361,12 @@ def assign_solutions_to_technician(sr_name, solution_rows_json, technician, esti
 			"technician_name": tech_name,
 		}, update_modified=True)
 
-	# Create Job Assignment for tracking
-	ja = frappe.new_doc("Job Assignment")
-	ja.service_order = sr.service_order
-	ja.service_request = sr_name
-	ja.service_engineer = technician
-	ja.job_type = "Repair"
-	ja.assignment_type = "Technician Assignment"
-	ja.assigned_by = frappe.session.user
-	ja.priority = sr.priority
-	if estimated_hours:
-		ja.estimated_hours = flt(estimated_hours)
-	ja.insert()
-	ja.submit()
+	# One active Job Assignment per technician per service order — assigning
+	# more solutions to the same technician reuses it instead of piling up
+	# duplicate JAs (and duplicate chips in the hub header).
+	ja = _get_or_create_job_assignment(
+		sr, technician, "Technician Assignment", estimated_hours=estimated_hours
+	)
 
 	# Check if ALL solutions are now assigned
 	sr.reload()
@@ -1468,41 +1461,8 @@ def update_solution_status(sr_name, solution_row_name, status, remarks="") -> di
 	if status not in valid:
 		frappe.throw(_("Invalid status. Must be one of: {0}").format(", ".join(valid)), title=_("Validation Error"))
 
-	# Grade-safety gate: work can only start/finish on a solution that has an
-	# assigned technician, and only while THAT technician holds the device —
-	# otherwise an L1 holding the phone could "Start" L4 board work that was
-	# never assigned to them.
 	if status in ("In Progress", "Completed"):
-		line = frappe.db.get_value(
-			"SR Solution Line",
-			solution_row_name,
-			["technician", "repair_solution"],
-			as_dict=True,
-		) or frappe._dict()
-		if not line.technician:
-			frappe.throw(
-				_("{0} has no technician assigned — assign it (Assign stage) to a "
-				  "technician whose grade covers it before starting.").format(
-					line.repair_solution or _("This solution")
-				),
-				title=_("Unassigned Solution"),
-			)
-		so_name = frappe.db.get_value("Service Request", sr_name, "service_order")
-		active = frappe.db.get_value(
-			"Job Assignment",
-			{"service_order": so_name, "assignment_status": "In Progress", "docstatus": ("<", 2)},
-			"service_engineer",
-		) if so_name else None
-		if active and active != line.technician:
-			holder = frappe.db.get_value("Employee", active, "employee_name") or active
-			assignee = frappe.db.get_value("Employee", line.technician, "employee_name") or line.technician
-			frappe.throw(
-				_("{0} is assigned to {1}, but the device is currently with {2}. "
-				  "Hand off the device before working this solution.").format(
-					line.repair_solution, assignee, holder
-				),
-				title=_("Not Your Solution"),
-			)
+		line = _assert_can_work_solution(sr_name, solution_row_name)
 
 	# Parts-readiness gate (SAP "waiting for parts" pattern): a solution
 	# cannot be marked Done while a spare attributed to it is still on order
@@ -1533,6 +1493,82 @@ def update_solution_status(sr_name, solution_row_name, status, remarks="") -> di
 		_sync_job_assignment_custody(sr_name, solution_row_name, line.technician, status)
 
 	return {"ok": True}
+
+
+def _get_or_create_job_assignment(sr, technician, assignment_type, estimated_hours=None,
+		job_type="Repair", comments=None):
+	"""Reuse the technician's active JA on this service order, else create one."""
+	ja_name = frappe.db.get_value(
+		"Job Assignment",
+		{
+			"service_order": sr.service_order,
+			"service_engineer": technician,
+			"docstatus": ("<", 2),
+			"assignment_status": ("not in", ("Completed", "Cancelled")),
+		},
+		"name",
+	)
+	if ja_name:
+		ja = frappe.get_doc("Job Assignment", ja_name)
+		if estimated_hours:
+			ja.flags.ignore_validate_update_after_submit = True
+			ja.estimated_hours = flt(ja.estimated_hours or 0) + flt(estimated_hours)
+			ja.save(ignore_permissions=True)
+		return ja
+
+	ja = frappe.new_doc("Job Assignment")
+	ja.service_order = sr.service_order
+	ja.service_request = sr.name
+	ja.service_engineer = technician
+	ja.job_type = job_type
+	ja.assignment_type = assignment_type
+	ja.assigned_by = frappe.session.user
+	ja.priority = sr.priority
+	if estimated_hours:
+		ja.estimated_hours = flt(estimated_hours)
+	if comments:
+		ja.comments = comments
+	ja.insert()
+	ja.submit()
+	return ja
+
+
+def _assert_can_work_solution(sr_name, solution_row_name):
+	"""Grade-safety + device-custody gate for EVERY path that puts a solution
+	into active work (start, restart, complete): the line must have an
+	assigned technician, and no OTHER technician may currently hold the
+	device (active In Progress Job Assignment). Returns the line."""
+	line = frappe.db.get_value(
+		"SR Solution Line",
+		solution_row_name,
+		["technician", "repair_solution"],
+		as_dict=True,
+	) or frappe._dict()
+	if not line.technician:
+		frappe.throw(
+			_("{0} has no technician assigned — assign it (Assign stage) to a "
+			  "technician whose grade covers it before starting.").format(
+				line.repair_solution or _("This solution")
+			),
+			title=_("Unassigned Solution"),
+		)
+	so_name = frappe.db.get_value("Service Request", sr_name, "service_order")
+	active = frappe.db.get_value(
+		"Job Assignment",
+		{"service_order": so_name, "assignment_status": "In Progress", "docstatus": ("<", 2)},
+		"service_engineer",
+	) if so_name else None
+	if active and active != line.technician:
+		holder = frappe.db.get_value("Employee", active, "employee_name") or active
+		assignee = frappe.db.get_value("Employee", line.technician, "employee_name") or line.technician
+		frappe.throw(
+			_("{0} is assigned to {1}, but the device is currently with {2}. "
+			  "Hand off the device before working this solution.").format(
+				line.repair_solution, assignee, holder
+			),
+			title=_("Not Your Solution"),
+		)
+	return line
 
 
 def _assert_solution_parts_ready(sr_name, repair_solution) -> None:
@@ -1619,12 +1655,19 @@ def restart_solution_line(sr_name, solution_row_name, remarks="") -> dict:
 	if current not in ("Completed", "Skipped"):
 		frappe.throw(_("Only Completed or Skipped solutions can be restarted."), title=_("Validation Error"))
 
+	# Restart is just another way of starting work — same grade/custody gates
+	# as Start, else a restarted line lets a second technician work the device.
+	line = _assert_can_work_solution(sr_name, solution_row_name)
+
 	remark = f"[Restarted] {remarks}".strip() if remarks else "[Restarted]"
 	prev_remarks = frappe.db.get_value("SR Solution Line", solution_row_name, "technician_remarks") or ""
 	frappe.db.set_value("SR Solution Line", solution_row_name, {
 		"status": "In Progress",
 		"technician_remarks": (prev_remarks + "\n" + remark).strip(),
 	}, update_modified=True)
+
+	if line.get("technician"):
+		_sync_job_assignment_custody(sr_name, solution_row_name, line.technician, "In Progress")
 
 	return {"ok": True}
 
@@ -2130,18 +2173,9 @@ def handoff_to_technician(sr_name, new_technician, job_type="Repair", reason="")
 	if not sr.service_order:
 		frappe.throw(_("No Service Order linked to {0}.").format(sr_name), title=_("Validation Error"))
 
-	ja = frappe.new_doc("Job Assignment")
-	ja.service_order = sr.service_order
-	ja.service_request = sr_name
-	ja.service_engineer = new_technician
-	ja.job_type = job_type
-	ja.assignment_type = "Technician Changed"
-	ja.assigned_by = frappe.session.user
-	ja.priority = sr.priority
-	ja.comments = reason
-
-	ja.insert()
-	ja.submit()
+	ja = _get_or_create_job_assignment(
+		sr, new_technician, "Technician Changed", job_type=job_type, comments=reason
+	)
 	return {"ok": True, "job_assignment": ja.name}
 
 
@@ -2549,38 +2583,29 @@ def reassign_after_qc_fail(sr_name, technician, job_type="Repair", manager_notes
 
 	# Reset ONLY the failed solution lines back to "In Progress" for rework
 	# Use db_set per row to avoid triggering validate_issue_solution_cascade
+	rework_tech_name = frappe.db.get_value("Employee", technician, "employee_name") or technician
 	reworked = []
 	for row in sr.get("solution_lines", []):
 		updates = {}
 		# Reset if: explicitly linked to a failed check, OR no linking and was Completed
-		if row.repair_solution in failed_solutions:
+		if row.repair_solution in failed_solutions or (not failed_solutions and row.status == "Completed"):
 			remark = f"\n[Rework] QC fail — reassigned. {manager_notes}".strip()
 			updates["status"] = "In Progress"
 			updates["technician_remarks"] = (row.technician_remarks or "") + remark
-			reworked.append(row.repair_solution)
-		# If no solutions were linked to checks (legacy), fall back to failing only Completed
-		elif not failed_solutions and row.status == "Completed":
-			remark = f"\n[Rework] QC fail — reassigned. {manager_notes}".strip()
-			updates["status"] = "In Progress"
-			updates["technician_remarks"] = (row.technician_remarks or "") + remark
+			# Rework lines belong to the rework technician now — otherwise the
+			# old assignee lingers and the custody gate points at the wrong person.
+			updates["technician"] = technician
+			updates["technician_name"] = rework_tech_name
 			reworked.append(row.repair_solution)
 		if updates:
 			frappe.db.set_value("SR Solution Line", row.name, updates, update_modified=False)
 
-	# Create new Job Assignment for rework only
-	ja = frappe.new_doc("Job Assignment")
-	ja.service_order = sr.service_order
-	ja.service_request = sr_name
-	ja.service_engineer = technician
-	ja.job_type = job_type
-	ja.assignment_type = "Rework"
-	ja.assigned_by = frappe.session.user
-	ja.priority = sr.priority
+	# Job Assignment for rework (reuses the technician's active JA if any)
 	rework_summary = ", ".join(reworked[:5]) if reworked else "all failed items"
-	ja.comments = f"QC Fail Rework ({rework_summary}){(' — ' + manager_notes) if manager_notes else ''}"
-
-	ja.insert()
-	ja.submit()
+	ja = _get_or_create_job_assignment(
+		sr, technician, "Rework", job_type=job_type,
+		comments=f"QC Fail Rework ({rework_summary}){(' — ' + manager_notes) if manager_notes else ''}",
+	)
 	frappe.db.commit()
 
 	_log_ops_stage(sr_name, "rework", "repair")

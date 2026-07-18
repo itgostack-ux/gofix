@@ -1386,6 +1386,12 @@ def get_compatible_spare_items(doctype, txt, searchfield, start, page_len, filte
 
 	device_item = filters.get("device_item")
 	item_group = filters.get("item_group")
+	solutions = filters.get("solutions") or []
+	issue_categories = filters.get("issue_categories") or []
+	if isinstance(solutions, str):
+		solutions = json.loads(solutions)
+	if isinstance(issue_categories, str):
+		issue_categories = json.loads(issue_categories)
 
 	conditions = ["i.has_variants = 0", "i.disabled = 0"]
 	values = {
@@ -1394,6 +1400,31 @@ def get_compatible_spare_items(doctype, txt, searchfield, start, page_len, filte
 		"page_len": cint(page_len) or 20,
 	}
 	conditions.append("(i.name LIKE %(txt)s OR i.item_name LIKE %(txt)s)")
+
+	# Scope to the solution being worked on: if ops has mapped spares for the
+	# active solution(s) (Solution Spare Mapping), only those + universal
+	# consumables show. No mappings yet → fall back to the device ladder so an
+	# unmapped catalogue doesn't brick the picker.
+	if solutions or issue_categories:
+		mapping_or = []
+		if solutions:
+			mapping_or.append({"repair_solution": ("in", solutions)})
+		if issue_categories:
+			mapping_or.append({"issue_category": ("in", issue_categories)})
+		mapped = frappe.get_all(
+			"Solution Spare Mapping",
+			filters={"is_active": 1},
+			or_filters=mapping_or,
+			pluck="spare_item",
+		)
+		if mapped:
+			universal = (
+				"i.gofix_universal_spare = 1"
+				if frappe.db.has_column("Item", "gofix_universal_spare")
+				else "1 = 0"
+			)
+			conditions.append(f"(i.name IN %(mapped_spares)s OR {universal})")
+			values["mapped_spares"] = tuple(set(mapped))
 
 	group_join = ""
 	if item_group:

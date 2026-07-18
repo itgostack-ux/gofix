@@ -1653,13 +1653,22 @@ class GoFixOpsHub {
 
 			content.find("#goh-add-spare-btn").on("click", () => {
 				const warehouse = d.source_warehouse || "";
+				// Scope the picker to the solution actually being worked on:
+				// In Progress first, else assigned-and-active, else all active.
+				const activeSols = (d.solution_lines || []).filter(s => !["Completed", "Skipped", "Cancelled"].includes(s.status));
+				const inProgress = activeSols.filter(s => s.status === "In Progress");
+				const scopeSols = inProgress.length ? inProgress : (activeSols.some(s => s.technician) ? activeSols.filter(s => s.technician) : activeSols);
+				const scopeNames = scopeSols.map(s => s.repair_solution);
+				const scopeCats = [...new Set(scopeSols.map(s => s.issue_category).filter(Boolean))];
 				const dlg = new frappe.ui.Dialog({
 					title: __("Add Spare Part"),
 					fields: [
 						{ fieldname: "spare_item", label: __("Spare Part"), fieldtype: "Link", options: "Item", reqd: 1,
+							description: scopeNames.length ? __("Scoped to: {0}", [scopeNames.join(", ")]) : undefined,
 							get_query: () => ({
 								query: "gofix.gofix_services.api.get_compatible_spare_items",
-								filters: { device_item: d.device_item || "", item_group: "Spares" }
+								filters: { device_item: d.device_item || "", item_group: "Spares",
+									solutions: scopeNames, issue_categories: scopeCats }
 							}),
 							change: () => {
 								const item = dlg.get_value("spare_item");

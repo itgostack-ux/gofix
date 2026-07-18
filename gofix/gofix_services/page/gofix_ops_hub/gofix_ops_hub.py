@@ -161,6 +161,12 @@ def get_ticket_queue(warehouse=None, search=None, date_from=None, date_to=None, 
 			conditions.append("company = %(company)s")
 		if warehouse:
 			conditions.append("source_warehouse = %(warehouse)s")
+		# Raw SQL bypasses permission_query_conditions — re-apply the same
+		# scoping so an engineer's search can't surface other people's tickets.
+		from gofix.security import get_service_request_query
+		perm_clause = get_service_request_query(frappe.session.user)
+		if perm_clause:
+			conditions.append(f"({perm_clause})")
 		extra_clause = " AND " + " AND ".join(conditions) if conditions else ""
 		sr_list = frappe.db.sql(
 			f"""
@@ -1387,13 +1393,52 @@ def assign_solutions_to_technician(sr_name, solution_rows_json, technician, esti
 
 @frappe.whitelist()
 def unassign_solution(sr_name, solution_row_name) -> dict:
-	"""Remove technician assignment from a solution line."""
+	"""Remove technician assignment from a solution line (reassignment flow —
+	e.g. the technician can't solve it and it must go to a higher grade).
+
+	Knocks a started line back to Planned and releases the old technician's
+	Job Assignment (Cancelled) when they have nothing else on this ticket, so
+	device custody doesn't stay locked to someone no longer working it."""
 	_assert_sr_permission(sr_name, "write")
 
-	frappe.db.set_value("SR Solution Line", solution_row_name, {
-		"technician": "",
-		"technician_name": "",
-	}, update_modified=True)
+	line = frappe.db.get_value(
+		"SR Solution Line", solution_row_name, ["technician", "status"], as_dict=True
+	) or frappe._dict()
+
+	updates = {"technician": "", "technician_name": ""}
+	if line.status in ("In Progress", "On Hold"):
+		updates["status"] = "Planned"
+	frappe.db.set_value("SR Solution Line", solution_row_name, updates, update_modified=True)
+
+	if line.technician:
+		still_assigned = frappe.db.exists(
+			"SR Solution Line",
+			{
+				"parent": sr_name,
+				"parenttype": "Service Request",
+				"technician": line.technician,
+				"status": ("not in", ("Cancelled",)),
+				"name": ("!=", solution_row_name),
+			},
+		)
+		so_name = frappe.db.get_value("Service Request", sr_name, "service_order")
+		if not still_assigned and so_name:
+			ja_name = frappe.db.get_value(
+				"Job Assignment",
+				{
+					"service_order": so_name,
+					"service_engineer": line.technician,
+					"docstatus": ("<", 2),
+					"assignment_status": ("not in", ("Completed", "Cancelled")),
+				},
+				"name",
+			)
+			if ja_name:
+				ja = frappe.get_doc("Job Assignment", ja_name)
+				ja.assignment_status = "Cancelled"
+				ja.flags.ignore_validate_update_after_submit = True
+				ja.save(ignore_permissions=True)
+
 	return {"ok": True}
 
 

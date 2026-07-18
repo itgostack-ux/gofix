@@ -54,6 +54,14 @@ def _is_service_manager(user=None):
     return bool(_get_roles(user).intersection(SERVICE_MANAGER_ROLES))
 
 
+def _user_employee(user=None):
+    """Employee record linked to this user (technician login), if any."""
+    user = user or frappe.session.user
+    if not user or user in ("Administrator", "Guest"):
+        return None
+    return frappe.db.get_value("Employee", {"user_id": user}, "name")
+
+
 def _can_access_service_requests(user=None):
     user = user or frappe.session.user
     if not user or user == "Administrator":
@@ -96,13 +104,29 @@ def get_service_request_query(user=None):
         # Managers see all records in allowed companies
         return company_clause
 
-    # Non-managers (Service Engineer / Service User): own records only
+    # Non-managers (Service Engineer / Service User): own records only —
+    # owner/assignee/receiver, or tickets where they are the technician on a
+    # solution line / Job Assignment (multi-technician split tickets).
     ue = frappe.db.escape(user)
-    own_clause = (
-        f"(`tabService Request`.`owner` = {ue} "
-        f"OR `tabService Request`.`assigned_to_user` = {ue} "
-        f"OR `tabService Request`.`received_by` = {ue})"
-    )
+    own_parts = [
+        f"`tabService Request`.`owner` = {ue}",
+        f"`tabService Request`.`assigned_to_user` = {ue}",
+        f"`tabService Request`.`received_by` = {ue}",
+    ]
+    employee = _user_employee(user)
+    if employee:
+        emp = frappe.db.escape(employee)
+        own_parts.append(
+            "EXISTS (SELECT 1 FROM `tabSR Solution Line` sl "
+            "WHERE sl.parent = `tabService Request`.`name` "
+            f"AND sl.parenttype = 'Service Request' AND sl.technician = {emp})"
+        )
+        own_parts.append(
+            "EXISTS (SELECT 1 FROM `tabJob Assignment` ja "
+            "WHERE ja.service_request = `tabService Request`.`name` "
+            f"AND ja.service_engineer = {emp} AND ja.docstatus < 2)"
+        )
+    own_clause = "(" + " OR ".join(own_parts) + ")"
     if company_clause:
         return f"({company_clause}) AND {own_clause}"
     return own_clause
@@ -127,11 +151,29 @@ def has_service_request_permission(doc=None, user=None, permission_type=None):
     if _is_service_manager(user):
         return True
 
-    # Non-manager: must be owner, assignee, or receiver
+    # Non-manager: must be owner, assignee, receiver — or the technician on a
+    # solution line / Job Assignment of this ticket.
     owner = doc.get("owner") if hasattr(doc, "get") else None
     assigned = doc.get("assigned_to_user") if hasattr(doc, "get") else None
     received = doc.get("received_by") if hasattr(doc, "get") else None
-    return user in {owner, assigned, received}
+    if user in {owner, assigned, received}:
+        return True
+
+    sr_name = doc.get("name") if hasattr(doc, "get") else None
+    employee = _user_employee(user)
+    if not sr_name or not employee:
+        return False
+    if frappe.db.exists(
+        "SR Solution Line",
+        {"parent": sr_name, "parenttype": "Service Request", "technician": employee},
+    ):
+        return True
+    return bool(
+        frappe.db.exists(
+            "Job Assignment",
+            {"service_request": sr_name, "service_engineer": employee, "docstatus": ("<", 2)},
+        )
+    )
 
 
 # ──────────────────────────────────────────────────────────────────────────────

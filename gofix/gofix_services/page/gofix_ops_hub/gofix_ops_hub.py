@@ -1404,35 +1404,88 @@ def unassign_solution(sr_name, solution_row_name) -> dict:
 	frappe.db.set_value("SR Solution Line", solution_row_name, updates, update_modified=True)
 
 	if line.technician:
-		still_assigned = frappe.db.exists(
-			"SR Solution Line",
-			{
-				"parent": sr_name,
-				"parenttype": "Service Request",
-				"technician": line.technician,
-				"status": ("not in", ("Cancelled",)),
-				"name": ("!=", solution_row_name),
-			},
-		)
-		so_name = frappe.db.get_value("Service Request", sr_name, "service_order")
-		if not still_assigned and so_name:
-			ja_name = frappe.db.get_value(
-				"Job Assignment",
-				{
-					"service_order": so_name,
-					"service_engineer": line.technician,
-					"docstatus": ("<", 2),
-					"assignment_status": ("not in", ("Completed", "Cancelled")),
-				},
-				"name",
-			)
-			if ja_name:
-				ja = frappe.get_doc("Job Assignment", ja_name)
-				ja.assignment_status = "Cancelled"
-				ja.flags.ignore_validate_update_after_submit = True
-				ja.save(ignore_permissions=True)
+		_release_idle_technician_ja(sr_name, line.technician, solution_row_name)
 
 	return {"ok": True}
+
+
+def _release_idle_technician_ja(sr_name, technician, exclude_row_name) -> None:
+	"""Cancel the technician's active JA when no other solution line on this
+	ticket is theirs — frees device custody after unassign/handoff."""
+	still_assigned = frappe.db.exists(
+		"SR Solution Line",
+		{
+			"parent": sr_name,
+			"parenttype": "Service Request",
+			"technician": technician,
+			"status": ("not in", ("Cancelled",)),
+			"name": ("!=", exclude_row_name),
+		},
+	)
+	so_name = frappe.db.get_value("Service Request", sr_name, "service_order")
+	if still_assigned or not so_name:
+		return
+	ja_name = frappe.db.get_value(
+		"Job Assignment",
+		{
+			"service_order": so_name,
+			"service_engineer": technician,
+			"docstatus": ("<", 2),
+			"assignment_status": ("not in", ("Completed", "Cancelled")),
+		},
+		"name",
+	)
+	if ja_name:
+		ja = frappe.get_doc("Job Assignment", ja_name)
+		ja.assignment_status = "Cancelled"
+		ja.flags.ignore_validate_update_after_submit = True
+		ja.save(ignore_permissions=True)
+
+
+@frappe.whitelist()
+def reassign_solution_to_technician(sr_name, solution_row_name, technician, reason="") -> dict:
+	"""Hand off ONE solution to a different technician (market-standard ERPs
+	reassign at the operation level, not the whole order, once work is split
+	across technicians). Grade-gated; the line drops back to Planned so the
+	new technician takes the device through the normal Start custody gate."""
+	_assert_sr_permission(sr_name, "write")
+	frappe.has_permission("Job Assignment", "create", throw=True)
+
+	line = frappe.db.get_value(
+		"SR Solution Line", solution_row_name,
+		["technician", "technician_name", "repair_solution", "status", "technician_remarks"],
+		as_dict=True,
+	)
+	if not line:
+		frappe.throw(_("Solution line not found."), title=_("Validation Error"))
+	if line.status in ("Completed", "Skipped", "Cancelled"):
+		frappe.throw(_("{0} is {1} — use Restart for rework instead of a handoff.").format(
+			line.repair_solution, _(line.status)), title=_("Validation Error"))
+	if technician == line.technician:
+		frappe.throw(_("{0} is already assigned to this solution.").format(
+			line.technician_name or technician), title=_("Validation Error"))
+
+	_assert_technician_can_take_solutions(technician, [line.repair_solution])
+
+	sr = frappe.get_doc("Service Request", sr_name)
+	old_tech, old_name = line.technician, line.technician_name
+	new_name = frappe.db.get_value("Employee", technician, "employee_name") or technician
+
+	trail = f"[Handed off {old_name or old_tech or '—'} → {new_name}]" + (f" {reason}" if reason else "")
+	updates = {
+		"technician": technician,
+		"technician_name": new_name,
+		"technician_remarks": ((line.technician_remarks or "") + "\n" + trail).strip(),
+	}
+	if line.status in ("In Progress", "On Hold"):
+		updates["status"] = "Planned"
+	frappe.db.set_value("SR Solution Line", solution_row_name, updates, update_modified=True)
+
+	if old_tech:
+		_release_idle_technician_ja(sr_name, old_tech, solution_row_name)
+	ja = _get_or_create_job_assignment(sr, technician, "Technician Changed", comments=reason or trail)
+
+	return {"ok": True, "job_assignment": ja.name}
 
 
 @frappe.whitelist()

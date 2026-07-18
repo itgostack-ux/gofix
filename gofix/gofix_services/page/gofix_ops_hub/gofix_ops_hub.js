@@ -1027,6 +1027,7 @@ class GoFixOpsHub {
 					<button class="btn btn-xs btn-warning goh-sol-hold" data-row="${esc(sol.name)}" title="${__("Release the device so other repairs can continue (e.g. waiting for parts)")}"><i class="fa fa-pause"></i> ${__("Hold")}</button>` : ""}
 					${sol.status === "Completed" || sol.status === "Skipped" ? `<button class="btn btn-xs btn-info goh-sol-restart" data-row="${esc(sol.name)}"><i class="fa fa-undo"></i> ${__("Restart")}</button>` : ""}
 					${sol.status !== "Completed" && sol.status !== "Skipped" ? `<button class="btn btn-xs btn-warning goh-sol-skip" data-row="${esc(sol.name)}">${__("Skip")}</button>` : ""}
+					${["Planned", "In Progress", "On Hold"].includes(sol.status) ? `<button class="btn btn-xs btn-default goh-sol-reassign" data-row="${esc(sol.name)}" data-solution="${esc(sol.repair_solution || "")}" title="${__("Hand off this solution to another technician")}"><i class="fa fa-exchange"></i></button>` : ""}
 					${sol.status !== "Completed" ? `<button class="btn btn-xs btn-danger goh-sol-cancel" data-row="${esc(sol.name)}"><i class="fa fa-times"></i> ${__("Cancel")}</button>` : ""}`}
 				</div>
 			</div>
@@ -1106,7 +1107,7 @@ class GoFixOpsHub {
 			<div class="goh-section">
 				<div class="goh-section-title">
 					<i class="fa fa-users"></i> ${__("Technician")}
-					<button class="btn btn-xs btn-default ml-2" id="goh-handoff-btn"><i class="fa fa-exchange"></i> ${__("Hand Off")}</button>
+					<span class="text-muted small ml-2">${__("hand off per solution via the ⇄ button on its card")}</span>
 				</div>
 				<div class="goh-tech-chips">${techInfo || `<span class="text-muted">${__("None assigned")}</span>`}</div>
 			</div>
@@ -1768,17 +1769,24 @@ class GoFixOpsHub {
 				);
 			});
 
-			content.find("#goh-handoff-btn").on("click", () => {
+			// Per-solution handoff (⇄ on the card) — operation-level reassignment
+			content.on("click", ".goh-sol-reassign", function () {
+				const btn = $(this);
+				const rowName = btn.data("row");
+				const solName = btn.data("solution") || __("this solution");
 				const dlg = new frappe.ui.Dialog({
-					title: __("Hand Off"), fields: [
-						{ fieldname: "new_technician", label: __("Technician"), fieldtype: "Link", options: "Employee", reqd: 1 },
-						{ fieldname: "job_type", label: __("Job Type"), fieldtype: "Select", options: "Repair\nDiagnosis\nSpare Parts Replacement\nTesting", default: "Repair" },
-						{ fieldname: "reason", label: __("Reason"), fieldtype: "Small Text" },
+					title: __("Hand Off: {0}", [solName]),
+					fields: [
+						{ fieldname: "technician", label: __("New Technician"), fieldtype: "Link", options: "Employee", reqd: 1,
+							get_query: () => ({ query: "gofix.gofix_services.api.technician_query", filters: { sr_name: d.name } }) },
+						{ fieldname: "reason", label: __("Reason"), fieldtype: "Small Text",
+							description: __("The solution returns to Planned — the new technician takes the device when they press Start.") },
 					],
 					primary_action_label: __("Hand Off"),
 					primary_action: v => {
-						frappe.xcall(`${API}.handoff_to_technician`, { sr_name: d.name, new_technician: v.new_technician, job_type: v.job_type, reason: v.reason || "" })
-							.then(() => { dlg.hide(); self._load_detail(d.name); frappe.show_alert({ message: __("Handed off."), indicator: "green" }); });
+						frappe.xcall(`${API}.reassign_solution_to_technician`, {
+							sr_name: d.name, solution_row_name: rowName, technician: v.technician, reason: v.reason || "",
+						}).then(() => { dlg.hide(); self._load_detail(d.name); frappe.show_alert({ message: __("Handed off."), indicator: "green" }); });
 					},
 				});
 				dlg.show();
@@ -1945,7 +1953,7 @@ class GoFixOpsHub {
 				"#goh-confirm-analysis", "#goh-send-wa", "#goh-mark-confirmed",
 				"#goh-back-to-analysis", "#goh-save-solutions", "#goh-back-to-confirm",
 				"#goh-back-to-solutions", "#goh-submit-qc",
-				"#goh-handoff-btn", "#goh-back-to-assign", "#goh-rework-assign",
+				"#goh-back-to-assign", "#goh-rework-assign",
 			];
 			// Assigning MORE technicians mid-repair is legitimate (a ticket can be
 			// split across L1/L2/L4) — keep the Assign action live while the

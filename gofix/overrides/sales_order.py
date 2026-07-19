@@ -260,7 +260,15 @@ class CustomSalesOrder(SalesOrder):
 		
 		try:
 			sr = frappe.get_doc("Service Request", self.service_request)
-			
+
+			# Never regress an SR that has already been billed — Invoiced /
+			# Delivered are owned by the invoice and delivery flows. Closing
+			# the Service Order AFTER billing must not knock the SR back to
+			# Completed (QC-Pass branch below) nor fast-forward it to
+			# Delivered before the device is handed over.
+			if sr.service_invoice and sr.status in ("Invoiced", "Delivered"):
+				return
+
 			# Map SO status to SR status
 			status_mapping = {
 				"Draft": "Accepted",  # SO created but not submitted
@@ -350,12 +358,25 @@ def validate_service_order_before_submit(doc, method=None):
 
 	job_sheets = frappe.get_all("Job Assignment",
 		filters={"service_order": doc.name},
-		fields=["name", "assignment_status"])
+		fields=["name", "assignment_status", "actual_hours"])
 
 	if not job_sheets:
 		frappe.throw(_("Cannot submit Service Order. Please create and complete Job Sheet first."), title=_("Validation Error"))
 
-	incomplete = [js for js in job_sheets if js.assignment_status not in ["Completed", "Closed"]]
+	incomplete = [js for js in job_sheets if js.assignment_status not in ["Completed", "Closed", "Cancelled"]]
+	if incomplete and doc.get("qc_status") == "Pass":
+		# QC has already passed — the repair is verifiably done, so any job
+		# sheet still open is stale (assigned but never worked, or dangling
+		# rework churn). Auto-settle instead of demanding a manual step:
+		# worked hours → Completed, untouched → Cancelled.
+		for js in incomplete:
+			frappe.db.set_value(
+				"Job Assignment", js.name, "assignment_status",
+				"Completed" if flt(js.actual_hours) else "Cancelled",
+				update_modified=False,
+			)
+		incomplete = []
+
 	if incomplete:
 		names = ", ".join([js.name for js in incomplete])
 		frappe.throw(_("Cannot submit. Job Sheet(s) {0} must be completed first.").format(names), title=_("Validation Error"))

@@ -1956,6 +1956,7 @@ class GoFixOpsHub {
 				const makeDamagedRows = items => items.map(i => `
 					<tr class="text-danger"><td>${esc(i.item_name || i.item_code)} <small class="text-muted">${esc(i.remarks || "")}</small></td><td class="text-right">${i.qty}</td><td class="text-right">₹${format_number(i.rate)}</td><td class="text-right">₹${format_number(i.amount)}</td></tr>
 				`).join("");
+				const cc = s.company_cost || { total: 0, parts_cost: 0, damaged_parts_cost: 0, labour_cost: 0, labour_hours: 0 };
 
 				this.parent.find("#goh-invoice-body").html(`
 					${s.service_items.length ? `
@@ -1976,13 +1977,44 @@ class GoFixOpsHub {
 						<tbody>${makeDamagedRows(s.damaged_spare_items)}</tbody>
 						<tfoot><tr><td colspan="3" class="text-right"><b>${__("Subtotal")}</b></td><td class="text-right"><b class="text-danger">₹${format_number(s.damaged_spare_total)}</b></td></tr></tfoot></table>
 					` : ""}
+					${s.items_source === "service_order" ? `<div class="text-muted small mt-1"><i class="fa fa-info-circle"></i> ${__("Amounts pulled from Service Order (estimate) — no billing lines logged on the SR.")}</div>` : ""}
 					${s.discount ? `<div class="text-muted mt-2">${__("Discount")}: -₹${format_number(s.discount)}</div>` : ""}
 					<div class="goh-grand-total mt-3">
-						<h4>${__("Cost to Customer")}: <span style="color:#059669">₹${format_number(s.customer_total)}</span></h4>
-						${s.damaged_spare_items && s.damaged_spare_items.length ? `
-							<h5 class="mt-1 text-muted">${__("Cost to Company")}: <span style="color:#dc2626">₹${format_number(s.company_total)}</span></h5>
-						` : ""}
+						<h4>${__("Cost to Customer")}: <span style="color:#059669">₹${format_number(s.customer_total)}</span>
+							${s.final_cost ? `<small class="text-muted">(${__("Final Cost override — base")} ₹${format_number(s.base_total)})</small>` : ""}
+						</h4>
+						<div class="mt-2" style="background:#fef2f2;border:1px solid #fecaca;border-radius:6px;padding:8px 12px;display:inline-block;">
+							<h5 style="margin:0">${__("Cost to Company")}: <span style="color:#dc2626">₹${format_number(cc.total)}</span></h5>
+							<div class="text-muted small mt-1">
+								${__("Parts (at cost)")}: ₹${format_number(cc.parts_cost)}
+								&nbsp;·&nbsp; ${__("Damaged parts")}: ₹${format_number(cc.damaged_parts_cost)}
+								&nbsp;·&nbsp; ${__("Labour")} (${cc.labour_hours || 0}h): ₹${format_number(cc.labour_cost)}
+							</div>
+						</div>
+						<h5 class="mt-2">${__("Margin")}: <span style="color:${s.margin >= 0 ? "#059669" : "#dc2626"}">₹${format_number(s.margin)}</span></h5>
 					</div>
+					${!s.service_invoice ? `
+						<div class="mt-3" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+							<label class="text-muted" style="margin:0">${__("Final Cost to Customer")}</label>
+							<input type="number" min="0" step="0.01" id="goh-final-cost" class="form-control input-sm" style="width:140px" value="${s.final_cost || ""}" placeholder="${format_number(s.base_total)}">
+							<button class="btn btn-xs btn-default" id="goh-set-final-cost">${__("Set Final Cost")}</button>
+							<span class="text-muted small">${__("Leave empty to bill the item total. Below Cost-to-Company needs an approved exception.")}</span>
+						</div>
+					` : ""}
+					${s.below_cost ? (
+						["Approved", "Auto-Approved"].includes(s.below_cost_exception_status)
+							? `<div class="mt-2" style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;padding:6px 12px;">
+								<i class="fa fa-check-circle" style="color:#16a34a"></i> ${__("Below-cost billing approved via")}
+								<a href="/app/ch-exception-request/${encodeURIComponent(s.below_cost_exception)}" target="_blank">${esc(s.below_cost_exception)}</a>
+							   </div>`
+							: `<div class="mt-2" style="background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:6px 12px;">
+								<i class="fa fa-exclamation-triangle" style="color:#d97706"></i>
+								${__("Billing total is below Cost to Company.")}
+								${s.below_cost_exception
+									? `${__("Exception")} <a href="/app/ch-exception-request/${encodeURIComponent(s.below_cost_exception)}" target="_blank">${esc(s.below_cost_exception)}</a> — <b>${esc(s.below_cost_exception_status || __("Pending"))}</b>. ${__("Invoice creation stays blocked until it is approved.")}`
+									: __("Set a Final Cost to raise a below-cost exception for approval.")}
+							   </div>`
+					) : ""}
 					${s.service_invoice
 						? `<div class="mt-2">
 							<span class="goh-badge badge-green">${__("Invoiced")}</span>
@@ -1995,6 +2027,30 @@ class GoFixOpsHub {
 						   </div>`
 					}
 				`);
+
+				// Bind set-final-cost button
+				this.parent.find("#goh-set-final-cost").on("click", () => {
+					const val = flt(this.parent.find("#goh-final-cost").val() || 0);
+					const args = { sr_name: d.name, final_cost: val };
+					const call = () => frappe.xcall(`${API}.set_final_cost`, args)
+						.then(r => {
+							if (r.below_cost && !["Approved", "Auto-Approved"].includes(r.exception_status)) {
+								frappe.show_alert({ message: __("Final cost saved — below-cost exception {0} awaiting approval.", [r.exception]), indicator: "orange" });
+							} else {
+								frappe.show_alert({ message: __("Final cost saved."), indicator: "green" });
+							}
+							self._refresh_all();
+						});
+					if (val && val < cc.total) {
+						frappe.prompt(
+							{ fieldname: "reason", fieldtype: "Small Text", label: __("Reason (below Cost to Company ₹{0})", [format_number(cc.total)]), reqd: 1 },
+							v => { args.reason = v.reason; call(); },
+							__("Below-Cost Final Price"), __("Save")
+						);
+					} else {
+						call();
+					}
+				});
 
 				// Bind create-invoice button
 				if (!s.service_invoice) {

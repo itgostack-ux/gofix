@@ -2552,12 +2552,152 @@ def complete_qc(sr_name, qc_result) -> dict:
 
 # ── Step 7: Invoice / Rework ──────────────────────────────────────────────────
 
+BELOW_COST_EXCEPTION_TYPE = "Service Below Cost Billing"
+
+# Exception states considered "open" vs "cleared" for the below-cost gate.
+_EXCEPTION_APPROVED_STATES = ("Approved", "Auto-Approved")
+_EXCEPTION_OPEN_STATES = ("Pending", "Escalated")
+
+
+def _spare_cost_rate(item_code, fallback_rate=0.0) -> float:
+	"""Buying-side cost of a spare: valuation rate, then last purchase rate,
+	then the line's selling rate as a last resort (better than pretending 0)."""
+	if not item_code:
+		return flt(fallback_rate)
+	val = flt(frappe.db.get_value("Item", item_code, "valuation_rate")) or flt(
+		frappe.db.get_value("Item", item_code, "last_purchase_rate")
+	)
+	return val or flt(fallback_rate)
+
+
+def _get_labour_cost(sr) -> dict:
+	"""Labour cost = Σ completed Job Assignment actual_hours × engineer hourly
+	cost (Employee.custom_hourly_rate, else CTC ÷ 2080). Same formula as the
+	Service Order costing engine (_update_service_costing)."""
+	hours_total = 0.0
+	cost_total = 0.0
+	if not sr.get("service_order"):
+		return {"hours": 0.0, "cost": 0.0}
+
+	has_hourly_col = frappe.db.has_column("Employee", "custom_hourly_rate")
+	jobs = frappe.get_all(
+		"Job Assignment",
+		filters={
+			"service_order": sr.service_order,
+			"assignment_status": ("in", ["Completed", "Closed"]),
+		},
+		fields=["actual_hours", "service_engineer"],
+	)
+	for job in jobs:
+		hours = flt(job.actual_hours)
+		if not hours:
+			continue
+		hourly = 0.0
+		if job.service_engineer:
+			if has_hourly_col:
+				hourly = flt(frappe.db.get_value("Employee", job.service_engineer, "custom_hourly_rate"))
+			if not hourly:
+				ctc = flt(frappe.db.get_value("Employee", job.service_engineer, "ctc"))
+				if ctc:
+					hourly = ctc / 2080  # Annual CTC ÷ working hours/year
+		hours_total += hours
+		cost_total += hours * hourly
+	return {"hours": hours_total, "cost": cost_total}
+
+
+def _get_company_cost(sr) -> dict:
+	"""True cost the company bears for this repair (SAP RRB / Oracle debrief
+	parity): consumed parts at buying cost + damaged parts at buying cost +
+	technician labour at cost rate. Selling rates never enter this figure."""
+	parts_cost = 0.0
+	damaged_cost = 0.0
+
+	lines = sr.get("spare_lines") or []
+	for row in lines:
+		qty = flt(row.qty) or 1
+		cost_rate = _spare_cost_rate(row.spare_item, flt(row.rate))
+		if row.status == "Damaged":
+			damaged_cost += qty * cost_rate
+		elif row.status in ("Consumed", "Issued"):
+			parts_cost += qty * cost_rate
+
+	if not lines:
+		# Legacy flow records consumption in Spare Parts Usage with an
+		# explicit purchase_cost — use it directly.
+		try:
+			spu = frappe.get_all(
+				"Spare Parts Usage",
+				filters={
+					"service_request": sr.name,
+					"status": "Active",
+					"part_status": ("in", ["Consumed", "Issued"]),
+				},
+				fields=["qty_used", "purchase_cost"],
+			)
+			parts_cost = sum(flt(r.purchase_cost) * flt(r.qty_used) for r in spu)
+		except Exception:
+			pass
+
+	labour = _get_labour_cost(sr)
+	total = parts_cost + damaged_cost + labour["cost"]
+	return {
+		"parts_cost": parts_cost,
+		"damaged_parts_cost": damaged_cost,
+		"labour_cost": labour["cost"],
+		"labour_hours": labour["hours"],
+		"total": total,
+	}
+
+
+def _ensure_below_cost_exception_type():
+	"""Idempotently provision the CH Exception Type used by the below-cost gate."""
+	if frappe.db.exists("CH Exception Type", BELOW_COST_EXCEPTION_TYPE):
+		return
+	frappe.get_doc({
+		"doctype": "CH Exception Type",
+		"exception_type": BELOW_COST_EXCEPTION_TYPE,
+		"enabled": 1,
+		"routing_mode": "Approval Matrix",
+	}).insert(ignore_permissions=True)
+
+
+def _spare_warranty_description(row) -> str | None:
+	"""Invoice-line description for an installed spare that carries its own
+	part warranty (Item.warranty_period, in days). Includes the installed
+	part serial so the claim is traceable to the exact unit."""
+	if not row.spare_item:
+		return None
+	warranty_days = cint(frappe.db.get_value("Item", row.spare_item, "warranty_period"))
+	if not warranty_days:
+		return None
+	from frappe.utils import add_days, formatdate, nowdate
+
+	until = formatdate(add_days(nowdate(), warranty_days))
+	parts = [row.item_name or row.spare_item,
+		_("Part warranty: {0} days (until {1})").format(warranty_days, until)]
+	if row.get("installed_part_serial"):
+		parts.append(_("Installed part serial: {0}").format(row.installed_part_serial))
+	return " — ".join(parts)
+
+
+def _below_cost_exception_status(sr) -> str | None:
+	if not sr.get("below_cost_exception_request"):
+		return None
+	return frappe.db.get_value(
+		"CH Exception Request", sr.below_cost_exception_request, "status"
+	)
+
+
 @frappe.whitelist()
 def get_invoice_summary(sr_name) -> dict:
 	"""Return billing summary: service items, spares, total cost for POS.
-	Returns two cost views:
-	  - customer cost: consumed spares only
-	  - company cost: all spares including damaged
+	Returns two views:
+	  - customer (revenue): SR service items + consumed spares at selling
+	    rates, falling back to the linked Service Order's items when the SR
+	    carries no billing lines (same fallback create_ops_hub_invoice uses);
+	    overridden by Final Cost when set.
+	  - company (cost): consumed + damaged parts at buying cost plus
+	    technician labour at cost rate — what the repair costs the company.
 	"""
 	_assert_sr_permission(sr_name, "read")
 
@@ -2601,27 +2741,211 @@ def get_invoice_summary(sr_name) -> dict:
 		if row.status == "Damaged"
 	]
 
+	# Fallback: SR has no billing lines at all → show the linked Service
+	# Order's items, exactly like create_ops_hub_invoice bills them. Without
+	# this the screen shows ₹0 while the Create Invoice button would bill
+	# the SO amount.
+	items_source = "service_request"
+	if not service_items and not spare_items and sr.get("service_order"):
+		try:
+			so = frappe.get_doc("Sales Order", sr.service_order)
+			service_items = [
+				{
+					"item_code": row.item_code,
+					"item_name": row.item_name or "",
+					"qty": flt(row.qty) or 1,
+					"rate": flt(row.rate),
+					"amount": flt(row.amount or (flt(row.qty) * flt(row.rate))),
+				}
+				for row in so.items
+			]
+			items_source = "service_order"
+		except Exception:
+			pass
+
 	service_total = sum(i["amount"] for i in service_items)
 	spare_total = sum(i["amount"] for i in spare_items)
 	damaged_spare_total = sum(i["amount"] for i in damaged_spare_items)
 	discount = flt(sr.get("service_discount_amount") or 0)
 
-	customer_total = service_total + spare_total - discount
-	company_total = service_total + spare_total + damaged_spare_total - discount
+	base_total = service_total + spare_total - discount
+	final_cost = flt(sr.get("final_cost") or 0)
+	customer_total = final_cost if final_cost else base_total
+
+	company_cost = _get_company_cost(sr)
+	exception_status = _below_cost_exception_status(sr)
+	below_cost = bool(company_cost["total"] > 0 and customer_total < company_cost["total"])
 
 	return {
 		"service_items": service_items,
 		"spare_items": spare_items,
 		"damaged_spare_items": damaged_spare_items,
+		"items_source": items_source,
 		"service_total": service_total,
 		"spare_total": spare_total,
 		"damaged_spare_total": damaged_spare_total,
 		"discount": discount,
+		"base_total": base_total,
+		"final_cost": final_cost,
 		"grand_total": customer_total,
 		"customer_total": customer_total,
-		"company_total": company_total,
+		"company_cost": company_cost,
+		"company_total": company_cost["total"],
+		"margin": customer_total - company_cost["total"],
+		"below_cost": below_cost,
+		"below_cost_exception": sr.get("below_cost_exception_request") or "",
+		"below_cost_exception_status": exception_status or "",
 		"service_invoice": sr.service_invoice or "",
 		"warranty_status": sr.warranty_status or "",
+	}
+
+
+@frappe.whitelist()
+def get_service_billing_line(sr_name) -> dict:
+	"""One consolidated, non-stock POS cart line for billing a completed
+	repair alongside retail items in the same invoice.
+
+	POS invoices post with ``update_stock=1`` and consumed spares were
+	already issued to the job from store stock — billing them as individual
+	stock rows would deduct inventory twice. The whole repair therefore
+	bills as ONE line on the non-stock "Repair Service" item; the
+	labour/spare breakdown (including part warranties) travels in the line
+	description. The below-cost floor is re-enforced server-side at invoice
+	submit — the flags returned here are for early cashier feedback only.
+	"""
+	_assert_sr_permission(sr_name, "read")
+	sr = frappe.get_doc("Service Request", sr_name)
+
+	if sr.service_invoice:
+		frappe.throw(_("{0} is already invoiced ({1}).").format(sr_name, sr.service_invoice),
+			title=_("Already Invoiced"))
+	if not sr.is_completed_status():
+		frappe.throw(_("Service Request {0} must be Completed before billing.").format(sr_name),
+			title=_("Not Ready to Bill"))
+
+	at_home_store = True
+	custody_message = ""
+	try:
+		from gofix.gofix_services.api import assert_billing_location
+
+		assert_billing_location(sr, None)
+	except ImportError:
+		pass
+	except Exception as e:
+		at_home_store = False
+		custody_message = str(e)
+
+	s = get_invoice_summary(sr_name)
+
+	desc_lines = [_("Repair charges — {0}").format(sr_name)]
+	if s["items_source"] == "service_order":
+		desc_lines.append(_("(amounts from Service Order estimate)"))
+	for i in s["service_items"]:
+		desc_lines.append("{0} ×{1} — {2}".format(
+			i["item_name"] or i["item_code"], cint(i["qty"]) or 1,
+			frappe.format_value(flt(i["amount"]), {"fieldtype": "Currency"})))
+	for row in sr.get("spare_lines", []):
+		if row.status == "Damaged":
+			continue
+		label = _spare_warranty_description(row) or (row.item_name or row.spare_item)
+		desc_lines.append("{0} ×{1} — {2}".format(
+			label, cint(row.qty) or 1,
+			frappe.format_value(flt(row.amount or (flt(row.qty) * flt(row.rate))), {"fieldtype": "Currency"})))
+	if s["discount"]:
+		desc_lines.append(_("Discount: -{0}").format(
+			frappe.format_value(flt(s["discount"]), {"fieldtype": "Currency"})))
+	if s["final_cost"]:
+		desc_lines.append(_("Final Cost override applied"))
+
+	repair_item = frappe.db.get_value(
+		"Item", {"item_name": "Repair Service", "disabled": 0, "ch_lifecycle_status": "Active"}, "name",
+	) or frappe.db.get_value(
+		"Item",
+		{"item_group": "Services", "disabled": 0, "is_stock_item": 0, "ch_lifecycle_status": "Active"},
+		"name",
+	)
+	if not repair_item:
+		frappe.throw(_("No active non-stock 'Repair Service' item found — create one to bill repairs at POS."))
+
+	return {
+		"item_code": repair_item,
+		"item_name": _("Repair: {0}").format(sr_name),
+		"qty": 1,
+		"rate": flt(s["customer_total"]),
+		"description": "\n".join(desc_lines),
+		"service_request": sr_name,
+		"customer": sr.customer,
+		"customer_name": sr.get("customer_name") or "",
+		"below_cost": s["below_cost"],
+		"below_cost_exception_status": s["below_cost_exception_status"],
+		"company_cost_total": flt(s["company_cost"]["total"]),
+		"final_cost": flt(s["final_cost"]),
+		"at_home_store": at_home_store,
+		"custody_message": custody_message,
+	}
+
+
+@frappe.whitelist()
+def set_final_cost(sr_name, final_cost, reason=None) -> dict:
+	"""Record the final payable amount agreed with the customer.
+
+	Below Cost-to-Company the amount is allowed only through the CH Exception
+	framework: a "Service Below Cost Billing" exception is raised (routed via
+	CH Approval Authority) and invoice creation stays blocked until it is
+	approved. Setting 0 clears the override.
+
+	Counter staff may RAISE (the exception + its SoD-guarded approval is the
+	control, same doctrine as POS free-sale) — hence the broad role list.
+	"""
+	frappe.only_for(["Service Manager", "System Manager", "Store Manager", "Store Executive", "Sales Manager"])
+
+	sr = frappe.get_doc("Service Request", sr_name)
+	if sr.service_invoice:
+		frappe.throw(_("Invoice {0} already exists — final cost is locked.").format(sr.service_invoice),
+			title=_("Validation Error"))
+
+	final_cost = flt(final_cost)
+	if final_cost < 0:
+		frappe.throw(_("Final cost cannot be negative."), title=_("Validation Error"))
+
+	updates = {"final_cost": final_cost}
+	company_cost = _get_company_cost(sr)
+	exception_name = sr.get("below_cost_exception_request") or ""
+	exception_status = _below_cost_exception_status(sr) or ""
+
+	if final_cost and company_cost["total"] > 0 and final_cost < company_cost["total"]:
+		# Reuse an open/approved exception; a rejected/expired one is spent.
+		if exception_status not in _EXCEPTION_APPROVED_STATES + _EXCEPTION_OPEN_STATES:
+			_ensure_below_cost_exception_type()
+			try:
+				from ch_item_master.ch_item_master.exception_api import raise_exception
+			except ImportError:
+				frappe.throw(_("ch_item_master app is required for below-cost exceptions."),
+					title=_("Missing App Dependency"))
+			result = raise_exception(
+				exception_type=BELOW_COST_EXCEPTION_TYPE,
+				company=sr.company,
+				reason=reason or _("Final cost {0} below company cost {1} on {2}").format(
+					final_cost, company_cost["total"], sr_name),
+				requested_value=final_cost,
+				original_value=company_cost["total"],
+				reference_doctype="Service Request",
+				reference_name=sr.name,
+				store_warehouse=sr.get("source_warehouse"),
+				customer=sr.customer,
+			)
+			exception_name = result.get("name") or ""
+			exception_status = result.get("status") or "Pending"
+			updates["below_cost_exception_request"] = exception_name
+
+	frappe.db.set_value("Service Request", sr_name, updates, update_modified=True)
+
+	return {
+		"final_cost": final_cost,
+		"company_cost": company_cost,
+		"below_cost": bool(final_cost and company_cost["total"] > 0 and final_cost < company_cost["total"]),
+		"exception": exception_name,
+		"exception_status": exception_status,
 	}
 
 
@@ -2668,13 +2992,19 @@ def create_ops_hub_invoice(sr_name, remote_otp=None) -> dict:
 		rate = flt(row.rate)
 		if not rate:
 			continue
-		items.append({
+		item_row = {
 			"item_code": row.spare_item,
 			"item_name": row.item_name or "",
 			"qty": flt(row.qty) or 1,
 			"rate": rate,
 			"uom": row.get("uom") or "Nos",
-		})
+		}
+		# Installed parts carry their own manufacturer warranty — put it on
+		# the invoice line so the customer has it in writing.
+		warranty_text = _spare_warranty_description(row)
+		if warranty_text:
+			item_row["description"] = warranty_text
+		items.append(item_row)
 
 	# 3) Fallback: pull from linked Sales Order
 	if not items and sr.service_order:
@@ -2698,6 +3028,33 @@ def create_ops_hub_invoice(sr_name, remote_otp=None) -> dict:
 	if not items:
 		frappe.throw(_("No billable items found on {0} or its Sales Order.").format(sr_name), title=_("Validation Error"))
 
+	# ── Below-cost gate ───────────────────────────────────────────────────
+	# The billed amount may not go below Cost-to-Company (parts at buying
+	# cost + labour at cost rate) without an APPROVED exception. Same
+	# doctrine as the POS min-selling-rate floor.
+	items_total = sum(flt(i.get("qty") or 1) * flt(i.get("rate")) for i in items)
+	discount = flt(sr.get("service_discount_amount") or 0)
+	final_cost = flt(sr.get("final_cost") or 0)
+	effective_total = final_cost if final_cost else (items_total - discount)
+
+	company_cost = _get_company_cost(sr)
+	if company_cost["total"] > 0 and effective_total < company_cost["total"]:
+		status = _below_cost_exception_status(sr)
+		if status not in _EXCEPTION_APPROVED_STATES:
+			frappe.throw(
+				_("Billing total {0} is below Cost to Company {1} "
+				  "(parts {2} + damaged {3} + labour {4}). Set a Final Cost and get the "
+				  "below-cost exception approved first (current: {5}).").format(
+					frappe.bold(frappe.format_value(effective_total, {"fieldtype": "Currency"})),
+					frappe.bold(frappe.format_value(company_cost["total"], {"fieldtype": "Currency"})),
+					frappe.format_value(company_cost["parts_cost"], {"fieldtype": "Currency"}),
+					frappe.format_value(company_cost["damaged_parts_cost"], {"fieldtype": "Currency"}),
+					frappe.format_value(company_cost["labour_cost"], {"fieldtype": "Currency"}),
+					status or _("no exception raised"),
+				),
+				title=_("Below-Cost Billing Blocked"),
+			)
+
 	# ── Create Sales Invoice ──────────────────────────────────────────────
 	posting_date = sr.get("actual_completion_date") or nowdate()
 
@@ -2705,6 +3062,7 @@ def create_ops_hub_invoice(sr_name, remote_otp=None) -> dict:
 		"doctype": "Sales Invoice",
 		"customer": sr.customer,
 		"company": sr.company,
+		"set_posting_time": 1,
 		"posting_date": posting_date,
 		"due_date": posting_date,
 		"items": items,
@@ -2715,15 +3073,32 @@ def create_ops_hub_invoice(sr_name, remote_otp=None) -> dict:
 
 	inv.flags.ignore_permissions = True
 	inv.insert()
+
+	# ── Apply Final Cost / service discount to the payable total ─────────
+	# Final Cost is the agreed FINAL payable (incl. tax) — adjust via an
+	# invoice-level discount on Grand Total (negative delta raises it).
+	# Without a Final Cost, honour the SR's approved service discount,
+	# which the previous version silently dropped.
+	target_total = final_cost if final_cost else (
+		(flt(inv.grand_total) - discount) if discount else 0
+	)
+	if target_total:
+		delta = flt(inv.grand_total) - flt(target_total)
+		if abs(delta) >= 0.005:
+			inv.apply_discount_on = "Grand Total"
+			inv.discount_amount = delta
+			inv.save()
+
 	inv.submit()
 
-	# Link back to SR
-	frappe.db.set_value("Service Request", sr_name, {
-		"service_invoice": inv.name,
-		"status": "Invoiced",
-		"decision": "Invoiced",
-		"workflow_state": "Invoiced",
-	}, update_modified=True)
+	# Link back to SR. workflow_state/decision are workflow-provisioned
+	# columns — absent on sites without the SR workflow, so write only
+	# the columns that exist.
+	updates = {"service_invoice": inv.name, "status": "Invoiced"}
+	for optional_col in ("decision", "workflow_state"):
+		if frappe.db.has_column("Service Request", optional_col):
+			updates[optional_col] = "Invoiced"
+	frappe.db.set_value("Service Request", sr_name, updates, update_modified=True)
 
 	from gofix.gofix_services.api import auto_close_service_order_after_billing
 

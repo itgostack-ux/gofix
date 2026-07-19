@@ -998,15 +998,29 @@ def auto_close_service_order_after_billing(service_request=None, service_order=N
 		if so.docstatus == 2 or (so.docstatus == 1 and so.get("workflow_state") == "Closed"):
 			return
 
+		if so.get("qc_status") != "Pass":
+			return
+
 		jas = frappe.get_all(
 			"Job Assignment",
 			filters={"service_order": so_name, "docstatus": ["<", 2]},
-			pluck="assignment_status",
+			fields=["name", "assignment_status", "actual_hours"],
 		)
-		if not jas or any(s not in ("Completed", "Closed", "Cancelled") for s in jas):
+		if not jas:
 			return
-		if so.get("qc_status") != "Pass":
-			return
+		# QC has passed and the invoice exists — an assignment still open at
+		# this point is stale (assigned but never worked, or left dangling by
+		# rework churn). Settle it instead of blocking the close: worked hours
+		# → Completed, untouched → Cancelled. No manual maker-step for
+		# service closure.
+		for ja in jas:
+			if ja.assignment_status in ("Completed", "Closed", "Cancelled"):
+				continue
+			new_status = "Completed" if flt(ja.actual_hours) else "Cancelled"
+			frappe.db.set_value(
+				"Job Assignment", ja.name, "assignment_status", new_status,
+				update_modified=False,
+			)
 
 		if so.docstatus == 0:
 			so.flags.ignore_permissions = True
@@ -1027,6 +1041,87 @@ def auto_close_service_order_after_billing(service_request=None, service_order=N
 			frappe.get_traceback(),
 			f"auto_close_service_order_after_billing failed: {service_request or service_order}",
 		)
+
+
+_SERVICE_BOARD_TABS = {
+	"in_progress": ["Draft", "Accepted", "In Service", "In Progress", "On Hold"],
+	"ready": ["Completed"],
+	"invoiced": ["Invoiced"],
+	"delivered": ["Delivered"],
+}
+
+
+@frappe.whitelist()
+def get_store_service_board(warehouse, tab=None, search=None) -> dict:
+	"""Service Tracker board for a store.
+
+	Lists every Service Request ACCEPTED at this store (source_warehouse),
+	regardless of where the device currently sits — a device shipped to a
+	repair hub stays visible with its current location. Billing off-store
+	devices still requires the customer-consent OTP (custody gate); this
+	board only surfaces them.
+	"""
+	frappe.has_permission("Service Request", "read", throw=True)
+	if not warehouse:
+		return {"rows": [], "counts": {}}
+
+	filters = {"source_warehouse": warehouse}
+	if tab and tab in _SERVICE_BOARD_TABS:
+		filters["status"] = ["in", _SERVICE_BOARD_TABS[tab]]
+	if tab == "ready":
+		# "Ready to Bill" means billable — a Completed SR that already
+		# carries an invoice (legacy status drift) is not billable again.
+		filters["service_invoice"] = ["is", "not set"]
+
+	or_filters = None
+	if (search or "").strip():
+		like = f"%{search.strip()}%"
+		or_filters = [
+			["name", "like", like],
+			["contact_number", "like", like],
+			["actual_imei", "like", like],
+			["serial_no", "like", like],
+			["customer_name", "like", like],
+		]
+
+	rows = frappe.get_all(
+		"Service Request",
+		filters=filters,
+		or_filters=or_filters,
+		fields=[
+			"name", "status", "decision", "customer", "customer_name",
+			"contact_number", "serial_no", "actual_imei", "device_item_name",
+			"issue_category", "service_date", "estimated_cost", "final_cost",
+			"service_invoice", "transfer_status", "current_location",
+			"transferred_to_store", "source_warehouse",
+		],
+		order_by="modified desc",
+		limit_page_length=50,
+	)
+
+	for r in rows:
+		transfer = (r.get("transfer_status") or "").strip()
+		if transfer in ("", "Not Transferred", "Returned to Store"):
+			device_at = r.get("current_location") or warehouse
+		elif transfer in ("In Transit", "Return In Transit"):
+			device_at = None  # on the road
+		else:
+			device_at = r.get("current_location") or r.get("transferred_to_store")
+		r["device_at"] = device_at
+		r["at_home_store"] = bool(device_at == warehouse)
+
+	status_counts = dict(frappe.db.sql(
+		"""SELECT status, COUNT(*) FROM `tabService Request`
+		   WHERE source_warehouse = %s GROUP BY status""",
+		warehouse,
+	))
+	counts = {
+		key: sum(cint(status_counts.get(s, 0)) for s in statuses)
+		for key, statuses in _SERVICE_BOARD_TABS.items()
+	}
+	counts["all"] = sum(cint(v) for v in status_counts.values())
+
+	return {"rows": rows, "counts": counts}
 
 
 # ── Issue → Solution → Spare Cascade APIs ────────────────────────────

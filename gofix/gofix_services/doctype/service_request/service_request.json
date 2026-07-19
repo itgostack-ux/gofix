@@ -115,6 +115,10 @@
   "discount_approved_by",
   "discount_approval_reason",
   "discount_exception_request",
+  "section_final_billing",
+  "final_cost",
+  "column_break_final_billing",
+  "below_cost_exception_request",
   "section_serial_substitution",
   "original_serial_no",
   "replacement_serial_no",
@@ -506,7 +510,7 @@
    "label": "CH Warranty Claim",
    "options": "CH Warranty Claim",
    "read_only": 1,
-   "description": "When present, claim consumption on the Active VAS Plan is bumped by the CH Warranty Claim closure — not by this Service Request — to prevent double-counting."
+   "description": "When present, claim consumption on the Active VAS Plan is bumped by the CH Warranty Claim closure \u2014 not by this Service Request \u2014 to prevent double-counting."
   },
   {
    "fieldname": "warranty_plan_name",
@@ -545,7 +549,7 @@
    "fieldname": "pattern",
    "fieldtype": "Password",
    "label": "Device Pattern",
-   "description": "Encrypted at rest. Pattern lock unlock sequence — revealable by technicians; do not retain beyond the service lifecycle."
+   "description": "Encrypted at rest. Pattern lock unlock sequence \u2014 revealable by technicians; do not retain beyond the service lifecycle."
   },
   {
    "fieldname": "column_break_security",
@@ -1199,6 +1203,30 @@
    "read_only": 1
   },
   {
+   "collapsible": 1,
+   "fieldname": "section_final_billing",
+   "fieldtype": "Section Break",
+   "label": "Final Billing"
+  },
+  {
+   "description": "Final payable amount agreed with the customer (incl. tax). Overrides item totals on the Ops Hub invoice. Below Cost-to-Company requires an approved exception.",
+   "fieldname": "final_cost",
+   "fieldtype": "Currency",
+   "label": "Final Cost to Customer",
+   "options": "Company:company:default_currency"
+  },
+  {
+   "fieldname": "column_break_final_billing",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "below_cost_exception_request",
+   "fieldtype": "Link",
+   "label": "Below-Cost Exception",
+   "options": "CH Exception Request",
+   "read_only": 1
+  },
+  {
    "fieldname": "section_serial_substitution",
    "fieldtype": "Section Break",
    "label": "Serial Substitution",
@@ -1289,7 +1317,7 @@
  "index_web_pages_for_search": 1,
  "is_submittable": 1,
  "links": [],
- "modified": "2026-03-30 10:00:00.000000",
+ "modified": "2026-07-19 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "GoFix Services",
  "name": "Service Request",

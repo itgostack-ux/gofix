@@ -570,6 +570,66 @@ class ServiceRequest(Document):
 				_("Failed to update serial lifecycle for SR {0}").format(self.name),
 			)
 
+	def _resolve_service_item(self):
+		"""Pick the Item to bill the repair against.
+
+		This used to be ``get_value("Item", {"is_stock_item": 0})`` — the first
+		non-stock Item MariaDB happened to return, with no ordering and no
+		filters. Device *templates* are non-stock too, and they outnumber real
+		service items roughly 64:1, so the query would routinely return a
+		template and acceptance died inside ``set_missing_values()`` with
+		"Item X is a template, please select one of its variants" — naming an
+		item unrelated to the ticket.
+
+		The choice is explicit rather than inferred, because "non-stock sales
+		Item" does not mean "repair item" here: almost every such Item on
+		these sites is a warranty/VAS plan product (GoCare, OnsiteGo,
+		AppleCare, GoAssure), and billing a repair to one would misstate
+		revenue. Order of preference:
+
+		  1. a service item the Service Request itself declares;
+		  2. ``Company.gofix_default_service_item``;
+		  3. an Item literally coded ``Repair Service``.
+
+		If none resolves we raise rather than guess.
+		"""
+		declared = next(
+			(r.service_item for r in (self.get("service_items") or []) if r.service_item),
+			None,
+		)
+		if declared and self._is_billable_item(declared):
+			return declared
+
+		configured = None
+		if self.company and frappe.db.has_column("Company", "gofix_default_service_item"):
+			configured = frappe.db.get_value(
+				"Company", self.company, "gofix_default_service_item"
+			)
+		if configured and self._is_billable_item(configured):
+			return configured
+
+		conventional = "Repair Service"
+		if self._is_billable_item(conventional):
+			return conventional
+
+		frappe.throw(
+			_(
+				"No repair service item is configured for {0}, so the Service "
+				"Order cannot be billed.<br><br>Set <b>Default Repair Service "
+				"Item</b> on the Company, or create an enabled, non-stock sales "
+				"Item coded <b>Repair Service</b>."
+			).format(frappe.bold(self.company or "-")),
+			title=_("Service Item Missing"),
+		)
+
+	@staticmethod
+	def _is_billable_item(item_code):
+		"""True when `item_code` can go on a Sales Order line as-is."""
+		row = frappe.db.get_value(
+			"Item", item_code, ["has_variants", "disabled"], as_dict=True
+		)
+		return bool(row) and not row.has_variants and not row.disabled
+
 	def create_service_order(self):
 		"""Create Service Order (Sales Order) from accepted Service Request"""
 		if self.service_order:
@@ -660,13 +720,8 @@ class ServiceRequest(Document):
 		so.delivery_mode = "Pick-up"
 		
 		# Add service item
-		# Find a non-stock service item
-		service_item = frappe.db.get_value("Item", {"is_stock_item": 0}, "item_code")
-		
-		if not service_item:
-			# Fallback to device item if no service item found
-			service_item = self.device_item
-		
+		service_item = self._resolve_service_item()
+
 		so.append('items', {
 			'item_code': service_item,
 			'item_name': f'Service Repair - {self.device_item_name}',

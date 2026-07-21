@@ -68,11 +68,26 @@ def create_company_custom_fields() -> None:
 					"STO-<ABBR>-<CITY>-#### scheme."
 				),
 			},
+			{
+				"fieldname": "gofix_default_service_item",
+				"label": "Default Repair Service Item",
+				"fieldtype": "Link",
+				"options": "Item",
+				"insert_after": "store_code_prefix",
+				"description": (
+					"Item the Service Order bills a repair against when the "
+					"Service Request names no service item of its own. Must be a "
+					"non-stock sales Item that is not a variant template. Leave "
+					"blank to fall back to an Item literally coded "
+					"'Repair Service'."
+				),
+			},
 		]
 	}
 	create_custom_fields(custom_fields, update=True)
 	_auto_enable_gofix_companies()
 	_backfill_store_code_prefix()
+	_backfill_default_service_item()
 
 
 def _auto_enable_gofix_companies() -> None:
@@ -138,4 +153,48 @@ def _backfill_store_code_prefix() -> None:
 		)
 		frappe.logger("gofix").info(
 			f"[store_code_prefix] set '{prefix}' for Company {row['name']}"
+		)
+
+
+# The conventional generic repair item. Nearly every other non-stock sales
+# Item on these sites is a warranty/VAS plan product (GoCare, OnsiteGo,
+# AppleCare, GoAssure), which must never be used to bill a repair.
+_DEFAULT_SERVICE_ITEM_CODE = "Repair Service"
+
+
+def _backfill_default_service_item() -> None:
+	"""Point each company at the generic repair item when it has none.
+
+	Only fills a blank value, so an ops override sticks. Silently does
+	nothing when the conventional item is absent — ``_resolve_service_item``
+	raises an actionable error at that point rather than guessing.
+	"""
+
+	if not frappe.db.has_column("Company", "gofix_default_service_item"):
+		return
+
+	item = frappe.db.get_value(
+		"Item",
+		{
+			"name": _DEFAULT_SERVICE_ITEM_CODE,
+			"has_variants": 0,
+			"disabled": 0,
+			"is_sales_item": 1,
+		},
+		"name",
+	)
+	if not item:
+		return
+
+	for row in frappe.get_all(
+		"Company", fields=["name", "gofix_default_service_item"]
+	):
+		if (row.get("gofix_default_service_item") or "").strip():
+			continue
+		frappe.db.set_value(
+			"Company", row["name"], "gofix_default_service_item", item,
+			update_modified=False,
+		)
+		frappe.logger("gofix").info(
+			f"[gofix_default_service_item] set '{item}' for Company {row['name']}"
 		)

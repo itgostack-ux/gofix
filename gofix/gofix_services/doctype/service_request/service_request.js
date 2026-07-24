@@ -830,7 +830,12 @@ function _fetch_customer_billing_address(frm) {
 	if (!frm.doc.customer) return;
 	frappe.xcall(
 		'gofix.gofix_services.doctype.service_request.service_request.get_customer_billing_address',
-		{ customer: frm.doc.customer }
+		{
+			customer: frm.doc.customer,
+			service_request: frm.is_new() ? null : frm.doc.name,
+			company: frm.doc.company,
+			warehouse: frm.doc.source_warehouse,
+		}
 	).then(function(addr) {
 		if (!addr) return;
 

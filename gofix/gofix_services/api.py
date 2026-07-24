@@ -3,9 +3,80 @@
 
 import frappe
 from frappe import _
-from frappe.utils import flt, cint, now, today, add_days, random_string, getdate, get_datetime
+from frappe.utils import add_days, add_to_date, cint, flt, getdate, get_datetime, now, now_datetime, random_string, today
 import json
 import secrets
+
+from gofix.config import get_int_setting, require_role_setting
+from gofix.security import assert_service_request_access
+
+
+def _get_scoped_service_order(service_order, permission_type="read"):
+	so = frappe.get_doc("Sales Order", service_order)
+	if not so.is_service_order or not so.service_request:
+		frappe.throw(_("Not a linked Service Order"), frappe.PermissionError, title=_("API Error"))
+	so.check_permission(permission_type)
+	assert_service_request_access(so.service_request, permission_type=permission_type)
+	return so
+
+
+def _require_sales_operation_role() -> None:
+	require_role_setting(
+		"sales_operation_roles",
+		("Sales Manager", "System Manager", "Service Manager", "Sales User"),
+		action=_("manage service operations"),
+	)
+
+
+def _require_billing_role() -> None:
+	require_role_setting(
+		"billing_roles",
+		("Sales Manager", "System Manager", "Service Manager", "Sales User", "Store Manager", "Store Executive"),
+		action=_("manage service billing"),
+	)
+
+
+def _require_store_operation_role() -> None:
+	require_role_setting(
+		"store_operation_roles",
+		("Sales Manager", "System Manager", "Service Manager", "Store Manager"),
+		action=_("manage store service operations"),
+	)
+
+
+def _require_service_manager_role() -> None:
+	require_role_setting(
+		"service_manager_roles",
+		("Service Manager", "System Manager"),
+		action=_("approve service decisions"),
+	)
+
+
+def _require_reference_read(action, doctypes, role_field="service_access_roles") -> None:
+	require_role_setting(role_field, action=action)
+	for doctype in doctypes:
+		frappe.has_permission(doctype, "read", throw=True)
+
+
+def _bounded_name_list(value, label) -> list[str]:
+	if isinstance(value, str):
+		value = json.loads(value)
+	if not isinstance(value, list):
+		frappe.throw(_("{0} must be a JSON list.").format(label), frappe.ValidationError)
+	limit = get_int_setting("token_queue_limit", 200)
+	names = list(
+		dict.fromkeys(
+			str(name).strip()
+			for name in value
+			if name is not None and str(name).strip()
+		)
+	)
+	if len(names) > limit:
+		frappe.throw(
+			_("A maximum of {0} {1} can be processed at once.").format(limit, label.lower()),
+			frappe.ValidationError,
+		)
+	return names
 
 
 def _ensure_future_datetime(value, label):
@@ -57,22 +128,71 @@ def _audit_service_update(sr, event_type, before=None, after=None, remarks=None)
 		frappe.log_error(frappe.get_traceback(), f"Service audit log failed for {sr.name}")
 
 
+def _otp_scope_lock(scope):
+	return frappe.cache().lock(
+		f"gofix-otp-lock::{scope}",
+		timeout=10,
+		blocking_timeout=5,
+	)
+
+
+def _atomic_counter(key, window):
+	cache = frappe.cache
+	cache_key = cache.make_key(key)
+	cache.set(cache_key, 0, nx=True, ex=window)
+	value = cache.incrby(cache_key, 1)
+	if cache.ttl(cache_key) < 0:
+		cache.expire(cache_key, window)
+	return cint(value)
+
+
+def _reset_atomic_counter(key, window):
+	frappe.cache.setex(frappe.cache.make_key(key), window, 0)
+
+
+def _enforce_otp_rate_limit(action, scope):
+	if action == "request":
+		limit = get_int_setting("otp_request_limit", 5)
+		window = get_int_setting("otp_request_window_seconds", 3600, minimum=60)
+	else:
+		limit = get_int_setting("otp_verify_limit", 10)
+		window = get_int_setting("otp_verify_window_seconds", 300, minimum=60)
+	key = f"gofix-otp-rate::{action}::{frappe.session.user}::{scope}"
+	count = _atomic_counter(key, window)
+	if count > limit:
+		frappe.throw(_("Too many OTP attempts. Please try again later."), frappe.RateLimitExceededError)
+
+
+def _otp_attempt_limits():
+	return (
+		get_int_setting("otp_max_attempts", 5),
+		get_int_setting("otp_lockout_seconds", 900, minimum=60),
+	)
+
+
 # ── Delivery Control ─────────────────────────────────────────────────
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def generate_delivery_otp(service_order) -> dict:
 	"""Generate and send OTP for device handover verification."""
-	frappe.only_for(["Sales Manager", "System Manager", "Service Manager", "Sales User"])
-	so = frappe.get_doc("Sales Order", service_order)
+	_require_sales_operation_role()
+	so = _get_scoped_service_order(service_order, "write")
+	_enforce_otp_rate_limit("request", f"delivery::{so.name}")
+	frappe.db.sql("SELECT name FROM `tabSales Order` WHERE name = %s FOR UPDATE", (so.name,))
+	so.reload()
+	now_value = now_datetime()
+	if so.get("delivery_otp_locked_until") and get_datetime(so.delivery_otp_locked_until) > now_value:
+		frappe.throw(_("Delivery OTP is temporarily locked after repeated failures."), frappe.PermissionError)
 
-	if not so.is_service_order:
-		frappe.throw(_("Not a Service Order"), title=_("API Error"))
-
-	# Generate 6-digit OTP
 	otp = str(secrets.randbelow(900000) + 100000)
-	so.db_set("delivery_otp", frappe.utils.password.encrypt(otp), update_modified=False)
-	so.db_set("delivery_otp_verified", 0, update_modified=False)
-	so.db_set("delivery_otp_sent_at", now(), update_modified=False)
+	so.db_set({
+		"delivery_otp": frappe.utils.password.encrypt(otp),
+		"delivery_otp_verified": 0,
+		"delivery_otp_sent_at": now_value,
+		"delivery_otp_attempts": 0,
+		"delivery_otp_locked_until": None,
+		"delivery_otp_consumed_at": None,
+	}, update_modified=False)
 
 	# Send OTP to customer
 	_send_delivery_otp(so, otp)
@@ -80,44 +200,72 @@ def generate_delivery_otp(service_order) -> dict:
 	return {"message": _("OTP sent to customer"), "otp_sent": True}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def verify_delivery_otp(service_order, otp_input) -> dict:
 	"""Verify the delivery OTP entered by customer."""
-	frappe.only_for(["Sales Manager", "System Manager", "Service Manager", "Sales User"])
-	so = frappe.get_doc("Sales Order", service_order)
-
-	if not so.is_service_order:
-		frappe.throw(_("Not a Service Order"), title=_("API Error"))
+	_require_sales_operation_role()
+	so = _get_scoped_service_order(service_order, "write")
+	_enforce_otp_rate_limit("verify", f"delivery::{so.name}")
+	frappe.db.sql("SELECT name FROM `tabSales Order` WHERE name = %s FOR UPDATE", (so.name,))
+	so.reload()
+	if so.get("delivery_otp_verified"):
+		return {"message": _("OTP was already verified."), "verified": True, "already_verified": True}
+	now_value = now_datetime()
+	if so.get("delivery_otp_locked_until") and get_datetime(so.delivery_otp_locked_until) > now_value:
+		return {"message": _("Delivery OTP is temporarily locked."), "verified": False, "locked": True}
+	stored_otp = so.delivery_otp
+	if not stored_otp or not so.get("delivery_otp_sent_at"):
+		return {"message": _("No active delivery OTP. Generate a new OTP."), "verified": False}
+	ttl = get_int_setting("delivery_otp_ttl_seconds", 600, minimum=60)
+	if get_datetime(so.delivery_otp_sent_at) < add_to_date(now_value, seconds=-ttl):
+		so.db_set({"delivery_otp": None, "delivery_otp_attempts": 0}, update_modified=False)
+		return {"message": _("Delivery OTP has expired."), "verified": False, "expired": True}
 
 	from ch_item_master.ch_core.shadow_live import master_otp_matches
-
-	if master_otp_matches(otp_input):
-		so.db_set("delivery_otp_verified", 1, update_modified=False)
-		return {"message": _("Shadow-live master OTP accepted."), "verified": True}
-
-	stored_otp = so.delivery_otp
-	if not stored_otp:
-		frappe.throw(_("No OTP generated. Please generate OTP first."), title=_("API Error"))
 
 	try:
 		decrypted = frappe.utils.password.decrypt(stored_otp)
 	except Exception:
 		decrypted = stored_otp
 
-	if str(otp_input).strip() != str(decrypted).strip():
-		frappe.throw(_("Invalid OTP. Please try again."), title=_("API Error"))
+	valid = master_otp_matches(otp_input) or secrets.compare_digest(
+		str(otp_input or "").strip(), str(decrypted or "").strip()
+	)
+	if not valid:
+		max_attempts, lockout_seconds = _otp_attempt_limits()
+		attempts = cint(so.get("delivery_otp_attempts")) + 1
+		updates = {"delivery_otp_attempts": attempts}
+		locked = attempts >= max_attempts
+		if locked:
+			updates.update({
+				"delivery_otp": None,
+				"delivery_otp_locked_until": add_to_date(now_value, seconds=lockout_seconds),
+			})
+		so.db_set(updates, update_modified=False)
+		return {
+			"message": _("Invalid OTP." if not locked else "Maximum OTP attempts exceeded."),
+			"verified": False,
+			"locked": locked,
+			"attempts_remaining": max(max_attempts - attempts, 0),
+		}
 
-	so.db_set("delivery_otp_verified", 1, update_modified=False)
-	return {"message": _("OTP verified successfully"), "verified": True}
+	so.db_set({
+		"delivery_otp": None,
+		"delivery_otp_verified": 1,
+		"delivery_otp_attempts": 0,
+		"delivery_otp_locked_until": None,
+		"delivery_otp_consumed_at": now_value,
+	}, update_modified=False)
+	return {
+		"message": _("Shadow-live master OTP accepted." if master_otp_matches(otp_input) else "OTP verified successfully"),
+		"verified": True,
+	}
 
 
 @frappe.whitelist()
 def validate_delivery_readiness(service_order) -> dict:
 	"""Check all delivery gates before allowing device handover."""
-	so = frappe.get_doc("Sales Order", service_order)
-
-	if not so.is_service_order:
-		frappe.throw(_("Not a Service Order"), title=_("API Error"))
+	so = _get_scoped_service_order(service_order, "read")
 
 	blockers = []
 
@@ -126,15 +274,13 @@ def validate_delivery_readiness(service_order) -> dict:
 		blockers.append(_("QC not passed (current: {0})").format(so.qc_status or "Pending"))
 
 	# Gate 2: Payment verified
-	if not getattr(so, "payment_verified", None):
-		# Check actual invoice status
-		has_unpaid = frappe.db.exists("Sales Invoice", {
-			"sales_order": service_order,
-			"outstanding_amount": [">", 0],
-			"docstatus": 1,
-		})
-		if has_unpaid:
-			blockers.append(_("Outstanding payment exists"))
+	has_unpaid = frappe.db.exists("Sales Invoice", {
+		"sales_order": service_order,
+		"outstanding_amount": [">", 0],
+		"docstatus": 1,
+	})
+	if has_unpaid:
+		blockers.append(_("Outstanding payment exists"))
 
 	# Gate 3: OTP verified
 	if not getattr(so, "delivery_otp_verified", None):
@@ -150,11 +296,13 @@ def validate_delivery_readiness(service_order) -> dict:
 	}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def complete_delivery(service_order, remarks=None) -> dict:
 	"""Mark device as delivered after all gates pass."""
-	frappe.only_for(["Sales Manager", "System Manager", "Service Manager", "Sales User"])
-	so = frappe.get_doc("Sales Order", service_order)
+	_require_sales_operation_role()
+	so = _get_scoped_service_order(service_order, "write")
+	frappe.db.sql("SELECT name FROM `tabSales Order` WHERE name = %s FOR UPDATE", (so.name,))
+	so.reload()
 
 	readiness = validate_delivery_readiness(service_order)
 	if not readiness["ready"]:
@@ -240,11 +388,6 @@ def _send_delivery_otp(so, otp):
 # anywhere else requires the customer's explicit OTP consent, sent via
 # WhatsApp / SMS / email.
 
-_REMOTE_BILLING_OTP_TTL = 600  # OTP valid 10 minutes
-_REMOTE_BILLING_CONSENT_TTL = 1800  # verified consent valid 30 minutes
-_BILLING_ROLES = ["Sales Manager", "System Manager", "Service Manager", "Sales User", "Store Manager", "Store Executive"]
-
-
 def billing_location_status(sr) -> dict:
 	"""Where is the device vs where it must be billed."""
 	if isinstance(sr, str):
@@ -277,8 +420,9 @@ def assert_billing_location(sr, remote_otp=None) -> None:
 	if status["at_home_store"] or status["otp_verified"]:
 		return
 	if remote_otp:
-		verify_remote_billing_otp(sr.name, remote_otp)
-		return
+		verification = verify_remote_billing_otp(sr.name, remote_otp)
+		if verification.get("verified"):
+			return
 	frappe.throw(
 		_(
 			"Invoicing is allowed only at the device's home store {0} — the device is "
@@ -294,21 +438,27 @@ def assert_billing_location(sr, remote_otp=None) -> None:
 	)
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def request_remote_billing_otp(service_request) -> dict:
 	"""Send the customer a billing-consent OTP via WhatsApp / SMS / email."""
-	frappe.only_for(_BILLING_ROLES)
-	sr = frappe.get_doc("Service Request", service_request)
+	_require_billing_role()
+	sr = assert_service_request_access(service_request, permission_type="write")
 	status = billing_location_status(sr)
 	if status["at_home_store"]:
 		return {"otp_sent": False, "message": _("Device is at its home store — no OTP needed.")}
+	_enforce_otp_rate_limit("request", f"remote-billing::{sr.name}")
 
 	otp = str(secrets.randbelow(900000) + 100000)
-	frappe.cache().set_value(
-		f"gofix_remote_billing_otp::{sr.name}",
-		frappe.utils.password.encrypt(otp),
-		expires_in_sec=_REMOTE_BILLING_OTP_TTL,
-	)
+	otp_ttl = get_int_setting("remote_billing_otp_ttl_seconds", 600, minimum=60)
+	otp_valid_minutes = max(1, (otp_ttl + 59) // 60)
+	otp_key = f"gofix_remote_billing_otp::{sr.name}"
+	attempts_key = f"gofix_remote_billing_attempts::{sr.name}"
+	lockout_key = f"gofix_remote_billing_lockout::{sr.name}"
+	with _otp_scope_lock(f"remote-billing::{sr.name}"):
+		if frappe.cache().get_value(lockout_key):
+			frappe.throw(_("Remote billing OTP is temporarily locked."), frappe.PermissionError)
+		frappe.cache().set_value(otp_key, frappe.utils.password.encrypt(otp), expires_in_sec=otp_ttl)
+		_reset_atomic_counter(attempts_key, otp_ttl)
 
 	from ch_item_master.ch_core.shadow_live import suppress_customer_comms
 
@@ -347,7 +497,7 @@ def request_remote_billing_otp(service_request) -> dict:
 			send_sms(
 				[phone],
 				f"GoFix: OTP {otp} to approve billing of your repair {sr.name} at a different "
-				f"store. Valid 10 minutes. Do not share unless you authorise this bill.",
+				f"store. Valid {otp_valid_minutes} minutes. Do not share unless you authorise this bill.",
 			)
 			channels.append("SMS")
 		except Exception:
@@ -366,7 +516,7 @@ def request_remote_billing_otp(service_request) -> dict:
 					f"<p>Your repair <b>{sr.name}</b> is being billed at a location other than the "
 					f"store where you handed in your device. If you approve, share this OTP with "
 					f"the executive: <span style='font-size:22px;font-weight:700;letter-spacing:4px'>{otp}</span></p>"
-					"<p>The OTP is valid for 10 minutes. If you did not request this, ignore this email.</p>"
+					f"<p>The OTP is valid for {otp_valid_minutes} minutes. If you did not request this, ignore this email.</p>"
 					"</div></div>"
 				),
 				reference_doctype="Service Request",
@@ -378,6 +528,9 @@ def request_remote_billing_otp(service_request) -> dict:
 			frappe.log_error(frappe.get_traceback(), "Remote billing OTP email failed")
 
 	if not channels:
+		with _otp_scope_lock(f"remote-billing::{sr.name}"):
+			frappe.cache().delete_value(otp_key)
+			frappe.cache().delete_value(attempts_key)
 		frappe.throw(
 			_("Could not send OTP — no reachable customer phone or email on {0}.").format(sr.name),
 			title=_("OTP Not Sent"),
@@ -385,84 +538,106 @@ def request_remote_billing_otp(service_request) -> dict:
 	return {"otp_sent": True, "channels": channels, "message": _("OTP sent via {0}").format(", ".join(channels))}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def verify_remote_billing_otp(service_request, otp) -> dict:
-	"""Verify the customer's billing-consent OTP; consent stays valid 30 minutes."""
-	frappe.only_for(_BILLING_ROLES)
+	"""Verify the customer's billing-consent OTP."""
+	_require_billing_role()
+	sr = assert_service_request_access(service_request, permission_type="write")
+	_enforce_otp_rate_limit("verify", f"remote-billing::{sr.name}")
+	consent_ttl = get_int_setting("remote_billing_consent_ttl_seconds", 1800, minimum=60)
+	consent_minutes = max(1, (consent_ttl + 59) // 60)
 	from ch_item_master.ch_core.shadow_live import master_otp_matches
-
-	if master_otp_matches(otp):
-		frappe.cache().delete_value(f"gofix_remote_billing_otp::{service_request}")
-		frappe.cache().set_value(
-			f"gofix_remote_billing_ok::{service_request}", 1, expires_in_sec=_REMOTE_BILLING_CONSENT_TTL
-		)
+	otp_key = f"gofix_remote_billing_otp::{service_request}"
+	attempts_key = f"gofix_remote_billing_attempts::{service_request}"
+	lockout_key = f"gofix_remote_billing_lockout::{service_request}"
+	consent_key = f"gofix_remote_billing_ok::{service_request}"
+	with _otp_scope_lock(f"remote-billing::{service_request}"):
+		if frappe.cache().get_value(lockout_key):
+			return {"verified": False, "locked": True, "message": _("Remote billing OTP is temporarily locked.")}
+		stored = frappe.cache().get_value(otp_key)
+		if not stored:
+			return {"verified": False, "expired": True, "message": _("No active OTP. Send a new one.")}
 		try:
-			sr = frappe.get_doc("Service Request", service_request)
-			sr.add_comment(
-				"Comment",
-				_("Off-store billing unlocked via shadow-live master OTP (by {0}).").format(frappe.session.user),
-			)
+			decrypted = frappe.utils.password.decrypt(stored)
 		except Exception:
-			pass
-		return {"verified": True, "message": _("Shadow-live master OTP accepted — billing unlocked.")}
-
-	stored = frappe.cache().get_value(f"gofix_remote_billing_otp::{service_request}")
-	if not stored:
-		frappe.throw(_("No active OTP for {0} — send a new one.").format(service_request), title=_("OTP Expired"))
-	try:
-		decrypted = frappe.utils.password.decrypt(stored)
-	except Exception:
-		decrypted = stored
-	if str(otp).strip() != str(decrypted).strip():
-		frappe.throw(_("Invalid OTP. Please re-check with the customer."), title=_("Invalid OTP"))
-
-	frappe.cache().delete_value(f"gofix_remote_billing_otp::{service_request}")
-	frappe.cache().set_value(
-		f"gofix_remote_billing_ok::{service_request}", 1, expires_in_sec=_REMOTE_BILLING_CONSENT_TTL
-	)
-	try:
-		sr = frappe.get_doc("Service Request", service_request)
-		sr.add_comment(
-			"Comment",
-			_("Customer approved off-store billing via OTP (verified by {0}).").format(frappe.session.user),
+			decrypted = stored
+		shadow_match = master_otp_matches(otp)
+		valid = shadow_match or secrets.compare_digest(
+			str(otp or "").strip(), str(decrypted or "").strip()
 		)
-	except Exception:
-		pass
-	return {"verified": True, "message": _("Customer consent verified — billing unlocked for 30 minutes.")}
+		if not valid:
+			max_attempts, lockout_seconds = _otp_attempt_limits()
+			attempts = _atomic_counter(
+				attempts_key,
+				get_int_setting("remote_billing_otp_ttl_seconds", 600, minimum=60),
+			)
+			locked = attempts >= max_attempts
+			if locked:
+				frappe.cache().delete_value(otp_key)
+				frappe.cache().delete_value(attempts_key)
+				frappe.cache().set_value(lockout_key, 1, expires_in_sec=lockout_seconds)
+			return {
+				"verified": False,
+				"locked": locked,
+				"attempts_remaining": max(max_attempts - attempts, 0),
+				"message": _("Invalid OTP." if not locked else "Maximum OTP attempts exceeded."),
+			}
+
+		audit_message = (
+			_("Off-store billing unlocked via shadow-live master OTP (by {0}).")
+			if shadow_match
+			else _("Customer approved off-store billing via OTP (verified by {0}).")
+		).format(frappe.session.user)
+		sr.add_comment("Comment", audit_message)
+		frappe.cache().delete_value(otp_key)
+		frappe.cache().delete_value(attempts_key)
+		frappe.cache().delete_value(lockout_key)
+		frappe.cache().set_value(consent_key, 1, expires_in_sec=consent_ttl)
+	return {
+		"verified": True,
+		"message": (
+			_("Shadow-live master OTP accepted — billing unlocked.")
+			if shadow_match
+			else _("Customer consent verified — billing unlocked for {0} minutes.").format(consent_minutes)
+		),
+	}
 
 
 # ── Estimate Approval Flow ───────────────────────────────────────────
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def send_estimate_to_customer(service_order, send_via="Email") -> dict:
 	"""Send repair estimate to customer for approval."""
-	frappe.only_for(["Sales Manager", "System Manager", "Service Manager", "Sales User"])
-	so = frappe.get_doc("Sales Order", service_order)
-
-	if not so.is_service_order:
-		frappe.throw(_("Not a Service Order"), title=_("API Error"))
+	_require_sales_operation_role()
+	so = _get_scoped_service_order(service_order, "write")
 
 	so.db_set("estimate_sent", 1, update_modified=False)
 	so.db_set("estimate_sent_datetime", now(), update_modified=False)
 	so.db_set("estimate_sent_via", send_via, update_modified=False)
 	so.db_set("estimate_approval_status", "Pending", update_modified=False)
 
-	# Set expiry (default 3 days)
-	so.db_set("estimate_expiry_date", add_days(today(), 3), update_modified=False)
+	so.db_set(
+		"estimate_expiry_date",
+		add_days(today(), get_int_setting("estimate_expiry_days", 3)),
+		update_modified=False,
+	)
 
 	_send_estimate_notification(so, send_via)
 
 	return {"message": _("Estimate sent to customer via {0}").format(send_via)}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def customer_approve_estimate(service_order, remarks=None) -> dict:
-	"""Customer approves the repair estimate."""
-	so = frappe.get_doc("Sales Order", service_order)
-	so.check_permission("write")
-
-	if not so.is_service_order:
-		frappe.throw(_("Not a Service Order"), title=_("API Error"))
+	"""Record an audited staff override of the customer estimate decision."""
+	require_role_setting(
+		"estimate_decision_override_roles",
+		("Service Manager",),
+		action=_("override a customer estimate decision"),
+	)
+	if not (remarks or "").strip():
+		frappe.throw(_("Override remarks are required."), frappe.ValidationError)
+	so = _get_scoped_service_order(service_order, "write")
 
 	if getattr(so, "estimate_approval_status", None) not in ("Pending", None, ""):
 		frappe.throw(_("Estimate is not pending approval (current: {0})").format(
@@ -477,24 +652,35 @@ def customer_approve_estimate(service_order, remarks=None) -> dict:
 	so.db_set("estimate_approved_datetime", now(), update_modified=False)
 	if remarks:
 		so.db_set("estimate_customer_remarks", remarks, update_modified=False)
+	so.add_comment(
+		"Comment",
+		_("Customer estimate approval overridden by {0}: {1}").format(frappe.session.user, remarks),
+	)
 
 	frappe.msgprint(_("Estimate approved by customer"), indicator="green")
 	return {"message": "Estimate approved"}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def customer_reject_estimate(service_order, remarks=None) -> dict:
-	"""Customer rejects the repair estimate."""
-	so = frappe.get_doc("Sales Order", service_order)
-	so.check_permission("write")
-
-	if not so.is_service_order:
-		frappe.throw(_("Not a Service Order"), title=_("API Error"))
+	"""Record an audited staff override of the customer estimate decision."""
+	require_role_setting(
+		"estimate_decision_override_roles",
+		("Service Manager",),
+		action=_("override a customer estimate decision"),
+	)
+	if not (remarks or "").strip():
+		frappe.throw(_("Override remarks are required."), frappe.ValidationError)
+	so = _get_scoped_service_order(service_order, "write")
 
 	so.db_set("estimate_approval_status", "Customer Rejected", update_modified=False)
 	so.db_set("estimate_approved_datetime", now(), update_modified=False)
 	if remarks:
 		so.db_set("estimate_customer_remarks", remarks, update_modified=False)
+	so.add_comment(
+		"Comment",
+		_("Customer estimate rejection overridden by {0}: {1}").format(frappe.session.user, remarks),
+	)
 
 	frappe.msgprint(_("Estimate rejected by customer"), indicator="orange")
 	return {"message": "Estimate rejected"}
@@ -547,39 +733,48 @@ def _send_estimate_notification(so, send_via):
 			)
 			send_sms([customer_mobile], sms_text)
 		except Exception:
-			pass
+			frappe.log_error(frappe.get_traceback(), f"Estimate notification SMS failed for {so.name}")
 
 
 def expire_pending_estimates():
-	"""Scheduled task: expire estimates past their expiry date."""
-	expired = frappe.db.get_all("Sales Order",
-		filters={
-			"estimate_approval_status": "Pending",
-			"estimate_expiry_date": ["<", today()],
-			"is_service_order": 1,
-		},
-		pluck="name")
-
-	for name in expired:
-		frappe.db.set_value("Sales Order", name,
-			"estimate_approval_status", "Expired",
-			update_modified=False)
-
+	"""Expire one bounded batch of service estimates past their expiry date."""
+	batch_limit = min(get_int_setting("scheduler_batch_limit", 500, minimum=1), 5000)
+	filters = {
+		"estimate_approval_status": "Pending",
+		"estimate_expiry_date": ("<", today()),
+		"is_service_order": 1,
+	}
+	rows = frappe.get_all(
+		"Sales Order",
+		filters=filters,
+		pluck="name",
+		order_by="estimate_expiry_date asc, name asc",
+		limit=batch_limit + 1,
+	)
+	expired = rows[:batch_limit]
 	if expired:
-		frappe.db.commit()
+		frappe.db.sql(
+			"""
+				UPDATE `tabSales Order`
+				SET `estimate_approval_status` = 'Expired'
+				WHERE `name` IN %(names)s
+				  AND `estimate_approval_status` = 'Pending'
+				  AND `estimate_expiry_date` < %(today)s
+				  AND `is_service_order` = 1
+			""",
+			{"names": tuple(expired), "today": today()},
+		)
 		frappe.logger("gofix").info(f"Expired {len(expired)} pending estimates")
+	return {"expired": len(expired), "has_more": len(rows) > batch_limit}
 
 
 # ── Decision Approval (maker-checker) ────────────────────────────────
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def approve_decision(service_order, remarks=None) -> dict:
 	"""Manager approves a repair decision that requires approval."""
-	frappe.only_for(["Sales Manager", "System Manager", "Service Manager", "Store Manager"])
-	so = frappe.get_doc("Sales Order", service_order)
-
-	if not so.is_service_order:
-		frappe.throw(_("Not a Service Order"), title=_("API Error"))
+	_require_store_operation_role()
+	so = _get_scoped_service_order(service_order, "write")
 
 	so.db_set("decision_approval_status", "Approved", update_modified=False)
 	so.db_set("decision_approved_by", frappe.session.user, update_modified=False)
@@ -591,14 +786,11 @@ def approve_decision(service_order, remarks=None) -> dict:
 	return {"message": "Decision approved"}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def reject_decision(service_order, remarks=None) -> dict:
 	"""Manager rejects a repair decision."""
-	frappe.only_for(["Sales Manager", "System Manager", "Service Manager", "Store Manager"])
-	so = frappe.get_doc("Sales Order", service_order)
-
-	if not so.is_service_order:
-		frappe.throw(_("Not a Service Order"), title=_("API Error"))
+	_require_store_operation_role()
+	so = _get_scoped_service_order(service_order, "write")
 
 	so.db_set("decision_approval_status", "Rejected", update_modified=False)
 	so.db_set("decision_approved_by", frappe.session.user, update_modified=False)
@@ -612,26 +804,132 @@ def reject_decision(service_order, remarks=None) -> dict:
 
 # ── Advance Refund Flow ──────────────────────────────────────────────
 
-@frappe.whitelist()
+
+def _advance_refund_result(payment_entry, amount, already_exists=False) -> dict:
+	return {
+		"payment_entry": payment_entry.name,
+		"amount": flt(amount),
+		"docstatus": cint(payment_entry.docstatus),
+		"workflow_state": payment_entry.get("workflow_state") or "",
+		"already_exists": already_exists,
+	}
+
+
+def _route_advance_refund_for_approval(payment_entry):
+	from frappe.model.workflow import apply_workflow, get_transitions, get_workflow_name
+
+	workflow_name = get_workflow_name("Payment Entry")
+	if not workflow_name:
+		frappe.has_permission("Payment Entry", "submit", throw=True)
+		payment_entry.submit()
+		return payment_entry
+
+	workflow = frappe.get_cached_doc("Workflow", workflow_name)
+	state_docstatus = {row.state: cint(row.doc_status) for row in workflow.states}
+	transitions = get_transitions(payment_entry, workflow=workflow)
+	approval_routes = [
+		transition
+		for transition in transitions
+		if state_docstatus.get(transition.next_state) == 0
+		and transition.next_state != payment_entry.get(workflow.workflow_state_field)
+	]
+	if len(approval_routes) != 1:
+		frappe.throw(
+			_("The active Payment Entry workflow does not provide one permitted approval-routing action for your user."),
+			frappe.PermissionError,
+		)
+	return apply_workflow(payment_entry, approval_routes[0].action)
+
+
+@frappe.whitelist(methods=["POST"])
 def process_advance_refund(service_request, amount=None, reason=None) -> dict:
 	"""Refund advance payment when device is not repairable.
 
 	Creates and submits a Payment Entry (refund) and updates the Service Request.
 	If *amount* is omitted, refunds the full advance_amount.
 	"""
-	frappe.only_for(["Sales Manager", "System Manager", "Service Manager"])
-	sr = frappe.get_doc("Service Request", service_request)
+	_require_service_manager_role()
+	sr = assert_service_request_access(service_request, permission_type="write")
+	locked_name = frappe.db.get_value("Service Request", sr.name, "name", for_update=True)
+	if not locked_name:
+		frappe.throw(_("Service Request {0} no longer exists.").format(sr.name), frappe.DoesNotExistError)
+	sr.reload()
+	assert_service_request_access(sr, permission_type="write")
 
 	advance = flt(sr.advance_amount)
-	if not advance:
+	if advance <= 0:
 		frappe.throw(_("No advance payment recorded on this Service Request"), title=_("API Error"))
 
-	refund_amount = flt(amount) or advance
+	explicit_amount = amount not in (None, "")
+	refund_amount = flt(amount) if explicit_amount else advance
+	if refund_amount <= 0:
+		frappe.throw(_("Refund amount must be greater than zero."), frappe.ValidationError)
 	if refund_amount > advance:
 		frappe.throw(_("Refund amount (₹{0}) cannot exceed advance (₹{1})").format(
 			refund_amount, advance))
 
-	company = sr.company or frappe.defaults.get_user_default("Company")
+	company = sr.company
+	if not company:
+		frappe.throw(_("The Service Request must have a company before an advance can be refunded."), frappe.ValidationError)
+
+	reference_no = f"Refund-{sr.name}"
+	existing_name = (sr.get("advance_refund_entry") or "").strip()
+	if not existing_name:
+		existing_rows = frappe.get_all(
+			"Payment Entry",
+			filters={
+				"payment_type": "Pay",
+				"party_type": "Customer",
+				"party": sr.customer,
+				"company": company,
+				"reference_no": reference_no,
+			},
+			pluck="name",
+			order_by="creation asc, name asc",
+			limit_page_length=2,
+		)
+		if len(existing_rows) > 1:
+			frappe.throw(
+				_("Multiple refund Payment Entries already reference this Service Request. Reconcile them before retrying."),
+				frappe.ValidationError,
+			)
+		existing_name = existing_rows[0] if existing_rows else ""
+
+	if existing_name:
+		if not frappe.db.exists("Payment Entry", existing_name):
+			frappe.throw(
+				_("The recorded advance refund Payment Entry is missing. Reconcile the Service Request before retrying."),
+				frappe.ValidationError,
+			)
+		existing = frappe.get_doc("Payment Entry", existing_name)
+		existing_amount = flt(existing.paid_amount or existing.received_amount)
+		if explicit_amount and abs(existing_amount - refund_amount) > 0.01:
+			frappe.throw(
+				_("Advance refund {0} already exists for ₹{1}; a second refund cannot be created.").format(
+					existing.name, existing_amount
+				),
+				frappe.ValidationError,
+			)
+		if cint(existing.docstatus) == 2:
+			frappe.throw(
+				_("Advance refund {0} is cancelled. Reconcile the cancelled entry before retrying.").format(existing.name),
+				frappe.ValidationError,
+			)
+		if not sr.get("advance_refund_entry"):
+			sr.db_set({
+				"advance_refund_amount": existing_amount,
+				"advance_refund_reason": reason or sr.get("advance_refund_reason") or "Not Repairable",
+				"advance_refund_date": sr.get("advance_refund_date") or today(),
+				"advance_refund_entry": existing.name,
+			}, update_modified=False)
+		return _advance_refund_result(existing, existing_amount, already_exists=True)
+
+	if flt(sr.get("advance_refund_amount")) > 0:
+		frappe.throw(
+			_("This Service Request records an advance refund without a Payment Entry reference. Reconcile it before retrying."),
+			frappe.ValidationError,
+		)
+
 	mode_of_payment = sr.advance_received_via or "Cash"
 
 	# Map payment mode to ERPNext Mode of Payment
@@ -666,15 +964,14 @@ def process_advance_refund(service_request, amount=None, reason=None) -> dict:
 	pe.paid_to_account_currency = frappe.get_cached_value("Account", customer_account, "account_currency")
 	pe.paid_amount = refund_amount
 	pe.received_amount = refund_amount
-	pe.reference_no = f"Refund-{sr.name}"
+	pe.reference_no = reference_no
 	pe.reference_date = today()
 	pe.remarks = f"Advance refund for Service Request {sr.name}. Reason: {reason or 'Not Repairable'}"
 
-	pe.insert(ignore_permissions=True)
-	if pe.meta.has_field("workflow_state"):
-		pe.db_set("workflow_state", "Approved", update_modified=False)
-		pe.workflow_state = "Approved"
-	pe.submit()
+	frappe.has_permission("Payment Entry", "create", throw=True)
+	frappe.has_permission("Payment Entry", "read", throw=True)
+	pe.insert()
+	pe = _route_advance_refund_for_approval(pe)
 
 	# Update Service Request
 	sr.db_set("advance_refund_amount", refund_amount, update_modified=False)
@@ -682,35 +979,40 @@ def process_advance_refund(service_request, amount=None, reason=None) -> dict:
 	sr.db_set("advance_refund_date", today(), update_modified=False)
 	sr.db_set("advance_refund_entry", pe.name, update_modified=False)
 
-	frappe.msgprint(
-		_("Advance refund of ₹{0} posted: {1}").format(refund_amount, pe.name),
-		indicator="green")
+	message = _("Advance refund of ₹{0} posted: {1}") if pe.docstatus == 1 else _(
+		"Advance refund of ₹{0} routed for approval: {1}"
+	)
+	frappe.msgprint(message.format(refund_amount, pe.name), indicator="green")
 
-	return {"payment_entry": pe.name, "amount": refund_amount}
+	return _advance_refund_result(pe, refund_amount)
 
 
 # ── Inter-Store Service Transfer ─────────────────────────────────────
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def create_service_transfer(service_request, to_store, reason=None) -> dict:
 	"""Transfer a device from source store to a zone service center for repair.
 
-	Updates Service Request transfer tracking fields. The device physically
-	moves via a Stock Entry (Material Transfer) created separately.
+	The submitted Stock Entry and logical movement are one database transaction.
 	"""
-	frappe.only_for(["Sales Manager", "System Manager", "Service Manager", "Store Manager"])
-	sr = frappe.get_doc("Service Request", service_request)
+	_require_store_operation_role()
+	sr = assert_service_request_access(service_request, permission_type="write")
 
 	if sr.transfer_status in ("In Transit", "Received at Service Center"):
 		frappe.throw(_("Device is already in transfer (status: {0})").format(sr.transfer_status), title=_("API Error"))
 
 	if not to_store:
 		frappe.throw(_("Destination store/service center is required"), title=_("API Error"))
+	from gofix.gofix_services.orchestration import _auto_create_device_transfer
+
+	from_store = sr.get("current_location") or sr.source_warehouse
+	transfer_name = _auto_create_device_transfer(sr, from_store, to_store, reason)
 
 	sr.db_set("transferred_to_store", to_store, update_modified=True)
 	sr.db_set("transfer_status", "In Transit", update_modified=False)
 	sr.db_set("transfer_date", today(), update_modified=False)
 	sr.db_set("transfer_reason", reason or "", update_modified=False)
+	sr.db_set("last_transfer_reference", transfer_name, update_modified=False)
 
 	# Parts follow the device (SAP parts-routing): repoint open spare
 	# MRs/POs to the destination so deliveries land where the repair happens.
@@ -727,17 +1029,17 @@ def create_service_transfer(service_request, to_store, reason=None) -> dict:
 			"current_location", None, update_modified=False)
 
 	frappe.msgprint(
-		_("Device transfer initiated: {0} → {1}").format(sr.source_warehouse, to_store),
+		_("Device transfer initiated: {0} → {1}").format(from_store, to_store),
 		indicator="blue")
 
-	return {"status": "In Transit", "from": sr.source_warehouse, "to": to_store}
+	return {"status": "In Transit", "from": from_store, "to": to_store, "transfer": transfer_name}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def receive_service_transfer(service_request) -> dict:
 	"""Mark device as received at the destination service center."""
-	frappe.only_for(["Sales Manager", "System Manager", "Service Manager", "Store Manager"])
-	sr = frappe.get_doc("Service Request", service_request)
+	_require_store_operation_role()
+	sr = assert_service_request_access(service_request, permission_type="write")
 
 	if sr.transfer_status != "In Transit":
 		frappe.throw(_("Device is not in transit (status: {0})").format(sr.transfer_status), title=_("API Error"))
@@ -754,18 +1056,28 @@ def receive_service_transfer(service_request) -> dict:
 	return {"status": "Received at Service Center"}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def return_service_transfer(service_request) -> dict:
 	"""Initiate return of device from service center back to origin store."""
-	frappe.only_for(["Sales Manager", "System Manager", "Service Manager", "Store Manager"])
-	sr = frappe.get_doc("Service Request", service_request)
+	_require_store_operation_role()
+	sr = assert_service_request_access(service_request, permission_type="write")
 
 	if sr.transfer_status not in ("Received at Service Center", "Repair Complete"):
 		frappe.throw(_("Device must be at service center to initiate return (status: {0})").format(
 			sr.transfer_status))
 
+	from gofix.gofix_services.orchestration import _auto_create_device_transfer
+
+	from_store = sr.get("current_location") or sr.get("transferred_to_store")
+	transfer_name = _auto_create_device_transfer(
+		sr,
+		from_store,
+		sr.source_warehouse,
+		_("Return to source store"),
+	)
 	sr.db_set("transfer_status", "Return In Transit", update_modified=True)
 	sr.db_set("current_location", None, update_modified=False)
+	sr.db_set("last_transfer_reference", transfer_name, update_modified=False)
 
 	# Device is heading home — any spares still being procured should now
 	# deliver to the origin store, not the hub the device is leaving.
@@ -774,14 +1086,14 @@ def return_service_transfer(service_request) -> dict:
 	reroute_open_spare_procurement(sr, sr.source_warehouse)
 
 	frappe.msgprint(_("Return transfer initiated"), indicator="blue")
-	return {"status": "Return In Transit"}
+	return {"status": "Return In Transit", "transfer": transfer_name}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def complete_service_transfer_return(service_request) -> dict:
 	"""Mark device as returned to the origin store."""
-	frappe.only_for(["Sales Manager", "System Manager", "Service Manager", "Store Manager"])
-	sr = frappe.get_doc("Service Request", service_request)
+	_require_store_operation_role()
+	sr = assert_service_request_access(service_request, permission_type="write")
 
 	if sr.transfer_status != "Return In Transit":
 		frappe.throw(_("Device is not in return transit (status: {0})").format(sr.transfer_status), title=_("API Error"))
@@ -800,11 +1112,11 @@ def complete_service_transfer_return(service_request) -> dict:
 
 # ── Pickup & Outstation Tracking ─────────────────────────────────────
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def schedule_pickup(service_request, address, scheduled_datetime, agent=None) -> dict:
 	"""Schedule a device pickup for outstation/courier mode service requests."""
-	frappe.only_for(["Sales Manager", "System Manager", "Service Manager", "Sales User"])
-	sr = frappe.get_doc("Service Request", service_request)
+	_require_sales_operation_role()
+	sr = assert_service_request_access(service_request, permission_type="write")
 
 	address = _validate_logistics_address(address)
 	scheduled_dt = _ensure_future_datetime(scheduled_datetime, _("Pickup schedule"))
@@ -827,11 +1139,11 @@ def schedule_pickup(service_request, address, scheduled_datetime, agent=None) ->
 	return {"message": "Pickup scheduled", "scheduled": str(scheduled_dt)}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def complete_pickup(service_request) -> dict:
 	"""Mark device pickup as completed."""
-	frappe.only_for(["Sales Manager", "System Manager", "Service Manager", "Sales User"])
-	sr = frappe.get_doc("Service Request", service_request)
+	_require_sales_operation_role()
+	sr = assert_service_request_access(service_request, permission_type="write")
 
 	if not sr.get("pickup_scheduled_datetime"):
 		frappe.throw(_("Pickup must be scheduled before it can be completed."), title=_("Pickup Not Scheduled"))
@@ -851,11 +1163,11 @@ def complete_pickup(service_request) -> dict:
 	return {"message": "Pickup completed", "completed_at": completed_at}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def dispatch_return(service_request, courier_name=None, tracking_number=None) -> dict:
 	"""Dispatch repaired device back to customer via courier."""
-	frappe.only_for(["Sales Manager", "System Manager", "Service Manager", "Sales User"])
-	sr = frappe.get_doc("Service Request", service_request)
+	_require_sales_operation_role()
+	sr = assert_service_request_access(service_request, permission_type="write")
 
 	mode_of_service = (sr.get("mode_of_service") or "").strip()
 	if mode_of_service == "Courier":
@@ -879,11 +1191,11 @@ def dispatch_return(service_request, courier_name=None, tracking_number=None) ->
 	return {"message": "Dispatched", "tracking": tracking_number}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def confirm_return_delivery(service_request) -> dict:
 	"""Confirm customer received the returned device."""
-	frappe.only_for(["Sales Manager", "System Manager", "Service Manager", "Sales User"])
-	sr = frappe.get_doc("Service Request", service_request)
+	_require_sales_operation_role()
+	sr = assert_service_request_access(service_request, permission_type="write")
 
 	if sr.get("mode_of_service") == "Courier" and not sr.get("return_dispatched_date"):
 		frappe.throw(_("Return must be dispatched before delivery can be confirmed."), title=_("Dispatch Pending"))
@@ -913,9 +1225,7 @@ def calculate_suggested_price(service_order) -> dict:
 	  spare_parts_revenue, suggested_labor_cost, suggested_total,
 	  actual_billed, price_override
 	"""
-	so = frappe.get_doc("Sales Order", service_order)
-	if not so.is_service_order:
-		frappe.throw(_("Not a Service Order"), title=_("API Error"))
+	so = _get_scoped_service_order(service_order, "read")
 
 	sr_name = so.service_request
 
@@ -932,25 +1242,33 @@ def calculate_suggested_price(service_order) -> dict:
 	# Labor from job sheets
 	job_sheets = frappe.get_all("Job Assignment",
 		filters={"service_order": service_order},
-		fields=["actual_hours", "service_engineer", "service_engineer as engineer_name"])
+		fields=["actual_hours", "service_engineer"])
+	employee_names = {row.service_engineer for row in job_sheets if row.service_engineer}
+	has_hourly_rate = frappe.db.has_column("Employee", "custom_hourly_rate")
+	employee_fields = ["name", "employee_name", "ctc"]
+	if has_hourly_rate:
+		employee_fields.append("custom_hourly_rate")
+	employees = frappe.get_all(
+		"Employee",
+		filters={"name": ("in", tuple(employee_names))},
+		fields=employee_fields,
+		limit_page_length=len(employee_names),
+	) if employee_names else []
+	employee_by_name = {employee.name: employee for employee in employees}
 
 	labor_details = []
 	suggested_labor = 0
 	for js in job_sheets:
 		hours = flt(js.actual_hours)
 		hourly_rate = 0
-		engineer_name = js.engineer_name or "Unassigned"
-		if js.service_engineer:
-			hourly_rate = (
-				flt(frappe.db.get_value("Employee", js.service_engineer, "custom_hourly_rate"))
-				if frappe.db.has_column("Employee", "custom_hourly_rate")
-				else 0
-			)
+		employee = employee_by_name.get(js.service_engineer)
+		engineer_name = (employee.employee_name if employee else None) or js.service_engineer or "Unassigned"
+		if employee:
+			hourly_rate = flt(employee.get("custom_hourly_rate")) if has_hourly_rate else 0
 			if not hourly_rate:
-				ctc = flt(frappe.db.get_value("Employee", js.service_engineer, "ctc"))
+				ctc = flt(employee.ctc)
 				if ctc:
 					hourly_rate = ctc / 2080
-			engineer_name = frappe.db.get_value("Employee", js.service_engineer, "employee_name") or engineer_name
 
 		line_total = hours * hourly_rate
 		suggested_labor += line_total
@@ -1017,13 +1335,14 @@ def auto_close_service_order_after_billing(service_request=None, service_order=N
 			if ja.assignment_status in ("Completed", "Closed", "Cancelled"):
 				continue
 			new_status = "Completed" if flt(ja.actual_hours) else "Cancelled"
-			frappe.db.set_value(
-				"Job Assignment", ja.name, "assignment_status", new_status,
-				update_modified=False,
-			)
+			ja_doc = frappe.get_doc("Job Assignment", ja.name)
+			ja_doc.check_permission("write")
+			ja_doc.assignment_status = new_status
+			ja_doc.flags.ignore_validate_update_after_submit = True
+			ja_doc.save()
 
 		if so.docstatus == 0:
-			so.flags.ignore_permissions = True
+			so.check_permission("submit")
 			so.submit()
 			# Submit-time hooks can knock qc/workflow back to Awaiting —
 			# restore the QC verdict that gated this close.
@@ -1034,7 +1353,7 @@ def auto_close_service_order_after_billing(service_request=None, service_order=N
 			updates["qc_status"] = "Pass"
 		so.db_set(updates, update_modified=False)
 		so.reload()
-		so.flags.ignore_permissions = True
+		so.check_permission("write")
 		so.update_status("Closed")
 	except Exception:
 		frappe.log_error(
@@ -1061,9 +1380,13 @@ def get_store_service_board(warehouse, tab=None, search=None) -> dict:
 	devices still requires the customer-consent OTP (custody gate); this
 	board only surfaces them.
 	"""
+	_require_store_operation_role()
 	frappe.has_permission("Service Request", "read", throw=True)
 	if not warehouse:
 		return {"rows": [], "counts": {}}
+	from gofix.scope_guard import assert_warehouse
+
+	assert_warehouse(warehouse=warehouse)
 
 	filters = {"source_warehouse": warehouse}
 	if tab and tab in _SERVICE_BOARD_TABS:
@@ -1084,7 +1407,8 @@ def get_store_service_board(warehouse, tab=None, search=None) -> dict:
 			["customer_name", "like", like],
 		]
 
-	rows = frappe.get_all(
+	row_limit = min(get_int_setting("token_queue_limit", 200), 500)
+	rows = frappe.get_list(
 		"Service Request",
 		filters=filters,
 		or_filters=or_filters,
@@ -1096,7 +1420,7 @@ def get_store_service_board(warehouse, tab=None, search=None) -> dict:
 			"transferred_to_store", "source_warehouse",
 		],
 		order_by="modified desc",
-		limit_page_length=50,
+		limit_page_length=row_limit,
 	)
 
 	for r in rows:
@@ -1110,11 +1434,16 @@ def get_store_service_board(warehouse, tab=None, search=None) -> dict:
 		r["device_at"] = device_at
 		r["at_home_store"] = bool(device_at == warehouse)
 
-	status_counts = dict(frappe.db.sql(
-		"""SELECT status, COUNT(*) FROM `tabService Request`
-		   WHERE source_warehouse = %s GROUP BY status""",
-		warehouse,
-	))
+	status_counts = {
+		row.status: cint(row.count)
+		for row in frappe.get_list(
+			"Service Request",
+			filters={"source_warehouse": warehouse},
+			fields=["status", "count(name) as count"],
+			group_by="status",
+			limit_page_length=len(_SERVICE_BOARD_TABS) + 10,
+		)
+	}
 	counts = {
 		key: sum(cint(status_counts.get(s, 0)) for s in statuses)
 		for key, statuses in _SERVICE_BOARD_TABS.items()
@@ -1132,21 +1461,24 @@ def get_solutions_for_issues(issue_categories) -> list:
 	Args:
 		issue_categories: JSON list of Issue Category names
 	"""
-	import json
-	if isinstance(issue_categories, str):
-		issue_categories = json.loads(issue_categories)
+	_require_reference_read(
+		_("view repair solutions"),
+		("Issue Category", "Repair Solution"),
+	)
+	issue_categories = _bounded_name_list(issue_categories, _("Issue categories"))
 
 	if not issue_categories:
 		return []
 
-	return frappe.get_all("Repair Solution",
+	return frappe.get_list("Repair Solution",
 		filters={
 			"issue_category": ["in", issue_categories],
 			"is_active": 1
 		},
 		fields=["name", "solution_name", "issue_category", "solution_code",
 				"estimated_minutes", "requires_spare", "skill_level", "minimum_grade"],
-		order_by="issue_category, solution_name"
+		order_by="issue_category, solution_name",
+		limit_page_length=get_int_setting("token_queue_limit", 200),
 	)
 
 
@@ -1158,14 +1490,22 @@ def get_spares_for_solution(repair_solution, device_item=None) -> list:
 	ladder (brand / category / model fitment) are filtered out."""
 	if not repair_solution:
 		return []
+	_require_reference_read(
+		_("view mapped repair spares"),
+		("Repair Solution", "Solution Spare Mapping", "Item"),
+	)
+	frappe.has_permission("Repair Solution", "read", repair_solution, throw=True)
+	if device_item:
+		frappe.has_permission("Item", "read", device_item, throw=True)
 
-	rows = frappe.get_all("Solution Spare Mapping",
+	rows = frappe.get_list("Solution Spare Mapping",
 		filters={
 			"repair_solution": repair_solution,
 			"is_active": 1
 		},
 		fields=["name", "spare_item", "item_name", "default_qty", "uom", "is_mandatory"],
-		order_by="is_mandatory desc, item_name"
+		order_by="is_mandatory desc, item_name",
+		limit_page_length=get_int_setting("token_queue_limit", 200),
 	)
 	if device_item:
 		rows = [r for r in rows if is_spare_compatible_with_device(r.spare_item, device_item)]
@@ -1182,21 +1522,26 @@ def get_spares_for_solutions(repair_solutions, device_item=None) -> list:
 		device_item: optional — drop spares that fail the device
 			applicability ladder (brand / category / model fitment)
 	"""
-	import json
-	if isinstance(repair_solutions, str):
-		repair_solutions = json.loads(repair_solutions)
+	_require_reference_read(
+		_("view mapped repair spares"),
+		("Repair Solution", "Solution Spare Mapping", "Item"),
+	)
+	repair_solutions = _bounded_name_list(repair_solutions, _("Repair solutions"))
 
 	if not repair_solutions:
 		return []
+	if device_item:
+		frappe.has_permission("Item", "read", device_item, throw=True)
 
-	rows = frappe.get_all("Solution Spare Mapping",
+	rows = frappe.get_list("Solution Spare Mapping",
 		filters={
 			"repair_solution": ["in", repair_solutions],
 			"is_active": 1
 		},
 		fields=["name", "repair_solution", "spare_item", "item_name",
 				"default_qty", "uom", "is_mandatory"],
-		order_by="repair_solution, is_mandatory desc, item_name"
+		order_by="repair_solution, is_mandatory desc, item_name",
+		limit_page_length=get_int_setting("token_queue_limit", 200),
 	)
 	if device_item:
 		rows = [r for r in rows if is_spare_compatible_with_device(r.spare_item, device_item)]
@@ -1214,19 +1559,26 @@ def get_eligible_technicians(issue_categories, warehouse=None) -> list:
 		issue_categories: JSON list of Issue Category names
 		warehouse: optional warehouse to filter by default_shift location
 	"""
-	import json
-	if isinstance(issue_categories, str):
-		issue_categories = json.loads(issue_categories)
+	_require_reference_read(
+		_("view eligible technicians"),
+		("Employee", "Technician Grade", "Repair Solution"),
+		role_field="job_assignment_creation_roles",
+	)
+	issue_categories = _bounded_name_list(issue_categories, _("Issue categories"))
+	if warehouse:
+		from gofix.scope_guard import assert_warehouse
+
+		assert_warehouse(warehouse=warehouse)
 
 	if not issue_categories:
 		return []
 
 	# Get minimum skill requirements from Repair Solution masters
 	required_skills = {}
-	solutions = frappe.get_all("Repair Solution",
+	solutions = frappe.get_list("Repair Solution",
 		filters={"issue_category": ["in", issue_categories], "is_active": 1},
 		fields=["issue_category", "skill_level"],
-		group_by="issue_category"
+		limit_page_length=get_int_setting("token_queue_limit", 200),
 	)
 	skill_order = {"Basic": 1, "Intermediate": 2, "Advanced": 3, "Expert": 4}
 	for s in solutions:
@@ -1236,14 +1588,31 @@ def get_eligible_technicians(issue_categories, warehouse=None) -> list:
 			required_skills[cat] = level
 
 	# Find all grades whose skills cover the required categories at the right level
-	grades = frappe.get_all("Technician Grade", filters={"is_active": 1}, fields=["name", "grade_level"])
+	row_limit = get_int_setting("token_queue_limit", 200)
+	grades = frappe.get_list(
+		"Technician Grade",
+		filters={"is_active": 1},
+		fields=["name", "grade_level"],
+		limit_page_length=row_limit,
+	)
+	grade_names = tuple(grade.name for grade in grades)
+	skill_rows = frappe.get_all(
+		"Technician Skill",
+		filters={
+			"parent": ("in", grade_names),
+			"issue_category": ("in", tuple(issue_categories)),
+		},
+		fields=["parent", "issue_category", "max_skill_level"],
+		limit_page_length=row_limit * max(1, len(issue_categories)),
+	) if grade_names else []
+	skills_by_grade = {}
+	for skill in skill_rows:
+		skills_by_grade.setdefault(skill.parent, {})[skill.issue_category] = skill_order.get(
+			skill.max_skill_level, 1
+		)
 	eligible_grades = []
 	for grade in grades:
-		skills = frappe.get_all("Technician Skill",
-			filters={"parent": grade.name},
-			fields=["issue_category", "max_skill_level"]
-		)
-		skill_map = {s.issue_category: skill_order.get(s.max_skill_level, 1) for s in skills}
+		skill_map = skills_by_grade.get(grade.name, {})
 		covers_all = True
 		for cat, req_level in required_skills.items():
 			if cat not in skill_map or skill_map[cat] < req_level:
@@ -1259,11 +1628,12 @@ def get_eligible_technicians(issue_categories, warehouse=None) -> list:
 	# location first; fall back to all graded technicians when the location
 	# has no dedicated staff (rollout-friendly).
 	filters = {"technician_grade": ["in", eligible_grades], "status": "Active"}
-	rows = frappe.get_all("Employee",
+	rows = frappe.get_list("Employee",
 		filters=filters,
 		fields=["name", "employee_name", "technician_grade", "designation",
 			"gofix_service_warehouse" if frappe.db.has_column("Employee", "gofix_service_warehouse") else "designation"],
-		order_by="employee_name"
+		order_by="employee_name",
+		limit_page_length=row_limit,
 	)
 	if warehouse and frappe.db.has_column("Employee", "gofix_service_warehouse"):
 		local = [r for r in rows if r.get("gofix_service_warehouse") == warehouse]
@@ -1282,27 +1652,36 @@ def technician_query(doctype, txt, searchfield, start, page_len, filters) -> lis
 	dedicated technicians, only they are shown. Only Active employees with a
 	Technician Grade appear.
 	"""
+	_require_reference_read(
+		_("search eligible technicians"),
+		("Employee", "Technician Grade"),
+		role_field="job_assignment_creation_roles",
+	)
 	if isinstance(filters, str):
 		filters = json.loads(filters)
 	filters = filters or {}
 
 	warehouse = filters.get("warehouse")
-	if not warehouse and filters.get("sr_name"):
-		try:
-			from gofix.gofix_services.page.gofix_ops_hub.gofix_ops_hub import (
-				_effective_repair_warehouse,
-			)
+	if warehouse:
+		from gofix.scope_guard import assert_warehouse
 
-			sr = frappe.get_doc("Service Request", filters["sr_name"])
-			warehouse = _effective_repair_warehouse(sr)
-		except Exception:
-			warehouse = None
+		assert_warehouse(warehouse=warehouse)
+	if not warehouse and filters.get("sr_name"):
+		from gofix.gofix_services.page.gofix_ops_hub.gofix_ops_hub import (
+			_effective_repair_warehouse,
+		)
+
+		sr = assert_service_request_access(filters["sr_name"], permission_type="read")
+		warehouse = _effective_repair_warehouse(sr)
 
 	has_wh_col = frappe.db.has_column("Employee", "gofix_service_warehouse")
 	values = {
 		"txt": f"%{txt}%" if txt else "%",
 		"start": cint(start),
-		"page_len": cint(page_len) or 20,
+		"page_len": min(
+			max(cint(page_len) or 20, 1),
+			min(get_int_setting("technician_candidate_limit", 200), 500),
+		),
 		"warehouse": warehouse or "",
 	}
 	wh_rank = (
@@ -1404,29 +1783,34 @@ def _suggest_spares_for_solution(repair_solution, device_item, limit=8) -> list:
 
 
 @frappe.whitelist()
+@frappe.validate_and_sanitize_search_inputs
 def get_mapped_spare_items(doctype, txt, searchfield, start, page_len, filters) -> list:
 	"""Server-side query for Link field: returns Items mapped to a Repair Solution.
 	Used as 'query' in spare_item get_query on SR Spare Line.
 	"""
+	_require_reference_read(
+		_("search mapped repair spares"),
+		("Solution Spare Mapping", "Item"),
+	)
 	repair_solution = filters.get("repair_solution")
 	if not repair_solution:
 		return []
 
-	mapped = frappe.get_all("Solution Spare Mapping",
+	mapped = frappe.get_list("Solution Spare Mapping",
 		filters={"repair_solution": repair_solution, "is_active": 1},
 		pluck="spare_item"
 	)
 	if not mapped:
 		return []
 
-	return frappe.get_all("Item",
+	return frappe.get_list("Item",
 		filters=[
 			["name", "in", mapped],
 			["name", "like", f"%{txt}%"] if txt else ["name", "in", mapped]
 		],
 		fields=["name", "item_name"],
 		as_list=True,
-		limit_page_length=page_len,
+		limit_page_length=min(max(cint(page_len) or 20, 1), get_int_setting("token_queue_limit", 200)),
 		limit_start=start
 	)
 
@@ -1504,10 +1888,14 @@ def is_spare_compatible_with_device(spare_item, device_item) -> bool:
 @frappe.whitelist()
 def check_spare_compatibility(spare_item, device_item) -> dict:
 	"""Whitelisted wrapper so the client can verify compatibility before adding."""
+	_require_reference_read(_("check spare compatibility"), ("Item",))
+	frappe.has_permission("Item", "read", spare_item, throw=True)
+	frappe.has_permission("Item", "read", device_item, throw=True)
 	return {"compatible": is_spare_compatible_with_device(spare_item, device_item)}
 
 
 @frappe.whitelist()
+@frappe.validate_and_sanitize_search_inputs
 def get_compatible_spare_items(doctype, txt, searchfield, start, page_len, filters) -> list:
 	"""Link-field query: return spare Items compatible with a given device.
 
@@ -1515,6 +1903,10 @@ def get_compatible_spare_items(doctype, txt, searchfield, start, page_len, filte
 		device_item  — restrict to spares that fit this device (or are universal)
 		item_group   — restrict to a spare Item Group (descendants, inclusive)
 	"""
+	_require_reference_read(
+		_("search compatible repair spares"),
+		("Solution Spare Mapping", "Item"),
+	)
 	if isinstance(filters, str):
 		filters = json.loads(filters)
 	filters = filters or {}
@@ -1532,7 +1924,10 @@ def get_compatible_spare_items(doctype, txt, searchfield, start, page_len, filte
 	values = {
 		"txt": f"%{txt}%" if txt else "%",
 		"start": cint(start),
-		"page_len": cint(page_len) or 20,
+		"page_len": min(
+			max(cint(page_len) or 20, 1),
+			get_int_setting("token_queue_limit", 200),
+		),
 	}
 	conditions.append("(i.name LIKE %(txt)s OR i.item_name LIKE %(txt)s)")
 

@@ -16,6 +16,7 @@ import frappe
 from frappe import _
 from frappe.utils import add_days, cint, flt, now_datetime, nowdate
 
+from gofix.config import get_int_setting, get_user_roles, has_role_setting, require_role_setting
 from gofix.gofix_services.store_context import (
 	active_company as _active_company,
 	get_store_options as _get_store_options,
@@ -51,6 +52,15 @@ def _log_ops_stage(sr_name, from_stage, to_stage):
 	from frappe.utils import time_diff_in_hours
 
 	sr = frappe.get_doc("Service Request", sr_name)
+	related_limit = min(get_int_setting("ops_hub_related_row_limit", 500), 5000)
+	for child_field in ("issue_lines", "solution_lines", "spare_lines", "status_log"):
+		if len(sr.get(child_field) or ()) > related_limit:
+			frappe.throw(
+				_("Ticket {0} has more than the configured {1} {2} rows.").format(
+					sr.name, related_limit, child_field.replace("_", " ")
+				),
+				frappe.ValidationError,
+			)
 	sr.flags.ignore_validate_update_after_submit = True
 	# Prevent sr.save() from triggering ensure_completion_artifacts / invoice
 	# creation cascade — the Ops Hub controls stage progression explicitly.
@@ -78,7 +88,29 @@ def get_context(context):
 
 def _assert_sr_permission(sr_name, ptype="read"):
 	"""Validate Service Request access using the correct Frappe argument order."""
-	frappe.has_permission("Service Request", ptype=ptype, doc=sr_name, throw=True)
+	from gofix.security import assert_service_request_access
+
+	return assert_service_request_access(sr_name, permission_type=ptype)
+
+
+def _bound_child_row(doctype, row_name, sr_name, parentfield, fields):
+	row = frappe.db.get_value(
+		doctype,
+		{
+			"name": row_name,
+			"parent": sr_name,
+			"parenttype": "Service Request",
+			"parentfield": parentfield,
+		},
+		fields,
+		as_dict=True,
+	)
+	if not row:
+		frappe.throw(
+			_("{0} is not attached to Service Request {1}.").format(row_name, sr_name),
+			frappe.PermissionError,
+		)
+	return row
 
 
 # ── Context ───────────────────────────────────────────────────────────────────
@@ -87,11 +119,11 @@ def _assert_sr_permission(sr_name, ptype="read"):
 def get_ops_context(company=None) -> dict:
 	"""Return user context for toolbar initialization."""
 	user = frappe.session.user
-	roles = frappe.get_roles(user)
+	roles = sorted(get_user_roles(user))
 	company = _active_company(company)
 	stores = _get_store_options(company)
 
-	is_manager = any(r in roles for r in ["Service Manager", "System Manager", "Sales Manager"])
+	is_manager = has_role_setting("service_manager_roles", user=user)
 
 	return {
 		"user": user,
@@ -109,8 +141,10 @@ def get_ops_context(company=None) -> dict:
 @frappe.whitelist()
 def get_ticket_queue(warehouse=None, search=None, date_from=None, date_to=None, stage_filter="active", company=None) -> list:
 	"""Return annotated SR list for the sidebar ticket queue."""
+	require_role_setting("service_access_roles", action=_("view the Ops Hub ticket queue"))
 	frappe.has_permission("Service Request", "read", throw=True)
 	company = _active_company(company)
+	queue_limit = min(get_int_setting("ops_hub_ticket_queue_limit", 150), 2000)
 
 	if not date_from:
 		date_from = add_days(nowdate(), -60)
@@ -179,9 +213,14 @@ def get_ticket_queue(warehouse=None, search=None, date_from=None, date_to=None, 
 				OR `contact_number` LIKE %(s)s
 			) {extra_clause}
 			ORDER BY service_date ASC, priority DESC
-			LIMIT 100
+			LIMIT %(result_limit)s
 			""",
-			{"s": f"%{search}%", "company": company or "", "warehouse": warehouse or ""},
+			{
+				"s": f"%{search}%",
+				"company": company or "",
+				"warehouse": warehouse or "",
+				"result_limit": queue_limit + 1,
+			},
 			as_dict=True,
 		)
 	else:
@@ -190,7 +229,14 @@ def get_ticket_queue(warehouse=None, search=None, date_from=None, date_to=None, 
 			filters=filters,
 			fields=all_fields,
 			order_by="service_date asc, priority desc",
-			limit=150,
+			limit_page_length=queue_limit + 1,
+		)
+	if len(sr_list) > queue_limit:
+		frappe.throw(
+			_("The Ops Hub queue exceeds the configured limit of {0} tickets. Narrow the dates or filters.").format(
+				queue_limit
+			),
+			frappe.ValidationError,
 		)
 
 	if not sr_list:
@@ -331,7 +377,7 @@ def _derive_stage(sr):
 
 # ── Ticket Detail ─────────────────────────────────────────────────────────────
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def accept_and_create_service_order(sr_name) -> dict:
 	"""Express acceptance from the hub's Draft stage.
 
@@ -363,7 +409,7 @@ def accept_and_create_service_order(sr_name) -> dict:
 			"reported_by": "Customer",
 			"status": "Open",
 		})
-		sr.save(ignore_permissions=True)
+		sr.save()
 
 	frappe.db.set_value("Service Request", sr_name, {
 		"analysis_confirmed": 1,
@@ -388,7 +434,7 @@ def accept_and_create_service_order(sr_name) -> dict:
 	return {"ok": True, "service_order": sr.service_order, "estimate": estimate}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def update_spare_genealogy(sr_name, spare_row_name, removed_part_serial=None,
 		installed_part_serial=None, removed_part_condition=None, consume=0) -> dict:
 	"""Record the removed/installed part serials and condition on a spare line
@@ -542,7 +588,15 @@ def get_ticket_detail(sr_name) -> dict:
 			"work_performed", "technician_remarks", "repair_outcome", "assignment_type",
 		],
 		order_by="assignment_date asc, creation asc",
+		limit_page_length=related_limit + 1,
 	)
+	if len(assignments) > related_limit:
+		frappe.throw(
+			_("Ticket {0} has more than the configured {1} job assignments.").format(
+				sr.name, related_limit
+			),
+			frappe.ValidationError,
+		)
 	# Batch-fetch employee names instead of one query per assignment
 	engineer_ids = list({a.service_engineer for a in assignments if a.service_engineer})
 	if engineer_ids:
@@ -567,14 +621,14 @@ def get_ticket_detail(sr_name) -> dict:
 	if sr.service_order:
 		so_data = frappe.db.get_value(
 			"Sales Order", sr.service_order,
-			["qc_status", "qc_checked_by", "qc_datetime", "workflow_state"],
+			["qc_status", "qc_checked_by", "qc_datetime", "workflow_state", "rework_count"],
 			as_dict=True,
 		) or {}
 		qc_status = so_data.get("qc_status") or ""
 		qc_checked_by = so_data.get("qc_checked_by") or ""
 		qc_datetime = str(so_data.get("qc_datetime") or "")
 		so_workflow_state = so_data.get("workflow_state") or ""
-		rework_count = cint(frappe.db.get_value("Sales Order", sr.service_order, "rework_count"))
+		rework_count = cint(so_data.get("rework_count"))
 
 		# Fetch QC checklist from SO
 		qc_rows = frappe.get_all(
@@ -583,20 +637,39 @@ def get_ticket_detail(sr_name) -> dict:
 			fields=["name", "check_name", "result", "remarks",
 				"linked_solution", "fail_reason", "rework_required", "rework_iteration"],
 			order_by="idx asc",
+			limit_page_length=related_limit + 1,
 		)
+		if len(qc_rows) > related_limit:
+			frappe.throw(
+				_("Ticket {0} has more than the configured {1} QC checks.").format(
+					sr.name, related_limit
+				),
+				frappe.ValidationError,
+			)
 		qc_checklist = qc_rows
 
 	# Fetch status log (timeline)
+	status_rows = sr.get("status_log") or []
+	changed_users = tuple({row.changed_by for row in status_rows if row.changed_by})
+	changed_user_names = {
+		row.name: row.full_name or row.name
+		for row in frappe.get_all(
+			"User",
+			filters={"name": ("in", changed_users)},
+			fields=["name", "full_name"],
+			limit_page_length=len(changed_users),
+		)
+	} if changed_users else {}
 	status_log = [
 		{
 			"from_status": row.from_status,
 			"to_status": row.to_status,
 			"changed_by": row.changed_by,
-			"changed_by_name": frappe.utils.get_fullname(row.changed_by) if row.changed_by else "",
+			"changed_by_name": changed_user_names.get(row.changed_by, row.changed_by or ""),
 			"changed_at": str(row.changed_at) if row.changed_at else "",
 			"hours_in_prev": flt(row.get("time_in_previous_status_hours")),
 		}
-		for row in sr.get("status_log", [])
+		for row in status_rows
 	]
 
 	all_solutions_done = (
@@ -689,7 +762,7 @@ def get_ticket_detail(sr_name) -> dict:
 
 # ── Step 1: Technical Analysis ────────────────────────────────────────────────
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def save_issue_lines(sr_name, issues_json) -> dict:
 	"""Save issue lines identified during technical analysis.
 	Preserves soft-deleted rows — only replaces active (non-Deleted) rows.
@@ -760,7 +833,7 @@ def save_issue_lines(sr_name, issues_json) -> dict:
 	return {"ok": True, "issue_count": active_count}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def delete_issue_line(sr_name, issue_row_name, reason) -> dict:
 	"""Soft-delete an issue line — marks as Deleted with reason, user, and timestamp."""
 	_assert_sr_permission(sr_name, "write")
@@ -816,7 +889,7 @@ def delete_issue_line(sr_name, issue_row_name, reason) -> dict:
 	return {"ok": True, "cancelled_solutions": cancelled_solutions if deleted_category else []}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def confirm_analysis(sr_name) -> dict:
 	"""Confirm the technical analysis — moves all Open issues to In Progress."""
 	_assert_sr_permission(sr_name, "write")
@@ -833,11 +906,9 @@ def confirm_analysis(sr_name) -> dict:
 			row.status = "In Progress"
 
 	sr.save()
-	frappe.db.commit()
 
 	if frappe.db.has_column("Service Request", "analysis_confirmed"):
 		frappe.db.set_value("Service Request", sr_name, "analysis_confirmed", 1, update_modified=False)
-		frappe.db.commit()
 
 	_log_ops_stage(sr_name, "analysis", "confirm")
 	return {"ok": True, "stage": "confirm"}
@@ -845,7 +916,7 @@ def confirm_analysis(sr_name) -> dict:
 
 # ── Step 2: Customer Confirmation ─────────────────────────────────────────────
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def send_confirmation_whatsapp(sr_name) -> dict:
 	"""Send a WhatsApp confirmation message to the customer with issue summary & estimate."""
 	_assert_sr_permission(sr_name, "write")
@@ -900,19 +971,17 @@ def send_confirmation_whatsapp(sr_name) -> dict:
 			"confirmation_sent_at", now_datetime(),
 			update_modified=False,
 		)
-		frappe.db.commit()
 
 	return {"ok": True, "whatsapp_sent": sent}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def mark_customer_confirmed(sr_name) -> dict:
 	"""Mark customer as having confirmed the estimate and issues list."""
 	_assert_sr_permission(sr_name, "write")
 
 	if frappe.db.has_column("Service Request", "customer_confirmed"):
 		frappe.db.set_value("Service Request", sr_name, "customer_confirmed", 1, update_modified=True)
-		frappe.db.commit()
 
 	_log_ops_stage(sr_name, "confirm", "solutions")
 	return {"ok": True, "stage": "solutions"}
@@ -974,10 +1043,14 @@ def get_solutions_for_issue(issue_category) -> dict:
 	return solutions
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def quick_create_solution(solution_name, issue_category, estimated_minutes=30, requires_spare=0, description="") -> dict:
 	"""Quick-create a Repair Solution from the Ops Hub solutions step."""
-	frappe.only_for(["Service Manager", "System Manager", "GoFix Floor Manager"])
+	require_role_setting(
+		"service_manager_roles",
+		("Service Manager", "System Manager", "GoFix Floor Manager"),
+		action=_("create a repair solution"),
+	)
 
 	solution_name = (solution_name or "").strip()
 	if not solution_name:
@@ -992,7 +1065,7 @@ def quick_create_solution(solution_name, issue_category, estimated_minutes=30, r
 	doc = frappe.new_doc("Repair Solution")
 	doc.solution_name = solution_name
 	doc.issue_category = issue_category
-	doc.estimated_minutes = cint(estimated_minutes) or 30
+	doc.estimated_minutes = cint(estimated_minutes) or get_int_setting("default_solution_minutes", 30)
 	doc.requires_spare = cint(requires_spare)
 	doc.description = description or ""
 	doc.is_active = 1
@@ -1008,7 +1081,7 @@ def quick_create_solution(solution_name, issue_category, estimated_minutes=30, r
 	}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def save_solution_assignment(sr_name, solutions_json) -> dict:
 	"""Save solution lines to the Service Request.
 
@@ -1164,7 +1237,6 @@ def save_solution_assignment(sr_name, solutions_json) -> dict:
 		)
 
 	sr.save()
-	frappe.db.commit()
 
 	_log_ops_stage(sr_name, "solutions", "assign")
 	return {"ok": True, "solution_count": len(sr.solution_lines), "stage": "assign"}
@@ -1175,40 +1247,55 @@ def save_solution_assignment(sr_name, solutions_json) -> dict:
 @frappe.whitelist()
 def get_technicians_for_grade(minimum_grade=None, issue_category=None) -> dict:
 	"""Return active technicians, filtered by minimum grade level, with workload."""
+	row_limit = get_int_setting("token_queue_limit", 200)
 	employees = frappe.get_all(
 		"Employee",
 		filters={"status": "Active"},
 		fields=["name", "employee_name", "technician_grade", "designation"],
 		order_by="employee_name",
+		limit_page_length=row_limit,
 	)
 
-	req_level = 0
+	grade_names = {emp.technician_grade for emp in employees if emp.technician_grade}
 	if minimum_grade:
-		req_level = cint(frappe.db.get_value("Technician Grade", minimum_grade, "grade_level") or 0)
+		grade_names.add(minimum_grade)
+	grade_rows = frappe.get_all(
+		"Technician Grade",
+		filters={"name": ("in", tuple(grade_names))},
+		fields=["name", "grade_name", "grade_level"],
+		limit_page_length=len(grade_names),
+	) if grade_names else []
+	grade_by_name = {grade.name: grade for grade in grade_rows}
+	req_level = cint((grade_by_name.get(minimum_grade) or {}).get("grade_level", 0))
+	employee_names = tuple(emp.name for emp in employees)
+	workload_rows = frappe.db.sql(
+		"""
+		SELECT service_engineer, COUNT(*) AS active_jobs
+		FROM `tabJob Assignment`
+		WHERE service_engineer IN %(employees)s
+			AND docstatus = 1
+			AND assignment_status IN ('Open', 'In Progress')
+		GROUP BY service_engineer
+		""",
+		{"employees": employee_names},
+		as_dict=True,
+	) if employee_names else []
+	workload_by_employee = {row.service_engineer: cint(row.active_jobs) for row in workload_rows}
 
 	result = []
 	for emp in employees:
-		emp_level = 0
-		if emp.technician_grade:
-			emp_level = cint(frappe.db.get_value("Technician Grade", emp.technician_grade, "grade_level") or 0)
+		grade = grade_by_name.get(emp.technician_grade)
+		emp_level = cint(grade.grade_level if grade else 0)
 
 		if req_level and emp_level < req_level:
 			continue
 
 		if emp.technician_grade:
-			grade = frappe.db.get_value(
-				"Technician Grade", emp.technician_grade,
-				["grade_name", "grade_level"], as_dict=True,
-			)
 			emp["grade_display"] = f"L{grade.grade_level} — {grade.grade_name}" if grade else emp.technician_grade
 		else:
 			emp["grade_display"] = "Ungraded"
 
-		emp["active_jobs"] = frappe.db.count("Job Assignment", {
-			"service_engineer": emp.name,
-			"docstatus": 1,
-			"assignment_status": ["in", ["Open", "In Progress"]],
-		})
+		emp["active_jobs"] = workload_by_employee.get(emp.name, 0)
 
 		result.append(emp)
 
@@ -1307,9 +1394,10 @@ def _solution_rows_for_assignment(sr, row_names=None) -> list:
 	return selected
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def assign_technician(sr_name, technician, job_type="Repair", estimated_hours=None) -> dict:
 	"""Create or reuse a submitted Job Assignment for the SR."""
+	_assert_sr_permission(sr_name, "write")
 	frappe.has_permission("Job Assignment", "create", throw=True)
 
 	sr = frappe.get_doc("Service Request", sr_name)
@@ -1330,19 +1418,19 @@ def assign_technician(sr_name, technician, job_type="Repair", estimated_hours=No
 		estimated_hours=estimated_hours,
 		job_type=job_type,
 	)
-	frappe.db.commit()
 
 	_log_ops_stage(sr_name, "assign", "repair")
 	_mark_sr_in_service(sr_name)
 	return {"ok": True, "job_assignment": ja.name, "stage": "repair"}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def assign_solutions_to_technician(sr_name, solution_rows_json, technician, estimated_hours=None) -> dict:
 	"""Assign specific solutions to a technician and create a Job Assignment.
 
 	solution_rows_json: JSON array of SR Solution Line row names.
 	"""
+	_assert_sr_permission(sr_name, "write")
 	frappe.has_permission("Job Assignment", "create", throw=True)
 
 	solution_rows = json.loads(solution_rows_json) if isinstance(solution_rows_json, str) else solution_rows_json
@@ -1392,7 +1480,7 @@ def assign_solutions_to_technician(sr_name, solution_rows_json, technician, esti
 	}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def unassign_solution(sr_name, solution_row_name) -> dict:
 	"""Remove technician assignment from a solution line (reassignment flow —
 	e.g. the technician can't solve it and it must go to a higher grade).
@@ -1402,9 +1490,13 @@ def unassign_solution(sr_name, solution_row_name) -> dict:
 	device custody doesn't stay locked to someone no longer working it."""
 	_assert_sr_permission(sr_name, "write")
 
-	line = frappe.db.get_value(
-		"SR Solution Line", solution_row_name, ["technician", "status"], as_dict=True
-	) or frappe._dict()
+	line = _bound_child_row(
+		"SR Solution Line",
+		solution_row_name,
+		sr_name,
+		"solution_lines",
+		["technician", "status"],
+	)
 
 	updates = {"technician": "", "technician_name": ""}
 	if line.status in ("In Progress", "On Hold"):
@@ -1445,12 +1537,13 @@ def _release_idle_technician_ja(sr_name, technician, exclude_row_name) -> None:
 	)
 	if ja_name:
 		ja = frappe.get_doc("Job Assignment", ja_name)
+		ja.check_permission("write")
 		ja.assignment_status = "Cancelled"
 		ja.flags.ignore_validate_update_after_submit = True
-		ja.save(ignore_permissions=True)
+		ja.save()
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def reassign_solution_to_technician(sr_name, solution_row_name, technician, reason="") -> dict:
 	"""Hand off ONE solution to a different technician (market-standard ERPs
 	reassign at the operation level, not the whole order, once work is split
@@ -1459,13 +1552,13 @@ def reassign_solution_to_technician(sr_name, solution_row_name, technician, reas
 	_assert_sr_permission(sr_name, "write")
 	frappe.has_permission("Job Assignment", "create", throw=True)
 
-	line = frappe.db.get_value(
-		"SR Solution Line", solution_row_name,
+	line = _bound_child_row(
+		"SR Solution Line",
+		solution_row_name,
+		sr_name,
+		"solution_lines",
 		["technician", "technician_name", "repair_solution", "status", "technician_remarks"],
-		as_dict=True,
 	)
-	if not line:
-		frappe.throw(_("Solution line not found."), title=_("Validation Error"))
 	if line.status in ("Completed", "Skipped", "Cancelled"):
 		frappe.throw(_("{0} is {1} — use Restart for rework instead of a handoff.").format(
 			line.repair_solution, _(line.status)), title=_("Validation Error"))
@@ -1496,7 +1589,7 @@ def reassign_solution_to_technician(sr_name, solution_row_name, technician, reas
 	return {"ok": True, "job_assignment": ja.name}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def advance_to_repair(sr_name) -> dict:
 	"""Manually advance from assign to repair stage (when all solutions assigned)."""
 	_assert_sr_permission(sr_name, "write")
@@ -1513,7 +1606,7 @@ def advance_to_repair(sr_name) -> dict:
 
 # ── Step 5: Repair Execution ──────────────────────────────────────────────────
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def update_solution_status(sr_name, solution_row_name, status, remarks="") -> dict:
 	"""Update a solution line status during repair."""
 	_assert_sr_permission(sr_name, "write")
@@ -1521,6 +1614,13 @@ def update_solution_status(sr_name, solution_row_name, status, remarks="") -> di
 	valid = ("Planned", "In Progress", "On Hold", "Completed", "Skipped", "Cancelled")
 	if status not in valid:
 		frappe.throw(_("Invalid status. Must be one of: {0}").format(", ".join(valid)), title=_("Validation Error"))
+	line = _bound_child_row(
+		"SR Solution Line",
+		solution_row_name,
+		sr_name,
+		"solution_lines",
+		["technician", "repair_solution", "status"],
+	)
 
 	if status in ("In Progress", "Completed"):
 		line = _assert_can_work_solution(sr_name, solution_row_name)
@@ -1530,11 +1630,6 @@ def update_solution_status(sr_name, solution_row_name, status, remarks="") -> di
 	# or fitted without the NEW part's serial recorded.
 	if status == "Completed":
 		_assert_solution_parts_ready(sr_name, line.repair_solution)
-
-	if status == "On Hold":
-		line = frappe.db.get_value(
-			"SR Solution Line", solution_row_name, ["technician", "repair_solution"], as_dict=True
-		) or frappe._dict()
 
 	update_fields = {"status": status, "technician_remarks": remarks}
 	if status == "Cancelled":
@@ -1561,7 +1656,7 @@ def update_solution_status(sr_name, solution_row_name, status, remarks="") -> di
 	return {"ok": True}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def handover_device(sr_name, to_technician, remarks="") -> dict:
 	"""Physically hand the device to another technician on this ticket.
 
@@ -1611,17 +1706,19 @@ def handover_device(sr_name, to_technician, remarks="") -> dict:
 	if holder:
 		holder_name = frappe.db.get_value("Employee", holder.service_engineer, "employee_name") or holder.service_engineer
 		hdoc = frappe.get_doc("Job Assignment", holder.name)
+		hdoc.check_permission("write")
 		hdoc.assignment_status = "On Hold"
 		hdoc.flags.ignore_validate_update_after_submit = True
-		hdoc.save(ignore_permissions=True)
+		hdoc.save()
 
 	tdoc = frappe.get_doc("Job Assignment", target_ja)
+	tdoc.check_permission("write")
 	tdoc.assignment_status = "In Progress"
 	tdoc._custody_note = remarks or (
 		f"Device handover from {holder_name}" if holder_name else "Device taken"
 	)
 	tdoc.flags.ignore_validate_update_after_submit = True
-	tdoc.save(ignore_permissions=True)
+	tdoc.save()
 
 	return {"ok": True, "holder": to_technician}
 
@@ -1642,11 +1739,13 @@ def _get_or_create_job_assignment(sr, technician, assignment_type, estimated_hou
 	if ja_name:
 		ja = frappe.get_doc("Job Assignment", ja_name)
 		if estimated_hours:
+			ja.check_permission("write")
 			ja.flags.ignore_validate_update_after_submit = True
 			ja.estimated_hours = flt(ja.estimated_hours or 0) + flt(estimated_hours)
-			ja.save(ignore_permissions=True)
+			ja.save()
 		return ja
 
+	frappe.has_permission("Job Assignment", "create", throw=True)
 	ja = frappe.new_doc("Job Assignment")
 	ja.service_order = sr.service_order
 	ja.service_request = sr.name
@@ -1698,11 +1797,12 @@ def _reconcile_device_custody(sr_name) -> None:
 			{"parent": sr_name, "parenttype": "Service Request", "technician": ja_row.service_engineer},
 		)
 		ja = frappe.get_doc("Job Assignment", ja_row.name)
+		ja.check_permission("write")
 		ja.assignment_status = "Completed" if ever_had else "Cancelled"
 		if ever_had and not ja.end_datetime:
 			ja.end_datetime = now_datetime()
 		ja.flags.ignore_validate_update_after_submit = True
-		ja.save(ignore_permissions=True)
+		ja.save()
 
 
 def _assert_can_work_solution(sr_name, solution_row_name):
@@ -1713,12 +1813,13 @@ def _assert_can_work_solution(sr_name, solution_row_name):
 	# Heal zombie holders first so a finished technician's stale JA never
 	# blocks the next one from starting.
 	_reconcile_device_custody(sr_name)
-	line = frappe.db.get_value(
+	line = _bound_child_row(
 		"SR Solution Line",
 		solution_row_name,
+		sr_name,
+		"solution_lines",
 		["technician", "repair_solution"],
-		as_dict=True,
-	) or frappe._dict()
+	)
 	if not line.technician:
 		frappe.throw(
 			_("{0} has no technician assigned — assign it (Assign stage) to a "
@@ -1827,12 +1928,13 @@ def _sync_job_assignment_custody(sr_name, solution_row_name, technician, status)
 	ja = frappe.get_doc("Job Assignment", ja_name)
 	if ja.assignment_status == target:
 		return
+	ja.check_permission("write")
 	ja.assignment_status = target
 	ja.flags.ignore_validate_update_after_submit = True
-	ja.save(ignore_permissions=True)
+	ja.save()
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def restart_solution_line(sr_name, solution_row_name, remarks="") -> dict:
 	"""Restart a completed/skipped solution back to In Progress (used in rework).
 
@@ -1841,7 +1943,13 @@ def restart_solution_line(sr_name, solution_row_name, remarks="") -> dict:
 	"""
 	_assert_sr_permission(sr_name, "write")
 
-	current = frappe.db.get_value("SR Solution Line", solution_row_name, "status")
+	current = _bound_child_row(
+		"SR Solution Line",
+		solution_row_name,
+		sr_name,
+		"solution_lines",
+		["status"],
+	).status
 	if current not in ("Completed", "Skipped"):
 		frappe.throw(_("Only Completed or Skipped solutions can be restarted."), title=_("Validation Error"))
 
@@ -1862,13 +1970,20 @@ def restart_solution_line(sr_name, solution_row_name, remarks="") -> dict:
 	return {"ok": True}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def mark_spare_damaged(sr_name, spare_row_name, remarks="") -> dict:
 	"""Mark a spare part as damaged/unusable with a mandatory comment."""
 	_assert_sr_permission(sr_name, "write")
 
 	if not remarks or not remarks.strip():
 		frappe.throw(_("Please provide a reason for marking the spare as damaged."), title=_("Validation Error"))
+	_bound_child_row(
+		"SR Spare Line",
+		spare_row_name,
+		sr_name,
+		"spare_lines",
+		["name", "status"],
+	)
 
 	frappe.db.set_value(
 		"SR Spare Line",
@@ -1879,7 +1994,7 @@ def mark_spare_damaged(sr_name, spare_row_name, remarks="") -> dict:
 	return {"ok": True}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def add_spare_to_ticket(sr_name, spare_item, qty, rate=0, repair_solution=None,
 		removed_part_serial=None, installed_part_serial=None, removed_part_condition=None) -> dict:
 	"""Add a spare part to the SR.  Checks warehouse stock first.
@@ -1975,13 +2090,17 @@ def add_spare_to_ticket(sr_name, spare_item, qty, rate=0, repair_solution=None,
 			})
 			if _spare_dict.get("serial_no"):
 				_se_item.serial_no = _spare_dict.get("serial_no")
-			_se.flags.ignore_permissions = True
+			frappe.has_permission("Stock Entry", "create", throw=True)
 			_se.insert()
 			_se.submit()
 			if _spare_dict.get("name"):
 				frappe.db.set_value(_spare_dict.get("doctype") or "SR Spare Line", _spare_dict.get("name"), "custom_stock_entry", _se.name)
 		except Exception:
 			frappe.log_error(frappe.get_traceback(), f"Spare SE failed for {_spare_dict.get('item_code')} on {so_name}")
+			frappe.throw(
+				_("The spare could not be issued from stock. No ticket changes were saved."),
+				title=_("Stock Issue Failed"),
+			)
 
 	return {"ok": True, "status": status, "available_qty": avail["available_qty"]}
 
@@ -1998,6 +2117,7 @@ def get_repair_history(sr_name) -> list:
 	"""
 	_assert_sr_permission(sr_name, "read")
 	sr = frappe.get_doc("Service Request", sr_name)
+	history_limit = min(get_int_setting("repair_history_record_limit", 500, minimum=1), 2000)
 	events = []
 
 	def add(at, title, detail="", ref_dt=None, ref=None):
@@ -2070,15 +2190,21 @@ def get_repair_history(sr_name) -> list:
 			"docstatus": 1,
 		},
 		fields=["name", "posting_date", "custom_transfer_manifest"],
+		limit_page_length=history_limit,
 	)
+	manifest_names = tuple(dict.fromkeys(
+		se.custom_transfer_manifest for se in transfer_ses if se.custom_transfer_manifest
+	))
+	manifest_rows = frappe.get_all(
+		"CH Transfer Manifest",
+		filters={"name": ("in", manifest_names)},
+		fields=["name", "status", "driver_name", "driver", "vehicle_number", "trip", "modified"],
+		limit_page_length=len(manifest_names),
+	) if manifest_names else []
+	manifests_by_name = {row.name: row for row in manifest_rows}
 	for se in transfer_ses:
 		if se.custom_transfer_manifest:
-			tm = frappe.db.get_value(
-				"CH Transfer Manifest",
-				se.custom_transfer_manifest,
-				["status", "driver_name", "driver", "vehicle_number", "trip", "modified"],
-				as_dict=True,
-			)
+			tm = manifests_by_name.get(se.custom_transfer_manifest)
 			if tm:
 				add(
 					se.posting_date,
@@ -2097,6 +2223,7 @@ def get_repair_history(sr_name) -> list:
 				"Material Request",
 				filters={"service_request": sr.name, "docstatus": ["<", 2]},
 				pluck="name",
+				limit_page_length=history_limit,
 			)
 		)
 	for sl in sr.get("spare_lines", []):
@@ -2111,10 +2238,53 @@ def get_repair_history(sr_name) -> list:
 			f"Spare requested: {sl.item_name or sl.spare_item} × {frappe.utils.flt(sl.qty)}",
 			f"rate {frappe.utils.fmt_money(sl.rate or 0, currency='INR')} — {sl.status}{genealogy}",
 		)
-	for mr_name in sorted(mr_names):
-		mr = frappe.db.get_value(
-			"Material Request", mr_name, ["transaction_date", "status"], as_dict=True
-		)
+	mr_names = tuple(sorted(filter(None, mr_names))[:history_limit])
+	mr_rows = frappe.get_all(
+		"Material Request",
+		filters={"name": ("in", mr_names)},
+		fields=["name", "transaction_date", "status"],
+		limit_page_length=len(mr_names),
+	) if mr_names else []
+	mr_by_name = {row.name: row for row in mr_rows}
+	po_links = frappe.get_all(
+		"Purchase Order Item",
+		filters={"material_request": ("in", mr_names), "docstatus": 1},
+		fields=["material_request", "parent"],
+		distinct=True,
+		limit_page_length=history_limit,
+	) if mr_names else []
+	po_names = tuple(dict.fromkeys(link.parent for link in po_links if link.parent))
+	po_rows = frappe.get_all(
+		"Purchase Order",
+		filters={"name": ("in", po_names)},
+		fields=["name", "transaction_date", "supplier", "grand_total"],
+		limit_page_length=len(po_names),
+	) if po_names else []
+	po_by_name = {row.name: row for row in po_rows}
+	pos_by_mr = {}
+	for link in po_links:
+		pos_by_mr.setdefault(link.material_request, []).append(link.parent)
+	pr_links = frappe.get_all(
+		"Purchase Receipt Item",
+		filters={"purchase_order": ("in", po_names), "docstatus": 1},
+		fields=["purchase_order", "parent", "warehouse"],
+		distinct=True,
+		limit_page_length=history_limit,
+	) if po_names else []
+	pr_names = tuple(dict.fromkeys(link.parent for link in pr_links if link.parent))
+	pr_rows = frappe.get_all(
+		"Purchase Receipt",
+		filters={"name": ("in", pr_names)},
+		fields=["name", "posting_date"],
+		limit_page_length=len(pr_names),
+	) if pr_names else []
+	pr_by_name = {row.name: row for row in pr_rows}
+	prs_by_po = {}
+	for link in pr_links:
+		prs_by_po.setdefault(link.purchase_order, []).append(link)
+
+	for mr_name in mr_names:
+		mr = mr_by_name.get(mr_name)
 		if mr:
 			add(
 				mr.transaction_date,
@@ -2123,17 +2293,10 @@ def get_repair_history(sr_name) -> list:
 				"Material Request",
 				mr_name,
 			)
-			pos = frappe.get_all(
-				"Purchase Order Item",
-				filters={"material_request": mr_name, "docstatus": 1},
-				fields=["parent"],
-				distinct=True,
-				pluck="parent",
-			)
-			for po in pos:
-				pod = frappe.db.get_value(
-					"Purchase Order", po, ["transaction_date", "supplier", "grand_total"], as_dict=True
-				)
+			for po in dict.fromkeys(pos_by_mr.get(mr_name, [])):
+				pod = po_by_name.get(po)
+				if not pod:
+					continue
 				add(
 					pod.transaction_date,
 					f"Purchase Order {po}",
@@ -2141,16 +2304,12 @@ def get_repair_history(sr_name) -> list:
 					"Purchase Order",
 					po,
 				)
-				prs = frappe.get_all(
-					"Purchase Receipt Item",
-					filters={"purchase_order": po, "docstatus": 1},
-					fields=["parent", "warehouse"],
-					distinct=True,
-				)
-				for pr in prs:
-					prd = frappe.db.get_value("Purchase Receipt", pr.parent, "posting_date")
+				for pr in prs_by_po.get(po, []):
+					prd = pr_by_name.get(pr.parent)
+					if not prd:
+						continue
 					add(
-						prd,
+						prd.posting_date,
 						f"Spare received: Purchase Receipt {pr.parent}",
 						f"at {pr.warehouse}",
 						"Purchase Receipt",
@@ -2158,7 +2317,7 @@ def get_repair_history(sr_name) -> list:
 					)
 
 	# ── Technician work ──────────────────────────────────────────────────
-	for ja in frappe.get_all(
+	assignments = frappe.get_all(
 		"Job Assignment",
 		filters={"service_request": sr.name},
 		fields=[
@@ -2166,12 +2325,20 @@ def get_repair_history(sr_name) -> list:
 			"assignment_status", "start_datetime", "end_datetime",
 			"actual_hours", "estimated_hours", "repair_outcome",
 		],
-	):
-		engineer = (
-			frappe.db.get_value("Employee", ja.service_engineer, "employee_name")
-			if ja.service_engineer
-			else None
-		) or ja.service_engineer or "—"
+		limit_page_length=history_limit,
+	)
+	employee_names = tuple(dict.fromkeys(
+		ja.service_engineer for ja in assignments if ja.service_engineer
+	))
+	employees = frappe.get_all(
+		"Employee",
+		filters={"name": ("in", employee_names)},
+		fields=["name", "employee_name"],
+		limit_page_length=len(employee_names),
+	) if employee_names else []
+	employee_by_name = {row.name: row.employee_name for row in employees}
+	for ja in assignments:
+		engineer = employee_by_name.get(ja.service_engineer) or ja.service_engineer or "—"
 		add(
 			ja.assignment_datetime,
 			f"Job assigned to {engineer} ({ja.job_type})",
@@ -2218,7 +2385,7 @@ def get_repair_history(sr_name) -> list:
 			)
 
 	events.sort(key=lambda e: e["at"])
-	return events
+	return events[-history_limit:]
 
 
 def _effective_repair_warehouse(sr):
@@ -2238,6 +2405,9 @@ def _effective_repair_warehouse(sr):
 @frappe.whitelist()
 def get_spare_availability(item_code, warehouse) -> dict:
 	"""Public API: return stock availability for a spare + warehouse."""
+	from gofix.scope_guard import assert_warehouse
+
+	assert_warehouse(warehouse=warehouse)
 	return _get_spare_availability(item_code, warehouse)
 
 
@@ -2277,7 +2447,7 @@ def _get_spare_availability(item_code, warehouse) -> dict:
 	}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def release_spare_reservation(sr_name, spare_row_name) -> dict:
 	"""Release a previously reserved spare (e.g. ticket cancelled, spare no longer needed)."""
 	_assert_sr_permission(sr_name, "write")
@@ -2294,7 +2464,7 @@ def release_spare_reservation(sr_name, spare_row_name) -> dict:
 	frappe.throw(_("Spare line not found or not in a removable state."))
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def raise_material_request(sr_name) -> dict:
 	"""Raise a single Material Request for all spares on this SR that need procurement.
 
@@ -2319,7 +2489,8 @@ def raise_material_request(sr_name) -> dict:
 	mr.company = sr.company or frappe.defaults.get_user_default("Company")
 	mr.service_request = sr_name
 	mr.transaction_date = nowdate()
-	mr.schedule_date = add_days(nowdate(), 3)
+	lead_days = get_int_setting("spare_procurement_lead_days", 3)
+	mr.schedule_date = add_days(nowdate(), lead_days)
 	mr.set_warehouse = warehouse
 	mr.title = f"Spares for {sr_name} — {sr.customer_name or sr.customer}"
 
@@ -2330,10 +2501,11 @@ def raise_material_request(sr_name) -> dict:
 			"qty": sl.qty,
 			"uom": sl.uom or "Nos",
 			"warehouse": warehouse,
-			"schedule_date": add_days(nowdate(), 3),
+			"schedule_date": add_days(nowdate(), lead_days),
 		})
 
-	mr.insert(ignore_permissions=True)
+	frappe.has_permission("Material Request", "create", throw=True)
+	mr.insert()
 	mr.submit()
 
 	# Update spare_lines with MR reference
@@ -2354,9 +2526,10 @@ def raise_material_request(sr_name) -> dict:
 	return {"ok": True, "material_request": mr.name, "count": len(pending_lines)}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def handoff_to_technician(sr_name, new_technician, job_type="Repair", reason="") -> dict:
 	"""Create an additional Job Assignment (Technician Changed) for a handoff."""
+	_assert_sr_permission(sr_name, "write")
 	frappe.has_permission("Job Assignment", "create", throw=True)
 
 	sr = frappe.get_doc("Service Request", sr_name)
@@ -2384,14 +2557,19 @@ def get_issue_categories() -> list:
 
 # ── Step 6: Submit for QC ─────────────────────────────────────────────────────
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def submit_for_qc(sr_name) -> dict:
 	"""Mark all solutions as completed and trigger QC on the Service Order.
 
 	This calls the existing workflow: sets qc_status=Awaiting on the SO and
 	populates the QC checklist template.
 	"""
-	frappe.only_for(["Service Manager", "System Manager", "Service Engineer"])
+	require_role_setting(
+		"engineer_operation_roles",
+		("Sales Manager", "System Manager", "Service Manager", "Service Engineer"),
+		action=_("submit a repair for QC"),
+	)
+	_assert_sr_permission(sr_name, "write")
 
 	sr = frappe.get_doc("Service Request", sr_name)
 	if not sr.service_order:
@@ -2447,8 +2625,9 @@ def submit_for_qc(sr_name) -> dict:
 		if ja.docstatus == 0:
 			ja.submit()
 		else:
+			ja.check_permission("write")
 			ja.flags.ignore_validate_update_after_submit = True
-			ja.save(ignore_permissions=True)
+			ja.save()
 
 	# Trigger QC on the Sales Order using the existing workflow helper
 	so = frappe.get_doc("Sales Order", sr.service_order)
@@ -2459,7 +2638,6 @@ def submit_for_qc(sr_name) -> dict:
 	from gofix.overrides.sales_order import move_service_order_to_qc_if_ready
 
 	move_service_order_to_qc_if_ready(so)
-	frappe.db.commit()
 
 	_log_ops_stage(sr_name, "repair", "qc")
 	return {
@@ -2469,10 +2647,15 @@ def submit_for_qc(sr_name) -> dict:
 	}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def save_qc_results(sr_name, checklist_json) -> dict:
 	"""Save QC checklist results on the linked Sales Order."""
-	frappe.only_for(["Service Manager", "System Manager"])
+	require_role_setting(
+		"qc_approval_roles",
+		("QC Manager", "Store Manager", "System Manager"),
+		action=_("save QC results"),
+	)
+	_assert_sr_permission(sr_name, "write")
 
 	sr = frappe.get_doc("Service Request", sr_name)
 	if not sr.service_order:
@@ -2491,14 +2674,19 @@ def save_qc_results(sr_name, checklist_json) -> dict:
 	return {"ok": True}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def complete_qc(sr_name, qc_result) -> dict:
 	"""Mark QC as Pass or Fail on the Service Order.
 
 	Pass: triggers SR → Completed, sends to invoice.
 	Fail: sets qc_status=Fail, ops stage becomes 'rework'.
 	"""
-	frappe.only_for(["Service Manager", "System Manager"])
+	require_role_setting(
+		"qc_approval_roles",
+		("QC Manager", "Store Manager", "System Manager"),
+		action=_("complete QC"),
+	)
+	_assert_sr_permission(sr_name, "write")
 
 	if qc_result not in ("Pass", "Fail"):
 		frappe.throw(_("QC result must be Pass or Fail."), title=_("Validation Error"))
@@ -2543,8 +2731,6 @@ def complete_qc(sr_name, qc_result) -> dict:
 		if frappe.db.has_column("Service Request", "workflow_state"):
 			frappe.db.set_value("Service Request", sr_name, "workflow_state", "In Service", update_modified=False)
 
-	frappe.db.commit()
-
 	stage = "invoice" if qc_result == "Pass" else "rework"
 	_log_ops_stage(sr_name, "qc", stage)
 	return {"ok": True, "qc_result": qc_result, "stage": stage}
@@ -2588,16 +2774,28 @@ def _get_labour_cost(sr) -> dict:
 		},
 		fields=["actual_hours", "service_engineer"],
 	)
+	employee_names = {job.service_engineer for job in jobs if job.service_engineer}
+	employee_fields = ["name", "ctc"]
+	if has_hourly_col:
+		employee_fields.append("custom_hourly_rate")
+	employees = frappe.get_all(
+		"Employee",
+		filters={"name": ("in", tuple(employee_names))},
+		fields=employee_fields,
+		limit_page_length=len(employee_names),
+	) if employee_names else []
+	employee_by_name = {employee.name: employee for employee in employees}
 	for job in jobs:
 		hours = flt(job.actual_hours)
 		if not hours:
 			continue
 		hourly = 0.0
-		if job.service_engineer:
+		employee = employee_by_name.get(job.service_engineer)
+		if employee:
 			if has_hourly_col:
-				hourly = flt(frappe.db.get_value("Employee", job.service_engineer, "custom_hourly_rate"))
+				hourly = flt(employee.get("custom_hourly_rate"))
 			if not hourly:
-				ctc = flt(frappe.db.get_value("Employee", job.service_engineer, "ctc"))
+				ctc = flt(employee.ctc)
 				if ctc:
 					hourly = ctc / 2080  # Annual CTC ÷ working hours/year
 		hours_total += hours
@@ -2636,7 +2834,14 @@ def _get_company_cost(sr) -> dict:
 			)
 			parts_cost = sum(flt(r.purchase_cost) * flt(r.qty_used) for r in spu)
 		except Exception:
-			pass
+			frappe.log_error(
+				frappe.get_traceback(),
+				f"GoFix company-cost resolution failed for {sr.name}",
+			)
+			frappe.throw(
+				_("Company cost could not be verified. Billing is blocked until the cost ledger is available."),
+				frappe.ValidationError,
+			)
 
 	labour = _get_labour_cost(sr)
 	total = parts_cost + damaged_cost + labour["cost"]
@@ -2650,15 +2855,15 @@ def _get_company_cost(sr) -> dict:
 
 
 def _ensure_below_cost_exception_type():
-	"""Idempotently provision the CH Exception Type used by the below-cost gate."""
+	"""Require the configured CH Exception Type used by the below-cost gate."""
 	if frappe.db.exists("CH Exception Type", BELOW_COST_EXCEPTION_TYPE):
 		return
-	frappe.get_doc({
-		"doctype": "CH Exception Type",
-		"exception_type": BELOW_COST_EXCEPTION_TYPE,
-		"enabled": 1,
-		"routing_mode": "Approval Matrix",
-	}).insert(ignore_permissions=True)
+	frappe.throw(
+		_("Exception Type {0} is not configured. Run the GoFix setup patch before billing.").format(
+			BELOW_COST_EXCEPTION_TYPE
+		),
+		title=_("GoFix Configuration Required"),
+	)
 
 
 def _spare_warranty_description(row) -> str | None:
@@ -2761,7 +2966,7 @@ def get_invoice_summary(sr_name) -> dict:
 			]
 			items_source = "service_order"
 		except Exception:
-			pass
+			frappe.log_error(frappe.get_traceback(), f"Invoice summary Sales Order lookup failed for {sr.name}")
 
 	service_total = sum(i["amount"] for i in service_items)
 	spare_total = sum(i["amount"] for i in spare_items)
@@ -2808,7 +3013,7 @@ def get_service_billing_line(sr_name) -> dict:
 	POS invoices post with ``update_stock=1`` and consumed spares were
 	already issued to the job from store stock — billing them as individual
 	stock rows would deduct inventory twice. The whole repair therefore
-	bills as ONE line on the non-stock "Repair Service" item; the
+	bills as one line on the Company's configured repair service item; the
 	labour/spare breakdown (including part warranties) travels in the line
 	description. The below-cost floor is re-enforced server-side at invoice
 	submit — the flags returned here are for early cashier feedback only.
@@ -2857,15 +3062,7 @@ def get_service_billing_line(sr_name) -> dict:
 	if s["final_cost"]:
 		desc_lines.append(_("Final Cost override applied"))
 
-	repair_item = frappe.db.get_value(
-		"Item", {"item_name": "Repair Service", "disabled": 0, "ch_lifecycle_status": "Active"}, "name",
-	) or frappe.db.get_value(
-		"Item",
-		{"item_group": "Services", "disabled": 0, "is_stock_item": 0, "ch_lifecycle_status": "Active"},
-		"name",
-	)
-	if not repair_item:
-		frappe.throw(_("No active non-stock 'Repair Service' item found — create one to bill repairs at POS."))
+	repair_item = sr._resolve_service_item()
 
 	return {
 		"item_code": repair_item,
@@ -2885,7 +3082,7 @@ def get_service_billing_line(sr_name) -> dict:
 	}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def set_final_cost(sr_name, final_cost, reason=None) -> dict:
 	"""Record the final payable amount agreed with the customer.
 
@@ -2897,7 +3094,12 @@ def set_final_cost(sr_name, final_cost, reason=None) -> dict:
 	Counter staff may RAISE (the exception + its SoD-guarded approval is the
 	control, same doctrine as POS free-sale) — hence the broad role list.
 	"""
-	frappe.only_for(["Service Manager", "System Manager", "Store Manager", "Store Executive", "Sales Manager"])
+	require_role_setting(
+		"billing_roles",
+		("Sales Manager", "System Manager", "Service Manager", "Store Manager", "Store Executive"),
+		action=_("set a final service cost"),
+	)
+	_assert_sr_permission(sr_name, "write")
 
 	sr = frappe.get_doc("Service Request", sr_name)
 	if sr.service_invoice:
@@ -2949,13 +3151,18 @@ def set_final_cost(sr_name, final_cost, reason=None) -> dict:
 	}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def create_ops_hub_invoice(sr_name, remote_otp=None) -> dict:
 	"""Create a Sales Invoice directly from the Ops Hub invoice stage.
 
 	Falls back to Sales Order items when SR has no service_items / spare_parts.
 	"""
-	frappe.only_for(["Service Manager", "System Manager"])
+	require_role_setting(
+		"billing_roles",
+		("Sales Manager", "System Manager", "Service Manager", "Store Manager", "Store Executive"),
+		action=_("create a service invoice"),
+	)
+	_assert_sr_permission(sr_name, "write")
 
 	sr = frappe.get_doc("Service Request", sr_name)
 
@@ -3023,7 +3230,7 @@ def create_ops_hub_invoice(sr_name, remote_otp=None) -> dict:
 					item_row["so_detail"] = row.name
 				items.append(item_row)
 		except Exception:
-			pass
+			frappe.log_error(frappe.get_traceback(), f"Ops Hub invoice Sales Order lookup failed for {sr.name}")
 
 	if not items:
 		frappe.throw(_("No billable items found on {0} or its Sales Order.").format(sr_name), title=_("Validation Error"))
@@ -3071,7 +3278,7 @@ def create_ops_hub_invoice(sr_name, remote_otp=None) -> dict:
 		"custom_gofix_service_order": sr.service_order or "",
 	})
 
-	inv.flags.ignore_permissions = True
+	frappe.has_permission("Sales Invoice", "create", throw=True)
 	inv.insert()
 
 	# ── Apply Final Cost / service discount to the payable total ─────────
@@ -3107,13 +3314,18 @@ def create_ops_hub_invoice(sr_name, remote_otp=None) -> dict:
 	return {"ok": True, "invoice": inv.name, "grand_total": inv.grand_total}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def reassign_after_qc_fail(sr_name, technician, job_type="Repair", manager_notes="") -> dict:
 	"""Floor manager assigns ticket back to technician after QC failure.
 
 	Only failed QC items are sent for rework — passed solutions stay intact.
 	"""
-	frappe.only_for(["Service Manager", "System Manager"])
+	require_role_setting(
+		"service_manager_roles",
+		("Service Manager", "System Manager", "GoFix Floor Manager"),
+		action=_("reassign failed QC work"),
+	)
+	_assert_sr_permission(sr_name, "write")
 
 	sr = frappe.get_doc("Service Request", sr_name)
 	if not sr.service_order:
@@ -3139,13 +3351,12 @@ def reassign_after_qc_fail(sr_name, technician, job_type="Repair", manager_notes
 				"rework_iteration": (check.rework_iteration or 0) + 1,
 			}, update_modified=False)
 
-	# Reset QC status and workflow state via db_set (bypasses workflow validation)
-	so.db_set("qc_status", "Pending", update_modified=True)
-	so.db_set("workflow_state", "Work in Progress", update_modified=False)
-
-	# Clear QC checklist so it is freshly populated on next QC submission (Fix #5)
-	for check in list(so.get("qc_checklist") or []):
-		frappe.delete_doc("GoFix QC Checklist", check.name, force=True, ignore_permissions=True)
+	so.check_permission("write")
+	so.qc_status = "Pending"
+	so.workflow_state = "Work in Progress"
+	so.set("qc_checklist", [])
+	so.flags.ignore_validate_update_after_submit = True
+	so.save()
 
 	# Reset ONLY the failed solution lines back to "In Progress" for rework
 	# Use db_set per row to avoid triggering validate_issue_solution_cascade
@@ -3172,7 +3383,6 @@ def reassign_after_qc_fail(sr_name, technician, job_type="Repair", manager_notes
 		sr, technician, "Rework", job_type=job_type,
 		comments=f"QC Fail Rework ({rework_summary}){(' — ' + manager_notes) if manager_notes else ''}",
 	)
-	frappe.db.commit()
 
 	_log_ops_stage(sr_name, "rework", "repair")
 	_mark_sr_in_service(sr_name)
@@ -3186,7 +3396,7 @@ def reassign_after_qc_fail(sr_name, technician, job_type="Repair", manager_notes
 
 # ── Navigation: Go back to a previous stage ────────────────────────────────────
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def go_back_to_stage(sr_name, target_stage) -> dict:
 	"""Reset flags so the SR moves back to the target stage.
 
@@ -3245,7 +3455,7 @@ def go_back_to_stage(sr_name, target_stage) -> dict:
 
 # ── Not Repairable Flow ───────────────────────────────────────────────────────
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def mark_not_repairable(sr_name, status="Not Repairable", reason="") -> dict:
 	"""Mark a Service Request as Not Repairable / BER from the Ops Hub.
 
@@ -3309,7 +3519,7 @@ def mark_not_repairable(sr_name, status="Not Repairable", reason="") -> dict:
 	if serial_no:
 		try:
 			from ch_item_master.ch_item_master.doctype.ch_serial_lifecycle.ch_serial_lifecycle import (
-				update_lifecycle_status,
+				update_lifecycle_status_for_document as update_lifecycle_status,
 			)
 			update_lifecycle_status(
 				serial_no=serial_no,
@@ -3319,8 +3529,6 @@ def mark_not_repairable(sr_name, status="Not Repairable", reason="") -> dict:
 			)
 		except (ImportError, Exception):
 			frappe.log_error(frappe.get_traceback(), f"Not Repairable: lifecycle update failed for {sr_name}")
-
-	frappe.db.commit()
 
 	# 4) Check for consumed spares that need recovery
 	pending_spares = frappe.get_all("Spare Parts Usage",
@@ -3336,7 +3544,7 @@ def mark_not_repairable(sr_name, status="Not Repairable", reason="") -> dict:
 	}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def recover_spare_from_ops_hub(sr_name, spu_name, disposition, remarks="") -> dict:
 	"""Recover a single consumed spare from the Ops Hub spare recovery panel."""
 	_assert_sr_permission(sr_name, "write")
@@ -3349,8 +3557,8 @@ def recover_spare_from_ops_hub(sr_name, spu_name, disposition, remarks="") -> di
 	doc = frappe.get_doc("Spare Parts Usage", spu_name)
 	if doc.service_request != sr_name:
 		frappe.throw(_("Spare {0} does not belong to SR {1}").format(spu_name, sr_name))
+	doc.check_permission("write")
 	doc.recover_spare(disposition, remarks)
-	frappe.db.commit()
 
 	# Return updated pending count
 	remaining = frappe.db.count("Spare Parts Usage", {
@@ -3359,7 +3567,7 @@ def recover_spare_from_ops_hub(sr_name, spu_name, disposition, remarks="") -> di
 	return {"message": _("Recovered: {0}").format(disposition), "remaining": remaining}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def return_unrepaired_device(sr_name, remarks="") -> dict:
 	"""Mark an NR/BER device as returned to customer (Delivered) after spare recovery.
 
@@ -3401,5 +3609,4 @@ def return_unrepaired_device(sr_name, remarks="") -> dict:
 			frappe.log_error(frappe.get_traceback(),
 				f"Return device: SO update failed for {sr.service_order}")
 
-	frappe.db.commit()
 	return {"message": _("Device returned to customer")}

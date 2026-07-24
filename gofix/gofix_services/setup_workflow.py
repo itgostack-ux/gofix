@@ -66,28 +66,6 @@ def setup_service_order_workflow():
         raise
 
 
-def ensure_custom_roles():
-    """Idempotently create custom roles required by the workflow.
-
-    Currently registers:
-      - GoGizmo Head — final approver for escalated Service Orders.
-    """
-    roles = ["GoGizmo Head"]
-    for role_name in roles:
-        if frappe.db.exists("Role", role_name):
-            print(f"  ○ Role exists: {role_name}")
-            continue
-        role = frappe.get_doc({
-            "doctype": "Role",
-            "role_name": role_name,
-            "desk_access": 1,
-            "is_custom": 1,
-        })
-        role.insert(ignore_permissions=True)
-        print(f"  ✓ Created role: {role_name}")
-    frappe.db.commit()
-
-
 def _ensure_workflow_state_and_actions():
     """Create the global Frappe Workflow State and Workflow Action Master
     rows required by the Service Order Workflow.

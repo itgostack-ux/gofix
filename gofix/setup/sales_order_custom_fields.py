@@ -535,6 +535,9 @@ def create_sales_order_custom_fields():
 				"fieldtype": "Data",
 				"insert_after": "delivery_control_section",
 				"read_only": 1,
+				"hidden": 1,
+				"no_copy": 1,
+				"permlevel": 1,
 				"description": "OTP sent to customer for device handover verification"
 			},
 			{
@@ -543,6 +546,8 @@ def create_sales_order_custom_fields():
 				"fieldtype": "Check",
 				"insert_after": "delivery_otp",
 				"read_only": 1,
+				"no_copy": 1,
+				"permlevel": 1,
 				"default": "0"
 			},
 			{
@@ -550,12 +555,42 @@ def create_sales_order_custom_fields():
 				"label": "OTP Sent At",
 				"fieldtype": "Datetime",
 				"insert_after": "delivery_otp_verified",
-				"read_only": 1
+				"read_only": 1,
+				"no_copy": 1,
+				"permlevel": 1
+			},
+			{
+				"fieldname": "delivery_otp_attempts",
+				"label": "OTP Attempts",
+				"fieldtype": "Int",
+				"insert_after": "delivery_otp_sent_at",
+				"read_only": 1,
+				"no_copy": 1,
+				"permlevel": 1,
+				"default": "0"
+			},
+			{
+				"fieldname": "delivery_otp_locked_until",
+				"label": "OTP Locked Until",
+				"fieldtype": "Datetime",
+				"insert_after": "delivery_otp_attempts",
+				"read_only": 1,
+				"no_copy": 1,
+				"permlevel": 1
+			},
+			{
+				"fieldname": "delivery_otp_consumed_at",
+				"label": "OTP Consumed At",
+				"fieldtype": "Datetime",
+				"insert_after": "delivery_otp_locked_until",
+				"read_only": 1,
+				"no_copy": 1,
+				"permlevel": 1
 			},
 			{
 				"fieldname": "delivery_control_column_break",
 				"fieldtype": "Column Break",
-				"insert_after": "delivery_otp_sent_at"
+				"insert_after": "delivery_otp_consumed_at"
 			},
 			{
 				"fieldname": "payment_verified",
@@ -789,7 +824,28 @@ def create_sales_order_custom_fields():
 		]
 	}
 
-	create_custom_fields(custom_fields, ignore_validate=True, update=False)
+	create_custom_fields(custom_fields, ignore_validate=True, update=True)
+	for role, can_write in {
+		"System Manager": 1,
+		"Service Manager": 0,
+		"Sales Manager": 0,
+		"Store Manager": 0,
+	}.items():
+		if not frappe.db.exists("Role", role) or frappe.db.exists(
+			"Custom DocPerm",
+			{"parent": "Sales Order", "role": role, "permlevel": 1},
+		):
+			continue
+		frappe.get_doc({
+			"doctype": "Custom DocPerm",
+			"parent": "Sales Order",
+			"parenttype": "DocType",
+			"parentfield": "permissions",
+			"role": role,
+			"permlevel": 1,
+			"read": 1,
+			"write": can_write,
+		}).insert(ignore_permissions=True)
 	frappe.db.commit()
 
 	print("✅ Sales Order custom fields created successfully")

@@ -16,14 +16,17 @@ under GET_LOCK, mirroring the pattern proven by ch_pos.api.token_api.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from typing import Iterable
 
 import frappe
 from frappe import _
 from frappe.model.document import Document
+from frappe.model.naming import getseries
 from frappe.utils import get_datetime, now_datetime, nowdate
 
+from gofix.config import get_int_setting, has_role_setting
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -52,8 +55,7 @@ _ALLOWED_TRANSITIONS = {
 	STATUS_CANCELLED: set(),
 }
 
-_TRANSITION_ROLES = {"System Manager", "Service Manager", "Store Manager", "Store Executive"}
-_MAX_ISSUES = 3
+_DEFAULT_TRANSITION_ROLES = {"System Manager", "Service Manager", "Store Manager", "Store Executive"}
 
 _PHONE_DIGITS = re.compile(r"\D+")
 
@@ -139,6 +141,7 @@ class GoFixToken(Document):
 		self.customer_phone = normalize_phone(self.customer_phone)
 		if not self.token_number:
 			self.token_number = _next_token_number(self.store, self.business_date)
+		self.unique_token_key = f"{self.store}|{self.business_date}|{self.token_number}"
 
 	def validate(self) -> None:
 		self._resolve_store_fields()
@@ -175,17 +178,12 @@ class GoFixToken(Document):
 			frappe.throw(_("Select at least one symptom for a repair visit."))
 
 	def _validate_company_scope(self) -> None:
-		"""Reject tokens for companies that don't have gofix_enabled set.
-
-		Fail-open when the flag column has not been created yet (e.g. code
-		deployed but migrate hasn't run) so the doctype stays usable during
-		rollout.
-		"""
+		"""Reject tokens for companies that are not explicitly GoFix-enabled."""
 
 		if not self.company:
 			return
 		if not frappe.db.has_column("Company", "gofix_enabled"):
-			return
+			frappe.throw(_("GoFix company controls are not installed. Run the required migration."))
 		if not frappe.db.get_value("Company", self.company, "gofix_enabled"):
 			frappe.throw(
 				_("Company {0} is not enabled for GoFix Token. Ask a System Manager to tick \"GoFix Token Enabled\" on the Company.").format(
@@ -195,9 +193,10 @@ class GoFixToken(Document):
 
 	def _validate_issue_rules(self) -> None:
 		rows = list(self.selected_issues or [])
-		if len(rows) > _MAX_ISSUES:
+		max_issues = get_int_setting("max_selected_issues", 3)
+		if len(rows) > max_issues:
 			frappe.throw(
-				_("At most {0} symptoms can be selected. Please remove extras.").format(_MAX_ISSUES)
+				_("At most {0} symptoms can be selected. Please remove extras.").format(max_issues)
 			)
 		expert = [r for r in rows if r.is_expert_check]
 		if expert and len(rows) > 1:
@@ -216,12 +215,15 @@ class GoFixToken(Document):
 		if previous == self.status:
 			return
 		allowed = _ALLOWED_TRANSITIONS.get(previous, set())
-		if self.status not in allowed and "System Manager" not in frappe.get_roles():
+		can_transition = has_role_setting("token_transition_roles", _DEFAULT_TRANSITION_ROLES)
+		can_override = has_role_setting("token_transition_override_roles")
+		if self.status not in allowed and not can_override:
 			frappe.throw(
 				_("Token cannot move from {0} to {1}.").format(previous, self.status)
 			)
-		user_roles = set(frappe.get_roles())
-		if not (user_roles & _TRANSITION_ROLES):
+		if self.status not in allowed:
+			self.flags.token_transition_override = True
+		if not can_transition and not can_override:
 			frappe.throw(
 				_("You do not have permission to change token status.")
 			)
@@ -292,7 +294,11 @@ class GoFixToken(Document):
 				"to_status": self.status,
 				"changed_at": now_datetime(),
 				"changed_by": frappe.session.user,
-				"notes": (self.cancellation_notes or "").strip() or None,
+				"notes": (
+					_("Transition-matrix override by {0}.").format(frappe.session.user)
+					if self.flags.get("token_transition_override")
+					else ((self.cancellation_notes or "").strip() or None)
+				),
 			},
 		)
 
@@ -305,34 +311,15 @@ class GoFixToken(Document):
 def _next_token_number(store: str, business_date) -> str:
 	"""Return the next daily token number for a store, e.g. AKG-024.
 
-	Uses GET_LOCK to serialize concurrent tablet submissions per store/date so
-	two customers filling the wizard at the same time cannot collide on the
-	sequence. Falls back to a timestamp suffix if the lock cannot be acquired
-	within one second (extremely unlikely in single-store traffic but safer
-	than throwing at the customer).
+	Uses Frappe's row-locked Series allocator so concurrent tablet submissions
+	cannot receive the same daily sequence.
 	"""
 
 	store_code, _name = resolve_store_code(store)
 	business_date_str = str(business_date)
-	lock_name = f"gofix_token_seq::{store}::{business_date_str}"
-	lock_row = frappe.db.sql("SELECT GET_LOCK(%s, 1)", (lock_name,), as_list=True)
-	lock_acquired = bool(lock_row and lock_row[0] and lock_row[0][0] == 1)
-	try:
-		count = frappe.db.sql(
-			"""
-			SELECT COUNT(*) FROM `tabGoFix Token`
-			WHERE store = %s AND business_date = %s
-			""",
-			(store, business_date_str),
-		)[0][0]
-		seq = int(count or 0) + 1
-		if not lock_acquired:
-			# Extremely defensive: nudge past any concurrent insert we couldn't see.
-			seq += 1
-		return f"{store_code}-{seq:03d}"
-	finally:
-		if lock_acquired:
-			frappe.db.sql("SELECT RELEASE_LOCK(%s)", (lock_name,))
+	sequence_scope = hashlib.sha256(f"{store}|{business_date_str}".encode("utf-8")).hexdigest()[:24]
+	sequence = getseries(f"GOFIX-TOKEN::{sequence_scope}::", 3)
+	return f"{store_code}-{sequence}"
 
 
 # ---------------------------------------------------------------------------

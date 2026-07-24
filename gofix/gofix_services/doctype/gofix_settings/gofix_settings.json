@@ -1,0 +1,719 @@
+{
+ "actions": [],
+ "creation": "2026-07-22 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "company_section",
+  "operating_company",
+  "company_abbreviation",
+  "company_gstin",
+  "company_currency",
+  "company_country",
+  "tax_template_source_company",
+  "default_parts_warehouse",
+  "token_section",
+  "max_selected_issues",
+  "guest_rate_limit",
+  "guest_rate_window_seconds",
+  "token_queue_limit",
+  "token_report_max_days",
+  "token_analytics_row_limit",
+  "app_access_roles",
+  "service_dashboard_roles",
+  "token_transition_roles",
+  "token_transition_override_roles",
+  "sales_operation_roles",
+  "estimate_decision_override_roles",
+  "billing_roles",
+  "service_access_roles",
+  "service_manager_roles",
+  "service_history_limit",
+  "service_queue_row_limit",
+  "ops_hub_ticket_queue_limit",
+  "ops_hub_related_row_limit",
+  "interactive_report_row_limit",
+  "repair_history_record_limit",
+  "device_serial_lookup_limit",
+  "technician_candidate_limit",
+  "technician_recommendation_limit",
+  "technician_workload_roles",
+  "technician_workload_record_limit",
+  "store_operation_roles",
+  "engineer_operation_roles",
+  "job_assignment_creation_roles",
+  "job_assignment_manager_roles",
+  "warehouse_setup_roles",
+  "qc_approval_roles",
+  "service_notification_roles",
+  "notification_recipient_limit",
+  "delivery_otp_ttl_seconds",
+  "otp_request_limit",
+  "otp_request_window_seconds",
+  "otp_verify_limit",
+  "otp_verify_window_seconds",
+  "otp_max_attempts",
+  "otp_lockout_seconds",
+  "remote_billing_otp_ttl_seconds",
+  "remote_billing_consent_ttl_seconds",
+  "service_section",
+  "technician_workload_warning_count",
+  "max_job_estimated_hours",
+  "vip_customer_request_threshold",
+  "estimate_expiry_days",
+  "service_hub_overdue_threshold",
+  "service_hub_active_backlog_threshold",
+  "service_hub_tat_threshold_days",
+  "repeat_repair_window_days",
+  "technician_performance_window_days",
+  "technician_skill_window_days",
+  "technician_recommendation_high_score",
+  "technician_recommendation_score",
+  "technician_available_score",
+  "scheduler_section",
+  "scheduler_batch_limit",
+  "unclaimed_device_days",
+  "stale_request_expiry_days",
+  "sla_scheduler_batch_limit",
+  "sla_rule_limit",
+  "sla_level_2_percent",
+  "sla_warning_repeat_seconds",
+  "sla_escalation_repeat_seconds",
+  "default_service_delivery_days",
+  "default_repair_warranty_days",
+  "annual_working_hours",
+  "default_labor_rate_per_minute",
+  "default_solution_minutes",
+  "spare_procurement_lead_days",
+  "not_repairable_insight_threshold",
+  "public_lookup_failure_limit",
+  "public_lookup_lockout_seconds"
+ ],
+ "fields": [
+  {
+   "fieldname": "company_section",
+   "fieldtype": "Section Break",
+   "label": "Company Defaults"
+  },
+  {
+   "fieldname": "operating_company",
+   "fieldtype": "Link",
+   "label": "Operating Company",
+   "options": "Company"
+  },
+  {
+   "default": "GF",
+   "fieldname": "company_abbreviation",
+   "fieldtype": "Data",
+   "label": "Company Abbreviation"
+  },
+  {
+   "fieldname": "company_gstin",
+   "fieldtype": "Data",
+   "label": "Company GSTIN"
+  },
+  {
+   "default": "INR",
+   "fieldname": "company_currency",
+   "fieldtype": "Link",
+   "label": "Company Currency",
+   "options": "Currency"
+  },
+  {
+   "default": "India",
+   "fieldname": "company_country",
+   "fieldtype": "Link",
+   "label": "Company Country",
+   "options": "Country"
+  },
+  {
+   "fieldname": "tax_template_source_company",
+   "fieldtype": "Link",
+   "label": "Tax Template Source Company",
+   "options": "Company"
+  },
+  {
+   "fieldname": "default_parts_warehouse",
+   "fieldtype": "Link",
+   "label": "Default Parts Warehouse",
+   "options": "Warehouse"
+  },
+  {
+   "fieldname": "token_section",
+   "fieldtype": "Section Break",
+   "label": "Token Controls"
+  },
+  {
+   "default": "3",
+   "fieldname": "max_selected_issues",
+   "fieldtype": "Int",
+   "label": "Maximum Selected Issues",
+   "reqd": 1
+  },
+  {
+   "default": "30",
+   "fieldname": "guest_rate_limit",
+   "fieldtype": "Int",
+   "label": "Guest Requests per Window",
+   "reqd": 1
+  },
+  {
+   "default": "3600",
+   "fieldname": "guest_rate_window_seconds",
+   "fieldtype": "Int",
+   "label": "Guest Rate Window (Seconds)",
+   "reqd": 1
+  },
+  {
+   "default": "200",
+   "description": "Maximum token rows returned by one queue request.",
+   "fieldname": "token_queue_limit",
+   "fieldtype": "Int",
+   "label": "Token Queue Row Limit",
+   "reqd": 1
+  },
+  {
+   "default": "150",
+   "description": "Maximum tickets returned by one Ops Hub queue request.",
+   "fieldname": "ops_hub_ticket_queue_limit",
+   "fieldtype": "Int",
+   "label": "Ops Hub Ticket Queue Limit",
+   "reqd": 1
+  },
+  {
+   "default": "500",
+   "description": "Maximum assignments, QC checks, or timeline rows loaded for one Ops Hub ticket.",
+   "fieldname": "ops_hub_related_row_limit",
+   "fieldtype": "Int",
+   "label": "Ops Hub Related Row Limit",
+   "reqd": 1
+  },
+  {
+   "default": "90",
+   "description": "Maximum reporting period accepted by token reports.",
+   "fieldname": "token_report_max_days",
+   "fieldtype": "Int",
+   "label": "Token Report Maximum Days",
+   "reqd": 1
+  },
+  {
+   "default": "5000",
+   "description": "Maximum token rows processed by one dashboard or report request.",
+   "fieldname": "token_analytics_row_limit",
+   "fieldtype": "Int",
+   "label": "Token Analytics Row Limit",
+   "reqd": 1
+  },
+  {
+   "default": "Service Manager\nService Engineer\nService Viewer\nService User\nStore Manager\nStore Executive\nGoFix Floor Manager",
+   "description": "Non-privileged roles allowed to open the GoFix app. Administrator and System Manager are always allowed.",
+   "fieldname": "app_access_roles",
+   "fieldtype": "Small Text",
+   "label": "App Access Roles"
+  },
+  {
+   "default": "Service Manager\nService Viewer\nGoFix Floor Manager",
+   "description": "Roles allowed to view Service Hub metrics within their assigned company and warehouse scope. Administrator and System Manager always retain access.",
+   "fieldname": "service_dashboard_roles",
+   "fieldtype": "Small Text",
+   "label": "Service Dashboard Roles"
+  },
+  {
+   "default": "System Manager\nService Manager\nStore Manager\nStore Executive",
+   "description": "Roles allowed to change token status. Enter one role per line.",
+   "fieldname": "token_transition_roles",
+   "fieldtype": "Small Text",
+   "label": "Token Transition Roles"
+  },
+  {
+   "description": "Roles allowed to override the token transition matrix. Leave empty to restrict overrides to Administrator and System Manager.",
+   "fieldname": "token_transition_override_roles",
+   "fieldtype": "Small Text",
+   "label": "Token Transition Override Roles"
+  },
+  {
+   "default": "Sales Manager\nSystem Manager\nService Manager\nSales User",
+   "fieldname": "sales_operation_roles",
+   "fieldtype": "Small Text",
+   "label": "Sales Operation Roles"
+  },
+  {
+   "default": "Service Manager",
+   "description": "Staff roles allowed to record an audited customer estimate decision override. Customer self-service requires the stored high-entropy tracking token.",
+   "fieldname": "estimate_decision_override_roles",
+   "fieldtype": "Small Text",
+   "label": "Estimate Decision Override Roles"
+  },
+  {
+   "default": "Sales Manager\nSystem Manager\nService Manager\nSales User\nStore Manager\nStore Executive",
+   "fieldname": "billing_roles",
+   "fieldtype": "Small Text",
+   "label": "Billing Roles"
+  },
+  {
+   "default": "System Manager\nService Manager\nService Engineer\nService Viewer\nService User",
+   "fieldname": "service_access_roles",
+   "fieldtype": "Small Text",
+   "label": "Service Access Roles"
+  },
+  {
+   "default": "Service Manager\nSystem Manager\nGoFix Floor Manager",
+   "fieldname": "service_manager_roles",
+   "fieldtype": "Small Text",
+   "label": "Service Manager Roles"
+  },
+  {
+   "default": "25",
+   "description": "Maximum customer service-history rows returned by one request.",
+   "fieldname": "service_history_limit",
+   "fieldtype": "Int",
+   "label": "Service History Row Limit",
+   "reqd": 1
+  },
+  {
+   "default": "200",
+   "description": "Maximum service requests returned by one store queue query.",
+   "fieldname": "service_queue_row_limit",
+   "fieldtype": "Int",
+   "label": "Service Queue Row Limit",
+   "reqd": 1
+  },
+  {
+   "default": "2000",
+   "description": "Maximum rows returned by one GoFix interactive report.",
+   "fieldname": "interactive_report_row_limit",
+   "fieldtype": "Int",
+   "label": "Interactive Report Row Limit",
+   "reqd": 1
+  },
+  {
+   "default": "Service Manager\nService Engineer\nGoFix Floor Manager",
+   "description": "Roles allowed to view technician workloads within their employee, company and warehouse scope.",
+   "fieldname": "technician_workload_roles",
+   "fieldtype": "Small Text",
+   "label": "Technician Workload Roles"
+  },
+  {
+   "default": "200",
+   "description": "Maximum active assignment rows evaluated by one technician workload request.",
+   "fieldname": "technician_workload_record_limit",
+   "fieldtype": "Int",
+   "label": "Technician Workload Record Limit",
+   "reqd": 1
+  },
+  {
+   "default": "500",
+   "description": "Maximum related records and final events assembled by one repair-history request.",
+   "fieldname": "repair_history_record_limit",
+   "fieldtype": "Int",
+   "label": "Repair History Record Limit",
+   "reqd": 1
+  },
+  {
+   "default": "100",
+   "description": "Maximum delivered serial numbers returned by one device lookup.",
+   "fieldname": "device_serial_lookup_limit",
+   "fieldtype": "Int",
+   "label": "Device Serial Lookup Limit",
+   "reqd": 1
+  },
+  {
+   "default": "200",
+   "description": "Maximum in-scope employees evaluated by technician recommendations.",
+   "fieldname": "technician_candidate_limit",
+   "fieldtype": "Int",
+   "label": "Technician Candidate Limit",
+   "reqd": 1
+  },
+  {
+   "default": "25",
+   "description": "Maximum ranked technicians returned by one recommendation request.",
+   "fieldname": "technician_recommendation_limit",
+   "fieldtype": "Int",
+   "label": "Technician Recommendation Limit",
+   "reqd": 1
+  },
+  {
+   "default": "Sales Manager\nSystem Manager\nService Manager\nStore Manager",
+   "fieldname": "store_operation_roles",
+   "fieldtype": "Small Text",
+   "label": "Store Operation Roles"
+  },
+  {
+   "default": "Sales Manager\nSystem Manager\nService Manager\nService Engineer",
+   "fieldname": "engineer_operation_roles",
+   "fieldtype": "Small Text",
+   "label": "Engineer Operation Roles"
+  },
+  {
+   "default": "Service Manager\nService Engineer\nGoFix Floor Manager",
+   "fieldname": "job_assignment_creation_roles",
+   "fieldtype": "Small Text",
+   "label": "Job Assignment Creation Roles"
+  },
+  {
+   "default": "Service Manager\nGoFix Floor Manager",
+   "fieldname": "job_assignment_manager_roles",
+   "fieldtype": "Small Text",
+   "label": "Job Assignment Manager Roles"
+  },
+  {
+   "default": "System Manager",
+   "fieldname": "warehouse_setup_roles",
+   "fieldtype": "Small Text",
+   "label": "Warehouse Setup Roles"
+  },
+  {
+   "default": "QC Manager\nStore Manager\nSystem Manager",
+   "fieldname": "qc_approval_roles",
+   "fieldtype": "Small Text",
+   "label": "QC Approval Roles"
+  },
+  {
+   "default": "Service Manager",
+   "fieldname": "service_notification_roles",
+   "fieldtype": "Small Text",
+   "label": "Service Notification Roles"
+  },
+  {
+   "default": "100",
+   "description": "Maximum enabled, scoped business users or emails returned for one operational notification.",
+   "fieldname": "notification_recipient_limit",
+   "fieldtype": "Int",
+   "label": "Notification Recipient Limit",
+   "non_negative": 1,
+   "reqd": 1
+  },
+  {
+   "default": "600",
+   "fieldname": "delivery_otp_ttl_seconds",
+   "fieldtype": "Int",
+   "label": "Delivery OTP Validity (Seconds)",
+   "reqd": 1
+  },
+  {
+   "default": "5",
+   "fieldname": "otp_request_limit",
+   "fieldtype": "Int",
+   "label": "OTP Requests per Window",
+   "reqd": 1
+  },
+  {
+   "default": "3600",
+   "fieldname": "otp_request_window_seconds",
+   "fieldtype": "Int",
+   "label": "OTP Request Window (Seconds)",
+   "reqd": 1
+  },
+  {
+   "default": "10",
+   "fieldname": "otp_verify_limit",
+   "fieldtype": "Int",
+   "label": "OTP Verifications per Window",
+   "reqd": 1
+  },
+  {
+   "default": "300",
+   "fieldname": "otp_verify_window_seconds",
+   "fieldtype": "Int",
+   "label": "OTP Verification Window (Seconds)",
+   "reqd": 1
+  },
+  {
+   "default": "5",
+   "fieldname": "otp_max_attempts",
+   "fieldtype": "Int",
+   "label": "OTP Maximum Attempts",
+   "reqd": 1
+  },
+  {
+   "default": "900",
+   "fieldname": "otp_lockout_seconds",
+   "fieldtype": "Int",
+   "label": "OTP Lockout (Seconds)",
+   "reqd": 1
+  },
+  {
+   "default": "600",
+   "fieldname": "remote_billing_otp_ttl_seconds",
+   "fieldtype": "Int",
+   "label": "Remote Billing OTP Validity (Seconds)",
+   "reqd": 1
+  },
+  {
+   "default": "1800",
+   "fieldname": "remote_billing_consent_ttl_seconds",
+   "fieldtype": "Int",
+   "label": "Remote Billing Consent Validity (Seconds)",
+   "reqd": 1
+  },
+  {
+   "fieldname": "service_section",
+   "fieldtype": "Section Break",
+   "label": "Service Controls"
+  },
+  {
+   "default": "10",
+   "fieldname": "technician_workload_warning_count",
+   "fieldtype": "Int",
+   "label": "Technician Workload Warning Count",
+   "reqd": 1
+  },
+  {
+   "default": "1000",
+   "fieldname": "max_job_estimated_hours",
+   "fieldtype": "Int",
+   "label": "Maximum Job Estimated Hours",
+   "reqd": 1
+  },
+  {
+   "default": "10",
+   "fieldname": "vip_customer_request_threshold",
+   "fieldtype": "Int",
+   "label": "VIP Customer Request Threshold",
+   "reqd": 1
+  },
+  {
+   "default": "3",
+   "fieldname": "estimate_expiry_days",
+   "fieldtype": "Int",
+   "label": "Estimate Expiry (Days)",
+   "reqd": 1
+  },
+  {
+   "default": "3",
+   "fieldname": "service_hub_overdue_threshold",
+   "fieldtype": "Int",
+   "label": "Service Hub Overdue Insight Count",
+   "non_negative": 1,
+   "reqd": 1
+  },
+  {
+   "default": "20",
+   "fieldname": "service_hub_active_backlog_threshold",
+   "fieldtype": "Int",
+   "label": "Service Hub Active Backlog Count",
+   "non_negative": 1,
+   "reqd": 1
+  },
+  {
+   "default": "7",
+   "fieldname": "service_hub_tat_threshold_days",
+   "fieldtype": "Int",
+   "label": "Service Hub TAT Insight (Days)",
+   "non_negative": 1,
+   "reqd": 1
+  },
+  {
+   "default": "30",
+   "fieldname": "repeat_repair_window_days",
+   "fieldtype": "Int",
+   "label": "Repeat Repair Window (Days)",
+   "non_negative": 1,
+   "reqd": 1
+  },
+  {
+   "default": "90",
+   "fieldname": "technician_performance_window_days",
+   "fieldtype": "Int",
+   "label": "Technician Performance Window (Days)",
+   "non_negative": 1,
+   "reqd": 1
+  },
+  {
+   "default": "180",
+   "fieldname": "technician_skill_window_days",
+   "fieldtype": "Int",
+   "label": "Technician Skill Window (Days)",
+   "non_negative": 1,
+   "reqd": 1
+  },
+  {
+   "default": "70",
+   "fieldname": "technician_recommendation_high_score",
+   "fieldtype": "Int",
+   "label": "Highly Recommended Technician Score",
+   "non_negative": 1,
+   "reqd": 1
+  },
+  {
+   "default": "50",
+   "fieldname": "technician_recommendation_score",
+   "fieldtype": "Int",
+   "label": "Recommended Technician Score",
+   "non_negative": 1,
+   "reqd": 1
+  },
+  {
+   "default": "30",
+   "fieldname": "technician_available_score",
+   "fieldtype": "Int",
+   "label": "Available Technician Score",
+   "non_negative": 1,
+   "reqd": 1
+  },
+  {
+   "fieldname": "scheduler_section",
+   "fieldtype": "Section Break",
+   "label": "Scheduler Controls"
+  },
+  {
+   "default": "500",
+   "description": "Maximum Service Request or Service Order rows updated by one daily scheduler job.",
+   "fieldname": "scheduler_batch_limit",
+   "fieldtype": "Int",
+   "label": "Daily Scheduler Batch Limit",
+   "non_negative": 1,
+   "reqd": 1
+  },
+  {
+   "default": "15",
+   "description": "Days after completion before an undelivered device is flagged as unclaimed.",
+   "fieldname": "unclaimed_device_days",
+   "fieldtype": "Int",
+   "label": "Unclaimed Device Threshold (Days)",
+   "non_negative": 1,
+   "reqd": 1
+  },
+  {
+   "default": "30",
+   "description": "Days after creation before an untouched draft Service Request is expired.",
+   "fieldname": "stale_request_expiry_days",
+   "fieldtype": "Int",
+   "label": "Stale Request Expiry (Days)",
+   "non_negative": 1,
+   "reqd": 1
+  },
+  {
+   "default": "500",
+   "description": "Maximum active Service Requests evaluated by one recurring SLA sweep.",
+   "fieldname": "sla_scheduler_batch_limit",
+   "fieldtype": "Int",
+   "label": "SLA Scheduler Batch Limit",
+   "non_negative": 1,
+   "reqd": 1
+  },
+  {
+   "default": "2000",
+   "description": "Maximum active SLA rules loaded once for an SLA sweep.",
+   "fieldname": "sla_rule_limit",
+   "fieldtype": "Int",
+   "label": "SLA Rule Limit",
+   "non_negative": 1,
+   "reqd": 1
+  },
+  {
+   "default": "120",
+   "description": "Percentage of target time at which level-two SLA escalation begins.",
+   "fieldname": "sla_level_2_percent",
+   "fieldtype": "Int",
+   "label": "SLA Level Two Threshold (%)",
+   "non_negative": 1,
+   "reqd": 1
+  },
+  {
+   "default": "900",
+   "description": "Minimum seconds between repeated warning notifications for one Service Request.",
+   "fieldname": "sla_warning_repeat_seconds",
+   "fieldtype": "Int",
+   "label": "SLA Warning Repeat (Seconds)",
+   "non_negative": 1,
+   "reqd": 1
+  },
+  {
+   "default": "3600",
+   "description": "Minimum seconds between repeated escalation notifications for one Service Request and level.",
+   "fieldname": "sla_escalation_repeat_seconds",
+   "fieldtype": "Int",
+   "label": "SLA Escalation Repeat (Seconds)",
+   "non_negative": 1,
+   "reqd": 1
+  },
+  {
+   "default": "7",
+   "fieldname": "default_service_delivery_days",
+   "fieldtype": "Int",
+   "label": "Default Service Delivery (Days)",
+   "reqd": 1
+  },
+  {
+   "default": "30",
+   "fieldname": "default_repair_warranty_days",
+   "fieldtype": "Int",
+   "label": "Default Repair Warranty (Days)",
+   "reqd": 1
+  },
+  {
+   "default": "2080",
+   "description": "Annual working hours used to derive an hourly labor rate from Employee CTC when no explicit hourly rate is set.",
+   "fieldname": "annual_working_hours",
+   "fieldtype": "Int",
+   "label": "Annual Working Hours",
+   "reqd": 1
+  },
+  {
+   "default": "5",
+   "fieldname": "default_labor_rate_per_minute",
+   "fieldtype": "Float",
+   "label": "Default Labor Rate per Minute",
+   "reqd": 1
+  },
+  {
+   "default": "30",
+   "fieldname": "default_solution_minutes",
+   "fieldtype": "Int",
+   "label": "Default Solution Duration (Minutes)",
+   "reqd": 1
+  },
+  {
+   "default": "3",
+   "fieldname": "spare_procurement_lead_days",
+   "fieldtype": "Int",
+   "label": "Spare Procurement Lead Time (Days)",
+   "reqd": 1
+  },
+  {
+   "default": "3",
+   "fieldname": "not_repairable_insight_threshold",
+   "fieldtype": "Int",
+   "label": "Not Repairable Insight Threshold",
+   "reqd": 1
+  },
+  {
+   "default": "5",
+   "fieldname": "public_lookup_failure_limit",
+   "fieldtype": "Int",
+   "label": "Public Lookup Failure Limit",
+   "reqd": 1
+  },
+  {
+   "default": "3600",
+   "fieldname": "public_lookup_lockout_seconds",
+   "fieldtype": "Int",
+   "label": "Public Lookup Lockout (Seconds)",
+   "reqd": 1
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "issingle": 1,
+ "modified": "2026-07-22 00:00:00.000000",
+ "module": "GoFix Services",
+ "name": "GoFix Settings",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "read": 1,
+   "role": "System Manager",
+   "write": 1
+  },
+  {
+   "read": 1,
+   "role": "Service Manager",
+   "write": 0
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

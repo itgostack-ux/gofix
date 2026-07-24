@@ -24,3 +24,4 @@ gofix.patches.seed_gofix_token_masters #2026-07-18 v4 — IRIS-style category + 
 gofix.patches.backfill_job_assignment_actual_hours #2026-07-18 - recover active technician time from status history
 gofix.patches.seed_gofix_service_masters #2026-07-18 v6 — OEM-style QC packs for all categories, universal (company-blank) templates
 gofix.patches.seed_below_cost_exception_type #2026-07-19 - CH Exception Type for Ops Hub below-cost billing gate
+gofix.patches.hash_service_request_tracking_tokens

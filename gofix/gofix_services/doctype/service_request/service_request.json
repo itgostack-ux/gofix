@@ -11,6 +11,8 @@
   "section_customer_info",
   "customer",
   "customer_name",
+  "ch_customer_id",
+  "ch_membership_id",
   "customer_type",
   "visit_type",
   "contact_number",
@@ -103,6 +105,7 @@
   "column_break_referral",
   "request_number",
   "tracking_token",
+  "tracking_token_salt",
   "is_barcode_generated",
   "section_service_items",
   "service_items",
@@ -756,10 +759,20 @@
    "fieldname": "tracking_token",
    "fieldtype": "Data",
    "hidden": 1,
-   "label": "Tracking Token",
+   "label": "Tracking Token Digest",
    "no_copy": 1,
    "read_only": 1,
+   "permlevel": 1,
    "unique": 1
+  },
+  {
+   "fieldname": "tracking_token_salt",
+   "fieldtype": "Data",
+   "hidden": 1,
+   "label": "Tracking Token Salt",
+   "no_copy": 1,
+   "read_only": 1,
+   "permlevel": 1
   },
   {
    "default": "0",
@@ -1188,7 +1201,10 @@
    "fieldname": "discount_approved_by",
    "fieldtype": "Link",
    "label": "Discount Approved By",
-   "options": "User"
+   "options": "User",
+   "no_copy": 1,
+   "read_only": 1,
+   "permlevel": 1
   },
   {
    "fieldname": "discount_approval_reason",
@@ -1200,7 +1216,9 @@
    "fieldtype": "Link",
    "label": "Exception Request",
    "options": "CH Exception Request",
-   "read_only": 1
+   "read_only": 1,
+   "no_copy": 1,
+   "permlevel": 1
   },
   {
    "collapsible": 1,
@@ -1255,14 +1273,19 @@
    "fieldname": "substitution_approved_by",
    "fieldtype": "Link",
    "label": "Substitution Approved By",
-   "options": "User"
+   "options": "User",
+   "no_copy": 1,
+   "read_only": 1,
+   "permlevel": 1
   },
   {
    "fieldname": "substitution_exception_request",
    "fieldtype": "Link",
    "label": "Substitution Exception",
    "options": "CH Exception Request",
-   "read_only": 1
+   "read_only": 1,
+   "no_copy": 1,
+   "permlevel": 1
   },
   {
    "fieldname": "section_status_log",
@@ -1325,98 +1348,123 @@
  "owner": "Administrator",
  "permissions": [
   {
-   "create": 1,
-   "delete": 1,
-   "email": 1,
-   "export": 1,
-   "print": 1,
-   "read": 1,
-   "report": 1,
    "role": "System Manager",
-   "share": 1,
-   "submit": 1,
-   "write": 1
-  },
-  {
-   "create": 1,
-   "delete": 1,
-   "email": 1,
-   "export": 1,
-   "print": 1,
    "read": 1,
-   "report": 1,
-   "role": "Sales Manager",
-   "share": 1,
-   "submit": 1,
-   "write": 1
-  },
-  {
-   "create": 1,
-   "email": 1,
-   "export": 1,
-   "print": 1,
-   "read": 1,
-   "report": 1,
-   "role": "Sales User",
-   "share": 1,
-   "submit": 1,
-   "write": 1
-  },
-  {
-   "email": 1,
-   "export": 1,
-   "print": 1,
-   "read": 1,
-   "report": 1,
-   "role": "Customer",
-   "share": 1
-  },
-  {
-   "create": 1,
-   "delete": 1,
-   "email": 1,
-   "export": 1,
-   "print": 1,
-   "read": 1,
-   "report": 1,
-   "role": "Service Manager",
-   "share": 1,
-   "submit": 1,
    "write": 1,
-   "cancel": 1,
-   "amend": 1
-  },
-  {
    "create": 1,
-   "email": 1,
-   "export": 1,
-   "print": 1,
-   "read": 1,
-   "report": 1,
-   "role": "Service Engineer",
-   "share": 1,
+   "delete": 1,
    "submit": 1,
-   "write": 1
+   "cancel": 1,
+   "amend": 1,
+   "email": 1,
+   "export": 1,
+   "import": 1,
+   "print": 1,
+   "report": 1,
+   "share": 1
   },
   {
+   "role": "System Manager",
+   "permlevel": 1,
+   "read": 1,
+   "write": 1,
+   "create": 1
+  },
+  {
+   "role": "Service Manager",
+   "permlevel": 1,
+   "read": 1
+  },
+  {
+   "role": "Sales Manager",
+   "permlevel": 1,
+   "read": 1
+  },
+  {
+   "role": "Sales Manager",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "submit": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "report": 1,
+   "share": 1
+  },
+  {
+   "role": "Sales User",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "submit": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "report": 1,
+   "share": 1
+  },
+  {
+   "role": "Customer",
+   "read": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "report": 1,
+   "share": 1
+  },
+  {
+   "role": "Service Manager",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "submit": 1,
+   "cancel": 1,
+   "amend": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "report": 1,
+   "share": 1
+  },
+  {
+   "role": "Service Engineer",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "submit": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "report": 1,
+   "share": 1
+  },
+  {
+   "role": "Service User",
+   "read": 1,
+   "write": 1,
    "create": 1,
    "email": 1,
    "export": 1,
    "print": 1,
-   "read": 1,
    "report": 1,
-   "role": "Service User",
-   "share": 1,
-   "write": 1
+   "share": 1
   },
   {
+   "role": "Service Viewer",
+   "read": 1,
    "email": 1,
    "export": 1,
    "print": 1,
-   "read": 1,
    "report": 1,
-   "role": "Service Viewer",
    "share": 1
+  },
+  {
+   "role": "GoFix Floor Manager",
+   "read": 1,
+   "write": 1
   }
  ],
  "sort_field": "modified",

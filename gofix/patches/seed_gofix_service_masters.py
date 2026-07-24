@@ -17,8 +17,7 @@ ever seeded, so every consumer returned empty. This patch loads:
 Deliberately NOT seeded (ops/company data, not master data):
 
 * Solution Spare Mapping & GoFix Spare Compatible Model — they link real
-  spare-part Items with prices; use ``gofix/fixtures/sample_data.py`` on dev
-  sites, map real items in production.
+  spare-part Items with prices and must be mapped explicitly per tenant.
 * GoFix Repair Cost Template / GoFix Pricing Rule — per-company pricing.
 * Service Order State / Transition — legacy of the pre-Frappe-Workflow state
   machine; the live workflow ships as fixtures.
@@ -106,8 +105,7 @@ _SOLUTIONS = [
 
 
 # ---------------------------------------------------------------------------
-# Walk-in sources & withdrawal reasons (promoted from fixtures/sample_data.py —
-# these are real masters consumed by Service Request, not demo data)
+# Walk-in sources & withdrawal reasons consumed by Service Request.
 # ---------------------------------------------------------------------------
 
 _WALKIN_SOURCES = [

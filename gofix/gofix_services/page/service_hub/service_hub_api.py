@@ -4,45 +4,74 @@ import frappe
 from frappe import _
 from frappe.utils import flt, nowdate, get_first_day, cint, getdate, date_diff
 
-# Import scope-aware filter builder (H7)
-try:
-    from ch_erp15.ch_erp15.scope import intersect_filters
-except ImportError:
-    # Fallback if ch_erp15 not available (unrestricted mode)
-    def intersect_filters(**kwargs):
-        return {
-            "company": kwargs.get("company"),
-            "store": kwargs.get("store"),
-            "allowed_stores": None,
-            "allowed_warehouses": None,
-        }
+from gofix.config import get_int_setting, require_role_setting
+from gofix.security import get_user_service_scope
+
+
+def _check_hub_access() -> None:
+    require_role_setting(
+        "app_access_roles",
+        ("Service Manager", "Service Engineer", "Service Viewer", "Service User"),
+        action=_("open the GoFix app"),
+    )
+    require_role_setting(
+        "service_dashboard_roles",
+        ("Service Manager", "Service Viewer", "GoFix Floor Manager"),
+        action=_("view the Service Hub"),
+    )
+    frappe.has_permission("Service Request", ptype="read", throw=True)
 
 
 def _build_filters(company=None, store=None, from_date=None, to_date=None):
-    # SECURITY (H7): Enforce user's company/store scope
-    eff = intersect_filters(company=company, store=store)
-    company = eff["company"]
-    store = eff["store"]
-    allowed_stores = eff["allowed_stores"]  # None = unrestricted, [] = blocked, [list] = restricted
-
     prm = {}
     co = ""
+    wh = ""
+
+    scope = get_user_service_scope()
+    allowed_companies = None if scope is None else set(scope.get("companies") or ())
+    allowed_warehouses = None if scope is None else set(scope.get("warehouses") or ())
+
+    if company and allowed_companies is not None and company not in allowed_companies:
+        frappe.throw(_("Company {0} is outside your assigned scope.").format(company), frappe.PermissionError)
+    if store and allowed_warehouses is not None and store not in allowed_warehouses:
+        frappe.throw(_("Warehouse {0} is outside your assigned scope.").format(store), frappe.PermissionError)
+
+    if store:
+        store_company = frappe.db.get_value("Warehouse", store, "company")
+        if not store_company:
+            frappe.throw(_("Warehouse {0} was not found.").format(store))
+        if company and store_company != company:
+            frappe.throw(_("Warehouse and company do not match."), frappe.PermissionError)
+        if allowed_companies is not None and store_company not in allowed_companies:
+            frappe.throw(_("Warehouse company is outside your assigned scope."), frappe.PermissionError)
+
     if company:
         co = " AND sr.company = %(company)s"
         prm["company"] = company
-    wh = ""
+    elif allowed_companies is not None:
+        if not allowed_companies:
+            co = " AND 1=0"
+        else:
+            keys = []
+            for idx, value in enumerate(sorted(allowed_companies)):
+                key = f"scope_company_{idx}"
+                prm[key] = value
+                keys.append(f"%({key})s")
+            co = f" AND sr.company IN ({', '.join(keys)})"
+
     if store:
         wh = " AND sr.source_warehouse = %(store)s"
         prm["store"] = store
-    elif allowed_stores is not None:
-        # User has scope restrictions and no explicit store
-        if not allowed_stores:
-            # User has no accessible stores
+    elif allowed_warehouses is not None:
+        if not allowed_warehouses:
             wh = " AND 1=0"
         else:
-            # Restrict to user's allowed stores
-            st_in = "(" + ", ".join(frappe.db.escape(s) for s in allowed_stores) + ")"
-            wh = f" AND sr.source_warehouse IN {st_in}"
+            keys = []
+            for idx, value in enumerate(sorted(allowed_warehouses)):
+                key = f"scope_warehouse_{idx}"
+                prm[key] = value
+                keys.append(f"%({key})s")
+            wh = f" AND sr.source_warehouse IN ({', '.join(keys)})"
 
     from_date = str(getdate(from_date)) if from_date else None
     to_date = str(getdate(to_date)) if to_date else None
@@ -66,6 +95,7 @@ def _build_filters(company=None, store=None, from_date=None, to_date=None):
 @frappe.whitelist()
 def get_service_hub_data(company=None, store=None, from_date=None, to_date=None):
     """Service lifecycle dashboard: Intake → Accepted → In Service → Completed → Delivered → Invoiced."""
+    _check_hub_access()
     f = _build_filters(company, store, from_date, to_date)
     prm = f["prm"]
     co = f["co"]
@@ -250,22 +280,25 @@ def get_service_hub_data(company=None, store=None, from_date=None, to_date=None)
 
     # ── AI Insights ──
     ai_insights = []
-    if cint(overdue_count) > 3:
+    overdue_threshold = get_int_setting("service_hub_overdue_threshold", 3)
+    active_backlog_threshold = get_int_setting("service_hub_active_backlog_threshold", 20)
+    tat_threshold_days = get_int_setting("service_hub_tat_threshold_days", 7)
+    if cint(overdue_count) > overdue_threshold:
         ai_insights.append({
             "severity": "High", "title": f"{cint(overdue_count)} Overdue Service Requests",
             "detail": "Multiple SRs past expected completion date. Customer satisfaction at risk.",
             "action": "Prioritize overdue jobs and communicate updated timelines to customers."
         })
-    if total_active > 20:
+    if total_active > active_backlog_threshold:
         ai_insights.append({
             "severity": "Medium", "title": f"High Active Backlog ({total_active} jobs)",
             "detail": "Consider redistributing workload or adding temporary capacity.",
             "action": "Review technician load distribution in the Technician Load tab."
         })
-    if avg_tat > 7:
+    if avg_tat > tat_threshold_days:
         ai_insights.append({
             "severity": "Medium", "title": f"High Avg TAT ({avg_tat} days)",
-            "detail": "Average turnaround time exceeds 7 days. Investigate bottlenecks.",
+            "detail": f"Average turnaround time exceeds {tat_threshold_days} days. Investigate bottlenecks.",
             "action": "Check if specific issue categories or technicians are causing delays."
         })
     if not ai_insights:
@@ -284,7 +317,7 @@ def get_service_hub_data(company=None, store=None, from_date=None, to_date=None)
     }
 
     # AI insight for Not Repairable
-    if nr_count >= 3:
+    if nr_count >= get_int_setting("not_repairable_insight_threshold", 3):
         nr_rate = round(nr_count * 100 / max(total_all, 1), 1)
         ai_insights.append({
             "severity": "Medium",

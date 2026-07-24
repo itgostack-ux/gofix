@@ -2,6 +2,7 @@
 # Public customer repair tracking helpers.
 
 import hmac
+import hashlib
 import uuid
 
 import frappe
@@ -9,8 +10,19 @@ from frappe import _
 from frappe.rate_limiter import rate_limit
 from frappe.utils import cstr, flt
 
+from gofix.config import get_int_setting
 
 TRACKING_TOKEN_FIELD = "tracking_token"
+TRACKING_SALT_FIELD = "tracking_token_salt"
+
+
+def _atomic_public_counter(key: str, window: int) -> int:
+	cache_key = frappe.cache.make_key(key)
+	frappe.cache.set(cache_key, 0, nx=True, ex=window)
+	value = frappe.cache.incrby(cache_key, 1)
+	if frappe.cache.ttl(cache_key) < 0:
+		frappe.cache.expire(cache_key, window)
+	return int(value)
 
 
 def _client_ip() -> str:
@@ -20,12 +32,23 @@ def _client_ip() -> str:
 		return "unknown"
 
 
+def _check_public_lookup_rate(scope: str) -> None:
+	limit = get_int_setting("guest_rate_limit", 30)
+	window = get_int_setting("guest_rate_window_seconds", 3600, minimum=60)
+	key = f"gofix-public-tracking:{_client_ip()}:{scope}:{window}"
+	if _atomic_public_counter(key, window) > limit:
+		frappe.throw(
+			_("Too many tracking requests from your network. Please try again later."),
+			frappe.RateLimitExceededError,
+		)
+
+
 def _check_lookup_lockout(scope: str) -> None:
 	"""Block per IP/scope after repeated failed public lookups."""
 	ip = _client_ip()
-	key = f"track_repair_fail:{ip}:{scope}"
-	fails = int(frappe.cache().get_value(key) or 0)
-	if fails >= 5:
+	key = frappe.cache.make_key(f"track_repair_fail:{ip}:{scope}")
+	fails = int(frappe.cache.get(key) or 0)
+	if fails >= get_int_setting("public_lookup_failure_limit", 5):
 		frappe.throw(
 			_("Too many failed lookups from your network. Please try again later."),
 			frappe.PermissionError,
@@ -36,13 +59,15 @@ def _check_lookup_lockout(scope: str) -> None:
 def _record_lookup_failure(scope: str) -> None:
 	ip = _client_ip()
 	key = f"track_repair_fail:{ip}:{scope}"
-	fails = int(frappe.cache().get_value(key) or 0)
-	frappe.cache().set_value(key, fails + 1, expires_in_sec=3600)
+	_atomic_public_counter(
+		key,
+		get_int_setting("public_lookup_lockout_seconds", 3600, minimum=60),
+	)
 
 
 def _clear_lookup_failures(scope: str) -> None:
 	ip = _client_ip()
-	frappe.cache().delete_value(f"track_repair_fail:{ip}:{scope}")
+	frappe.cache.delete(frappe.cache.make_key(f"track_repair_fail:{ip}:{scope}"))
 
 
 def _tracking_column_exists() -> bool:
@@ -52,62 +77,152 @@ def _tracking_column_exists() -> bool:
 		return False
 
 
+def _salt_column_exists() -> bool:
+	try:
+		return frappe.db.has_column("Service Request", TRACKING_SALT_FIELD)
+	except Exception:
+		return False
+
+
 def _normalize_token(token: str | None) -> str:
 	return cstr(token).strip()
 
 
-def make_tracking_token(existing_name: str | None = None) -> str:
-	"""Create a unique random GUID token for a Service Request."""
+def tracking_token_digest(token: str | None) -> str:
+	token = _normalize_token(token)
+	if not token:
+		return ""
+	return f"sha256:{hashlib.sha256(token.encode()).hexdigest()}"
+
+
+def _site_tracking_key() -> bytes:
+	"""Server-side secret used to derive tracking tokens (never stored per document)."""
+	from frappe.utils.password import get_encryption_key
+
+	return cstr(get_encryption_key()).encode()
+
+
+def make_tracking_salt() -> str:
+	"""Mint a random per-document salt for deterministic token derivation."""
+	return uuid.uuid4().hex
+
+
+def derive_tracking_token(sr_name: str, salt: str | None) -> str:
+	"""Derive the tracking token as HMAC(site_key, sr_name + salt).
+
+	The plaintext token never rests in the database: only the random salt and
+	the sha256 digest of the derived token are stored. The token is therefore
+	reproducible server-side (stable customer links) until the salt is rotated.
+	"""
+	salt = _normalize_token(salt)
+	if not sr_name or not salt:
+		return ""
+	message = f"{cstr(sr_name)}:{salt}".encode()
+	return hmac.new(_site_tracking_key(), message, hashlib.sha256).hexdigest()
+
+
+def rotate_tracking_token(sr_name: str) -> str:
+	"""Mint a new salt for a Service Request, revoking all previously issued links."""
 	for _ in range(10):
-		token = str(uuid.uuid4())
-		filters = {TRACKING_TOKEN_FIELD: token}
-		if existing_name:
-			filters["name"] = ["!=", existing_name]
-		if not frappe.db.exists("Service Request", filters):
-			return token
+		salt = make_tracking_salt()
+		token = derive_tracking_token(sr_name, salt)
+		digest = tracking_token_digest(token)
+		if frappe.db.exists(
+			"Service Request",
+			{TRACKING_TOKEN_FIELD: digest, "name": ["!=", sr_name]},
+		):
+			continue
+		frappe.db.set_value(
+			"Service Request",
+			sr_name,
+			{TRACKING_TOKEN_FIELD: digest, TRACKING_SALT_FIELD: salt},
+			update_modified=False,
+		)
+		return token
 	frappe.throw(_("Could not generate a unique tracking token. Please retry."))
 
 
 def ensure_tracking_token(sr_name: str) -> str:
-	"""Return the stored Service Request tracking token, creating it if absent."""
-	if not _tracking_column_exists():
+	"""Return the Service Request's stable tracking token, minting it only once.
+
+	Repeat calls (one per outbound notification) reproduce the same token, so
+	earlier customer links keep working. Legacy rows minted before salted
+	derivation carry only a random-token digest; those are rotated once here
+	and are stable from then on. Explicit revocation = rotate_tracking_token.
+	"""
+	if not _tracking_column_exists() or not _salt_column_exists():
 		frappe.throw(
-			_("Service Request tracking token field is not installed. Please run migration."),
+			_("Service Request tracking token fields are not installed. Please run migration."),
 			frappe.ValidationError,
 		)
 
-	token = _normalize_token(frappe.db.get_value("Service Request", sr_name, TRACKING_TOKEN_FIELD))
-	if token:
-		return token
-
-	token = make_tracking_token(existing_name=sr_name)
-	frappe.db.set_value(
+	row = frappe.db.get_value(
 		"Service Request",
 		sr_name,
-		TRACKING_TOKEN_FIELD,
-		token,
-		update_modified=False,
+		[TRACKING_TOKEN_FIELD, TRACKING_SALT_FIELD],
+		as_dict=True,
 	)
-	return token
+	if not row:
+		frappe.throw(_("Service Request {0} not found").format(sr_name))
+
+	salt = _normalize_token(row.get(TRACKING_SALT_FIELD))
+	if salt:
+		token = derive_tracking_token(sr_name, salt)
+		digest = tracking_token_digest(token)
+		if cstr(row.get(TRACKING_TOKEN_FIELD)) != digest:
+			# Heal digest drift (e.g. rows restored without a matching digest).
+			frappe.db.set_value(
+				"Service Request",
+				sr_name,
+				TRACKING_TOKEN_FIELD,
+				digest,
+				update_modified=False,
+			)
+		return token
+
+	# Legacy Service Request without a salt: rotate once to the deterministic
+	# scheme. The previous random link is invalidated exactly as it was under
+	# the old mint-per-call behaviour; every later call is stable.
+	return rotate_tracking_token(sr_name)
 
 
 def _get_by_token(token):
 	"""Look up SR by stored random tracking token. No derived-token fallback."""
+	_check_public_lookup_rate("token")
 	_check_lookup_lockout("token")
 	token = _normalize_token(token)
 	if not token or not _tracking_column_exists():
 		_record_lookup_failure("token")
 		return None
 
+	digest = tracking_token_digest(token)
 	rows = frappe.get_all(
 		"Service Request",
 		filters={
-			TRACKING_TOKEN_FIELD: token,
+			TRACKING_TOKEN_FIELD: digest,
 			"status": ["not in", ["Cancelled"]],
 		},
 		pluck="name",
 		limit=1,
 	)
+	if not rows:
+		rows = frappe.get_all(
+			"Service Request",
+			filters={
+				TRACKING_TOKEN_FIELD: token,
+				"status": ["not in", ["Cancelled"]],
+			},
+			pluck="name",
+			limit=1,
+		)
+		if rows:
+			frappe.db.set_value(
+				"Service Request",
+				rows[0],
+				TRACKING_TOKEN_FIELD,
+				digest,
+				update_modified=False,
+			)
 	if rows:
 		_clear_lookup_failures("token")
 		return _build_tracking_data(rows[0])
@@ -117,7 +232,8 @@ def _get_by_token(token):
 
 
 def _get_by_phone(sr_name, phone_last4):
-	"""Verify SR exists and phone last-6 digits match."""
+	"""Verify SR exists and the provided phone suffix is exactly four digits."""
+	_check_public_lookup_rate("phone")
 	_check_lookup_lockout(f"phone:{sr_name}")
 	if not frappe.db.exists("Service Request", sr_name):
 		_record_lookup_failure(f"phone:{sr_name}")
@@ -127,10 +243,10 @@ def _get_by_phone(sr_name, phone_last4):
 	clean_phone = "".join(c for c in contact if c.isdigit())
 
 	provided = "".join(c for c in str(phone_last4 or "") if c.isdigit())
-	if len(clean_phone) < 6 or len(provided) < 4:
+	if len(clean_phone) < 4 or len(provided) != 4:
 		_record_lookup_failure(f"phone:{sr_name}")
 		return None
-	if not hmac.compare_digest(clean_phone[-6:], provided[-6:].rjust(6, "0")):
+	if not hmac.compare_digest(clean_phone[-4:], provided):
 		_record_lookup_failure(f"phone:{sr_name}")
 		return None
 
@@ -205,7 +321,7 @@ def _build_tracking_data(sr_name):
 	}
 
 
-@frappe.whitelist(allow_guest=True)
+@frappe.whitelist(allow_guest=True, methods=["POST"])
 @rate_limit(limit=30, seconds=300, methods=["POST"], ip_based=True)
 def get_tracking_data(sr_name=None, phone_last4=None, token=None) -> dict:
 	"""Public API for AJAX tracking lookups."""
@@ -229,44 +345,32 @@ def generate_tracking_url(sr_name):
 	return f"{site_url}/track-repair?token={token}"
 
 
-@frappe.whitelist(allow_guest=True)
+@frappe.whitelist(allow_guest=True, methods=["POST"])
 @rate_limit(limit=10, seconds=300, methods=["POST"], ip_based=True)
-def customer_estimate_action(sr_name, version_number, action, remarks=None, token=None, phone_last4=None) -> dict:
+def customer_estimate_action(sr_name, version_number, action, remarks=None, token=None) -> dict:
 	"""Allow customer to approve/reject an estimate from the tracking page.
 
-	Authentication: must provide either a valid stored token or SR + phone_last4.
+	Authentication requires the Service Request's stored high-entropy tracking token.
 	"""
-	verified = False
-	if token:
-		data = _get_by_token(token)
-		if data and data.get("name") == sr_name:
-			verified = True
-	elif phone_last4:
-		data = _get_by_phone(sr_name, phone_last4)
-		if data:
-			verified = True
-
-	if not verified:
-		frappe.throw(_("Access denied. Invalid token or phone number."), title=_("Validation Error"))
+	data = _get_by_token(token) if token else None
+	if not data or data.get("name") != sr_name:
+		frappe.throw(_("Access denied. A valid customer tracking token is required."), frappe.PermissionError)
 
 	if action not in ("approve", "reject"):
 		frappe.throw(_("Invalid action. Must be 'approve' or 'reject'."), title=_("Validation Error"))
 
 	version_number = int(version_number or 0)
 
-	from gofix.gofix_services.orchestration import customer_approve_estimate, customer_reject_estimate
+	from gofix.gofix_services.orchestration import _apply_customer_estimate_action
 
-	if action == "approve":
-		frappe.set_user("Administrator")
-		try:
-			result = customer_approve_estimate(sr_name, version_number, remarks)
-		finally:
-			frappe.set_user("Guest")
-		return {"ok": True, "message": result.get("message", "Approved")}
-
-	frappe.set_user("Administrator")
-	try:
-		result = customer_reject_estimate(sr_name, version_number, remarks)
-	finally:
-		frappe.set_user("Guest")
-	return {"ok": True, "message": result.get("message", "Rejected")}
+	result = _apply_customer_estimate_action(
+		sr_name,
+		version_number,
+		action,
+		remarks,
+		authorization="customer_token",
+	)
+	return {
+		"ok": True,
+		"message": result.get("message", "Approved" if action == "approve" else "Rejected"),
+	}

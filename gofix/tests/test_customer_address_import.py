@@ -78,7 +78,6 @@ class TestCustomerAddressImport(unittest.TestCase):
 		)
 		bulk_sync.assert_called_once_with(
 			customer_names=["CUST-0001", "CUST-0002"],
-			commit=True,
 		)
 
 

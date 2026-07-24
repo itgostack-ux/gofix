@@ -4,10 +4,68 @@
 import frappe
 from frappe import _
 from frappe.model.document import Document
-from frappe.utils import getdate, today, add_days, flt, nowdate
+from frappe.utils import add_days, cint, flt, getdate, nowdate, today
+
+from gofix.config import get_int_setting, get_setting, is_privileged_user, require_role_setting
+from gofix.security import assert_service_request_access
 
 
 class ServiceRequest(Document):
+	_APPROVAL_EVIDENCE_FIELDS = (
+		"discount_approved_by",
+		"discount_exception_request",
+		"substitution_approved_by",
+		"substitution_exception_request",
+	)
+
+	def _validate_approval_evidence(self):
+		before = self.get_doc_before_save() if not self.is_new() else None
+		if before is None:
+			if any(self.get(fieldname) for fieldname in self._APPROVAL_EVIDENCE_FIELDS):
+				frappe.throw(_("Approval identity and evidence are server-managed."), frappe.PermissionError)
+			return
+		if any(
+			self.get(fieldname) != before.get(fieldname)
+			for fieldname in self._APPROVAL_EVIDENCE_FIELDS
+		):
+			frappe.throw(
+				_("Approval identity and exception evidence can only be changed through authorized actions."),
+				frappe.PermissionError,
+			)
+		if before.discount_approved_by and any(
+			self.get(fieldname) != before.get(fieldname)
+			for fieldname in ("service_discount_percent", "service_discount_amount")
+		):
+			frappe.throw(_("Request a new approval before changing an approved service discount."))
+		if before.substitution_approved_by and any(
+			self.get(fieldname) != before.get(fieldname)
+			for fieldname in ("original_serial_no", "replacement_serial_no")
+		):
+			frappe.throw(_("Request a new approval before changing an approved serial substitution."))
+
+	def _approved_exception_actor(self, exception_name):
+		if not exception_name:
+			return None
+		evidence = frappe.db.get_value(
+			"CH Exception Request",
+			exception_name,
+			(
+				"status",
+				"approver",
+				"resolved_by",
+				"reference_doctype",
+				"reference_name",
+			),
+			as_dict=True,
+		)
+		if not evidence:
+			frappe.throw(_("The linked exception request does not exist."), frappe.ValidationError)
+		if evidence.reference_doctype != self.doctype or evidence.reference_name != self.name:
+			frappe.throw(_("The linked exception request belongs to another document."), frappe.PermissionError)
+		if evidence.status not in ("Approved", "Auto-Approved"):
+			return None
+		return evidence.approver or evidence.resolved_by
+
 	def before_insert(self):
 		"""Set defaults before first insert"""
 		self.set_warehouse_defaults()
@@ -16,13 +74,28 @@ class ServiceRequest(Document):
 		self.ensure_tracking_token()
 
 	def ensure_tracking_token(self):
-		"""Assign a random public tracking token to new Service Requests."""
+		"""Mint the per-document tracking salt; the token digest is derived after naming."""
+		if not self.meta.has_field("tracking_token_salt") or self.get("tracking_token_salt"):
+			return
+		from gofix.tracking import make_tracking_salt
+		self.tracking_token_salt = make_tracking_salt()
+
+	def after_insert(self):
+		self._store_tracking_token_digest()
+
+	def _store_tracking_token_digest(self):
+		"""Persist the digest of the deterministic tracking token once the name exists."""
 		if not self.meta.has_field("tracking_token") or self.get("tracking_token"):
 			return
-		from gofix.tracking import make_tracking_token
-		self.tracking_token = make_tracking_token(existing_name=self.name)
+		salt = self.get("tracking_token_salt")
+		if not salt:
+			return
+		from gofix.tracking import derive_tracking_token, tracking_token_digest
+		token = derive_tracking_token(self.name, salt)
+		self.db_set("tracking_token", tracking_token_digest(token), update_modified=False)
 	
 	def validate(self):
+		self._validate_approval_evidence()
 		self.detect_customer_type()
 		self.detect_visit_type()
 		self.check_open_requests()
@@ -38,11 +111,26 @@ class ServiceRequest(Document):
 		self.validate_dates()
 		self.validate_mandatory_fields()
 		self.validate_issue_solution_cascade()
+		self._validate_customer_estimate_decision()
 		self.sync_decision_to_status()
 		self._validate_serial_substitution()
 		self._validate_service_discount()
 		self._validate_warranty_claim_cap()
 		self._detect_repeat_complaint()
+
+	def _validate_customer_estimate_decision(self):
+		if self.is_new() or self.flags.get("customer_estimate_authorized") or self.flags.get("estimate_decision_override"):
+			return
+		before = self.get_doc_before_save()
+		if not before:
+			return
+		previous = {row.name: row.status for row in (before.get("estimate_versions") or [])}
+		for row in self.get("estimate_versions") or []:
+			if row.status in ("Customer Approved", "Customer Rejected") and previous.get(row.name) != row.status:
+				frappe.throw(
+					_("Customer estimate decisions must use the authenticated customer action or audited override endpoint."),
+					frappe.PermissionError,
+				)
 
 	def before_save(self):
 		"""Generate barcode if not exists and fetch warehouse details"""
@@ -167,15 +255,12 @@ class ServiceRequest(Document):
 		gstin = (self.gstin or '').strip().upper()
 		self.customer_type = 'B2B' if self._GSTIN_RE.match(gstin) else 'B2C'
 
-	# VIP threshold — customers with this many or more prior service requests
-	_VIP_THRESHOLD = 10
-
 	def detect_visit_type(self):
 		"""Auto-classify customer lifecycle tier (industry-standard CRM segmentation).
 
 		New     — first visit, no prior Service Requests in system.
-		Regular — returning customer (1 – (_VIP_THRESHOLD-1) prior requests).
-		VIP     — high-value loyal customer (_VIP_THRESHOLD+ prior requests).
+		Regular — returning customer below the configured VIP threshold.
+		VIP     — high-value loyal customer at or above the configured threshold.
 
 		This mirrors the 'Customer Classification' concept in SAP SD / Oracle CX /
 		Microsoft Dynamics and is kept separate from customer_type (B2B/B2C) which
@@ -189,10 +274,11 @@ class ServiceRequest(Document):
 			'Service Request',
 			filters={'customer': self.customer, 'name': ['!=', self.name or '']}
 		)
+		vip_threshold = get_int_setting("vip_customer_request_threshold", 10)
 
 		if prior_count == 0:
 			self.visit_type = 'New'
-		elif prior_count < self._VIP_THRESHOLD:
+		elif prior_count < vip_threshold:
 			self.visit_type = 'Regular'
 		else:
 			self.visit_type = 'VIP'
@@ -499,7 +585,7 @@ class ServiceRequest(Document):
 			self.set("actual_completion_date", completion_date)
 
 		if self.meta.has_field("repair_warranty_expiry") and not self.repair_warranty_expiry:
-			warranty_days = self.repair_warranty_days or 30
+			warranty_days = self.repair_warranty_days or get_int_setting("default_repair_warranty_days", 30)
 			self.db_set(
 				"repair_warranty_expiry",
 				add_days(completion_date, warranty_days),
@@ -554,7 +640,7 @@ class ServiceRequest(Document):
 			return
 		try:
 			from ch_item_master.ch_item_master.doctype.ch_serial_lifecycle.ch_serial_lifecycle import (
-				update_lifecycle_status,
+				update_lifecycle_status_for_document as update_lifecycle_status,
 			)
 			update_lifecycle_status(
 				serial_no=serial_no,
@@ -588,8 +674,7 @@ class ServiceRequest(Document):
 		revenue. Order of preference:
 
 		  1. a service item the Service Request itself declares;
-		  2. ``Company.gofix_default_service_item``;
-		  3. an Item literally coded ``Repair Service``.
+		  2. ``Company.gofix_default_service_item``.
 
 		If none resolves we raise rather than guess.
 		"""
@@ -608,16 +693,11 @@ class ServiceRequest(Document):
 		if configured and self._is_billable_item(configured):
 			return configured
 
-		conventional = "Repair Service"
-		if self._is_billable_item(conventional):
-			return conventional
-
 		frappe.throw(
 			_(
 				"No repair service item is configured for {0}, so the Service "
 				"Order cannot be billed.<br><br>Set <b>Default Repair Service "
-				"Item</b> on the Company, or create an enabled, non-stock sales "
-				"Item coded <b>Repair Service</b>."
+				"Item</b> on the Company or declare a service item on this request."
 			).format(frappe.bold(self.company or "-")),
 			title=_("Service Item Missing"),
 		)
@@ -648,7 +728,10 @@ class ServiceRequest(Document):
 		so.company = self.company
 		so.transaction_date = frappe.utils.today()
 		# Use the expected completion date from Service Request, default to 7 days
-		so.delivery_date = self.expected_completion_date or frappe.utils.add_days(frappe.utils.today(), 7)
+		default_delivery_days = get_int_setting("default_service_delivery_days", 7)
+		so.delivery_date = self.expected_completion_date or frappe.utils.add_days(
+			frappe.utils.today(), default_delivery_days
+		)
 		
 		# Set company address for GST compliance (required for India GST)
 		company_address = frappe.db.get_value("Dynamic Link",
@@ -699,7 +782,9 @@ class ServiceRequest(Document):
 		so.warranty_expiry_date = self.warranty_expiry_date
 		so.warranty_plan = self.warranty_plan
 		so.warranty_deductible = self.warranty_deductible
-		so.estimated_delivery_date = frappe.utils.add_days(frappe.utils.today(), 7)  # Default 7 days
+		so.estimated_delivery_date = frappe.utils.add_days(
+			frappe.utils.today(), default_delivery_days
+		)
 		
 		# Copy Warehouse/Location — ensure warehouse belongs to the SO company
 		_wh = self.source_warehouse
@@ -736,7 +821,8 @@ class ServiceRequest(Document):
 		
 		# Save and link
 		try:
-			so.insert(ignore_permissions=True)
+			frappe.has_permission("Sales Order", "create", throw=True)
+			so.insert()
 			
 			# Update Service Request with Service Order link using db_set (document is submitted)
 			self.db_set("service_order", so.name, update_modified=False)
@@ -746,9 +832,9 @@ class ServiceRequest(Document):
 				indicator="green")
 			
 			return so.name
-		except Exception as e:
-			frappe.log_error(f"Error creating Service Order: {str(e)}")
-			frappe.throw(_("Error creating Service Order: {0}").format(str(e)), title=_("Service Request Error"))
+		except Exception:
+			frappe.log_error(frappe.get_traceback(), f"Error creating Service Order for {self.name}")
+			frappe.throw(_("The Service Order could not be created. Review the server error log."), title=_("Service Request Error"))
 
 	def calculate_costs(self):
 		"""Calculate total costs from service items and spare parts"""
@@ -860,52 +946,28 @@ class ServiceRequest(Document):
 				reference_name=self.name,
 			)
 		except frappe.DoesNotExistError:
-			# The Active VAS Plans row was deleted after this SR captured it.
-			# Log and continue — the SR itself is still valid.
 			frappe.log_error(
 				f"Service Request {self.name}: linked Active VAS Plan "
 				f"{self.active_warranty_plan} no longer exists",
 				"VAS Claim Consumption",
 			)
+			frappe.throw(_("The linked active warranty plan no longer exists."))
 		except Exception:
-			# Never block the SR submission on a coverage-counter failure —
-			# finance can reconcile via CH VAS Ledger reports.
 			frappe.log_error(
 				frappe.get_traceback(),
 				f"VAS record_claim failed from Service Request {self.name}",
 			)
+			frappe.throw(_("Warranty claim usage could not be recorded. Service processing is blocked."))
 
 	@frappe.whitelist()
-	def get_device_details(self) -> None:
-		"""Fetch device item details"""
-		if self.device_item:
-			item = frappe.get_doc("Item", self.device_item)
-			self.device_item_name = item.item_name
-			self.brand = item.brand
-			
-			# Fetch serial nos for this item
-			serial_nos = frappe.get_all("Serial No",
-				filters={"item_code": self.device_item, "status": "Delivered"},
-				fields=["name", "warehouse"])
-			
-			return serial_nos
+	def get_device_details(self) -> list:
+		"""Fetch device details within this request's customer and store scope."""
+		return _get_scoped_device_details(self)
 
 	@frappe.whitelist()
-	def get_open_requests(self) -> None:
-		"""Get list of open requests for this customer"""
-		if self.customer:
-			open_requests = frappe.get_all("Service Request",
-				filters={
-					"customer": self.customer,
-					"status": ["in", ["Open", "In Progress", "On Hold"]],
-					"walkin_status": "Accepted",
-					"name": ["!=", self.name]
-				},
-				fields=["name", "service_date", "device_item_name", "status", 
-						"advance_amount", "issue_description", "assigned_technician"],
-				order_by="service_date desc")
-			
-			return open_requests
+	def get_open_requests(self) -> list:
+		"""Get permission-filtered open requests for this customer."""
+		return _get_scoped_open_requests(self)
 
 	def create_service_invoice(self):
 		"""Create Sales Invoice for completed service with service items and spare parts"""
@@ -942,7 +1004,8 @@ class ServiceRequest(Document):
 				"allocated_amount": min(self.advance_amount, invoice.grand_total)
 			})
 		
-		invoice.insert(ignore_permissions=True)
+		frappe.has_permission("Sales Invoice", "create", throw=True)
+		invoice.insert()
 		invoice.submit()
 		
 		self._set_optional_field("service_invoice", invoice.name)
@@ -1042,7 +1105,8 @@ class ServiceRequest(Document):
 			"remarks": f"Spare parts consumed for Service Request {self.name}"
 		})
 		
-		stock_entry.insert(ignore_permissions=True)
+		frappe.has_permission("Stock Entry", "create", throw=True)
+		stock_entry.insert()
 		stock_entry.submit()
 		
 		self._set_optional_field("stock_entry", stock_entry.name)
@@ -1312,24 +1376,24 @@ class ServiceRequest(Document):
 					"status": "Active",
 					"company": self.company or frappe.defaults.get_user_default("Company")
 				})
-				serial_no.insert(ignore_permissions=True)
+				frappe.has_permission("Serial No", "create", throw=True)
+				serial_no.insert()
 				frappe.msgprint(
 					_("Barcode {0} generated and Serial No created").format(barcode),
 					indicator="green",
 					alert=True
 				)
-		except Exception as e:
-			frappe.log_error(message=str(e), title="Serial No Creation Error")
-			frappe.msgprint(
-				_("Barcode generated but Serial No creation failed: {0}").format(str(e)),
-				indicator="orange",
-				alert=True
+		except Exception:
+			frappe.log_error(frappe.get_traceback(), "Serial No Creation Error")
+			frappe.throw(
+				_("The barcode could not be registered as a Serial No. Review the server error log."),
+				title=_("Serial No Creation Error"),
 			)
 
 	# ── Repeat Complaint Detection ───────────────────────────────────
 
 	def _detect_repeat_complaint(self):
-		"""Detect if same device + same issue category was serviced within last 30 days.
+		"""Detect a repeat repair within the configured business window.
 
 		Sets is_repeat_complaint flag and links previous SR for audit trail.
 		"""
@@ -1340,7 +1404,7 @@ class ServiceRequest(Document):
 		if self.get("is_repeat_complaint"):
 			return
 
-		repeat_window_days = 30
+		repeat_window_days = get_int_setting("repeat_repair_window_days", 30)
 
 		previous = frappe.db.sql("""
 			SELECT name, service_date, issue_category, decision
@@ -1375,7 +1439,8 @@ class ServiceRequest(Document):
 		if self.replacement_serial_no == self.original_serial_no:
 			return
 
-		if not self.substitution_approved_by:
+		actor = self._approved_exception_actor(self.substitution_exception_request)
+		if not actor:
 			frappe.throw(
 				_("Serial substitution from {0} to {1} requires manager approval.").format(
 					frappe.bold(self.original_serial_no),
@@ -1383,10 +1448,8 @@ class ServiceRequest(Document):
 				),
 				title=_("Serial Substitution — Approval Required"),
 			)
-
-		# Log exception request
-		if not self.substitution_exception_request:
-			self._create_serial_sub_exception()
+		if self.substitution_approved_by != actor:
+			frappe.throw(_("Serial substitution approval identity does not match its exception."), frappe.PermissionError)
 
 	def _create_serial_sub_exception(self):
 		"""Create a CH Exception Request for serial substitution."""
@@ -1399,7 +1462,7 @@ class ServiceRequest(Document):
 			)
 			return
 		try:
-			from ch_item_master.ch_item_master.exception_api import raise_exception, approve_exception
+			from ch_item_master.ch_item_master.exception_api import raise_exception
 			result = raise_exception(
 				exception_type="Serial Substitution",
 				company=self.company,
@@ -1412,13 +1475,6 @@ class ServiceRequest(Document):
 			)
 			if result and result.get("name"):
 				self.substitution_exception_request = result["name"]
-				if self.substitution_approved_by and result.get("status") == "Pending":
-					approve_exception(
-						exception_name=result["name"],
-						approver_user=self.substitution_approved_by,
-						channel="Manager PIN",
-						remarks=f"Old: {self.original_serial_no} → New: {self.replacement_serial_no}",
-					)
 		except ImportError:
 			# GF-2 fix: Explicit error when ch_item_master not installed
 			frappe.throw(
@@ -1439,7 +1495,8 @@ class ServiceRequest(Document):
 		if not flt(self.service_discount_percent) and not flt(self.service_discount_amount):
 			return
 
-		if not self.discount_approved_by:
+		actor = self._approved_exception_actor(self.discount_exception_request)
+		if not actor:
 			frappe.throw(
 				_("Service discount of {0}% / ₹{1} requires manager approval.").format(
 					self.service_discount_percent or 0,
@@ -1447,9 +1504,8 @@ class ServiceRequest(Document):
 				),
 				title=_("Service Discount — Approval Required"),
 			)
-
-		if not self.discount_exception_request:
-			self._create_service_discount_exception()
+		if self.discount_approved_by != actor:
+			frappe.throw(_("Service discount approval identity does not match its exception."), frappe.PermissionError)
 
 	# ── Warranty Plan Claim Cap (#18) ────────────────────────────────
 
@@ -1533,60 +1589,87 @@ class ServiceRequest(Document):
 					title=_("Annual Warranty Claim Cap Reached"),
 				)
 
-	def _create_service_discount_exception(self):
-		"""Create a CH Exception Request for service discount."""
-		if not frappe.db.exists("CH Exception Type", "Service Discount"):
-			frappe.msgprint(
-				_("CH Exception Type 'Service Discount' not found. "
-				  "Exception request was not created. Please configure it in CH Item Master."),
-				indicator="orange", alert=True,
-			)
-			return
-		try:
-			from ch_item_master.ch_item_master.exception_api import raise_exception, approve_exception
-			result = raise_exception(
-				exception_type="Service Discount",
-				company=self.company,
-				reason=self.discount_approval_reason or "Service discount",
-				requested_value=flt(self.service_discount_amount) or flt(self.estimated_cost) * flt(self.service_discount_percent) / 100,
-				original_value=flt(self.estimated_cost),
-				reference_doctype="Service Request",
-				reference_name=self.name,
-				store_warehouse=self.source_warehouse,
-				customer=self.customer,
-			)
-			if result and result.get("name"):
-				self.discount_exception_request = result["name"]
-				if self.discount_approved_by and result.get("status") == "Pending":
-					approve_exception(
-						exception_name=result["name"],
-						approver_user=self.discount_approved_by,
-						channel="Manager PIN",
-					)
-		except ImportError:
-			frappe.throw(
-				_("ch_item_master app is required for service discount exceptions but is not installed."),
-				title=_("Missing App Dependency"),
-			)
-		except Exception:
-			frappe.log_error("Service discount exception creation failed")
-			frappe.throw(
-				_("Failed to create service discount exception request. Check error log."),
-				title=_("Exception Request Failed"),
-			)
-
-
 # API Methods
+def _require_service_lookup_access(action):
+	require_role_setting("service_access_roles", action=action)
+	frappe.has_permission("Service Request", ptype="read", throw=True)
+
+
+def _request_warehouse_anchors(doc) -> set[str]:
+	return {
+		value for value in (
+			doc.get("source_warehouse"),
+			doc.get("current_location"),
+			doc.get("current_processing_location"),
+			doc.get("transferred_to_store"),
+		) if value
+	}
+
+
+def _get_scoped_device_details(service_request) -> list:
+	_require_service_lookup_access(_("view device details"))
+	doc = assert_service_request_access(service_request, permission_type="read")
+	if not doc.get("device_item") or not doc.get("customer"):
+		return []
+
+	customer = frappe.get_doc("Customer", doc.customer)
+	customer.check_permission("read")
+	item = frappe.get_doc("Item", doc.device_item)
+	item.check_permission("read")
+	doc.device_item_name = item.item_name
+	doc.brand = item.brand
+
+	frappe.has_permission("Serial No", ptype="read", throw=True)
+	row_limit = min(get_int_setting("device_serial_lookup_limit", 100), 500)
+	return frappe.get_list(
+		"Serial No",
+		filters={
+			"item_code": doc.device_item,
+			"customer": doc.customer,
+			"status": "Delivered",
+		},
+		fields=["name", "warehouse"],
+		order_by="modified desc",
+		limit_page_length=row_limit,
+	)
+
+
+def _get_scoped_open_requests(service_request) -> list:
+	_require_service_lookup_access(_("view customer service history"))
+	doc = assert_service_request_access(service_request, permission_type="read")
+	if not doc.get("customer"):
+		return []
+
+	customer = frappe.get_doc("Customer", doc.customer)
+	customer.check_permission("read")
+	filters = {
+		"customer": doc.customer,
+		"name": ["!=", doc.name],
+		"decision": ["in", ["Draft", "Accepted", "In Service"]],
+		"walkin_status": "Accepted",
+	}
+	if doc.get("company"):
+		filters["company"] = doc.company
+
+	row_limit = min(get_int_setting("service_history_limit", 25), 100)
+	return frappe.get_list(
+		"Service Request",
+		filters=filters,
+		fields=["name", "service_date", "device_item_name", "status", "advance_amount"],
+		order_by="service_date desc, name desc",
+		limit_page_length=row_limit,
+	)
+
+
 @frappe.whitelist()
 def get_customer_details(customer) -> dict:
 	"""Get customer details including contact info (whitelisted for client-side calls)"""
 	if not customer:
 		return {}
-	
+	_require_service_lookup_access(_("view customer details"))
 	result = {}
-	frappe.has_permission("Customer", "read", customer, throw=True)
-	
 	customer_doc = frappe.get_doc("Customer", customer)
+	customer_doc.check_permission("read")
 	result['customer_name'] = customer_doc.customer_name
 	result['gstin'] = customer_doc.gstin if hasattr(customer_doc, 'gstin') else None
 	result['pan'] = customer_doc.pan if hasattr(customer_doc, 'pan') else None
@@ -1603,6 +1686,7 @@ def get_customer_details(customer) -> dict:
 	
 	if contacts:
 		contact = frappe.get_doc("Contact", contacts[0].parent)
+		contact.check_permission("read")
 		result['mobile_no'] = contact.mobile_no
 		result['email_id'] = contact.email_id
 	
@@ -1610,31 +1694,13 @@ def get_customer_details(customer) -> dict:
 
 @frappe.whitelist()
 def get_open_requests(name) -> list:
-	"""Get open service requests for the same customer"""
-	doc = frappe.get_doc("Service Request", name)
-	doc.check_permission("read")
-	
-	if not doc.customer:
-		return []
-	
-	# Get other open requests for this customer
-	open_requests = frappe.get_all("Service Request",
-		filters={
-			"customer": doc.customer,
-			"name": ["!=", name],
-			"status": ["in", ["Open", "In Progress", "Waiting for Parts", "Ready for Delivery"]]
-		},
-		fields=["name", "service_date", "device_item_name", "status", "advance_amount"],
-		order_by="service_date desc",
-		limit=10)
-	
-	return open_requests
+	"""Get permission-filtered open service requests for the same customer."""
+	return _get_scoped_open_requests(name)
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def generate_barcode_manual(name) -> dict:
 	"""Manually generate barcode for a service request"""
-	doc = frappe.get_doc("Service Request", name)
-	doc.check_permission("write")
+	doc = _get_locked_service_request(name)
 	
 	# Temporarily reset the flag to allow regeneration
 	doc.is_barcode_generated = 0
@@ -1642,7 +1708,7 @@ def generate_barcode_manual(name) -> dict:
 	
 	# Generate new barcode
 	doc.generate_barcode()
-	doc.save(ignore_permissions=True)
+	doc.save()
 	
 	return doc.serial_no
 
@@ -1656,13 +1722,25 @@ def _safe_set_sr_workflow_state(doc, value):
 	if frappe.db.has_column("Service Request", "workflow_state"):
 		doc.db_set("workflow_state", value, update_modified=False)
 
-@frappe.whitelist()
+
+def _get_locked_service_request(service_request):
+	doc = assert_service_request_access(service_request, permission_type="write")
+	if not frappe.db.get_value("Service Request", doc.name, "name", for_update=True):
+		frappe.throw(_("Service Request {0} no longer exists.").format(doc.name), frappe.DoesNotExistError)
+	doc.reload()
+	return assert_service_request_access(doc, permission_type="write")
+
+@frappe.whitelist(methods=["POST"])
 def accept_service_request(service_request) -> dict:
 	"""Accept Service Request and create Service Order
 	
 	This method handles accepting submitted Service Requests
 	"""
-	frappe.only_for(["Sales Manager", "System Manager", "Service Manager"])
+	require_role_setting(
+		"sales_operation_roles",
+		("Sales Manager", "System Manager", "Service Manager", "Sales User"),
+		action=_("accept a service request"),
+	)
 	doc = frappe.get_doc("Service Request", service_request)
 	doc.check_permission("write")
 	
@@ -1691,19 +1769,22 @@ def accept_service_request(service_request) -> dict:
 	try:
 		from gofix.gofix_services.page.gofix_ops_hub.gofix_ops_hub import _log_ops_stage
 		_log_ops_stage(service_request, "draft", "analysis")
-		frappe.db.commit()
 	except Exception:
-		pass  # timeline logging should never block acceptance
+		frappe.log_error(frappe.get_traceback(), f"Failed to log acceptance timeline for {service_request}")
 	
 	return doc.service_order
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def reject_service_request(service_request, rejection_reason) -> bool:
 	"""Reject Service Request
 	
 	This method handles rejecting submitted Service Requests
 	"""
-	frappe.only_for(["Sales Manager", "System Manager", "Service Manager"])
+	require_role_setting(
+		"sales_operation_roles",
+		("Sales Manager", "System Manager", "Service Manager", "Sales User"),
+		action=_("reject a service request"),
+	)
 	doc = frappe.get_doc("Service Request", service_request)
 	doc.check_permission("write")
 	
@@ -1803,21 +1884,157 @@ def complete_service_request(service_request, completion_date=None):
 	doc.ensure_completion_artifacts()
 	return doc.name
 
-@frappe.whitelist()
+
+@frappe.whitelist(methods=["POST"])
+def request_service_discount(
+	service_request,
+	discount_percent=0,
+	discount_amount=0,
+	reason=None,
+):
+	doc = _get_locked_service_request(service_request)
+	discount_percent = flt(discount_percent)
+	discount_amount = flt(discount_amount)
+	if discount_percent < 0 or discount_percent > 100 or discount_amount < 0:
+		frappe.throw(_("Discount percentage must be 0-100 and amount cannot be negative."))
+	if not discount_percent and not discount_amount:
+		frappe.throw(_("Enter a discount percentage or amount."))
+	if flt(doc.estimated_cost) and discount_amount > flt(doc.estimated_cost):
+		frappe.throw(_("Discount amount cannot exceed the estimated service cost."))
+
+	frappe.db.set_value(
+		"Service Request",
+		doc.name,
+		{
+			"service_discount_percent": discount_percent,
+			"service_discount_amount": discount_amount,
+			"discount_approval_reason": reason or _("Service discount requested"),
+			"discount_approved_by": None,
+			"discount_exception_request": None,
+		},
+		update_modified=True,
+	)
+
+	from ch_item_master.ch_item_master.exception_api import raise_exception
+
+	requested_value = discount_amount or flt(doc.estimated_cost) * discount_percent / 100
+	result = raise_exception(
+		exception_type="Service Discount",
+		company=doc.company,
+		reason=reason or _("Service discount requested"),
+		requested_value=requested_value,
+		original_value=flt(doc.estimated_cost),
+		reference_doctype="Service Request",
+		reference_name=doc.name,
+		store_warehouse=doc.source_warehouse,
+		customer=doc.customer,
+	)
+	exception_name = result.get("name") if result else None
+	if not exception_name:
+		frappe.throw(_("The service discount exception could not be created."))
+	evidence = frappe.db.get_value(
+		"CH Exception Request",
+		exception_name,
+		["status", "approver", "resolved_by"],
+		as_dict=True,
+	)
+	approved_by = (
+		(evidence.approver or evidence.resolved_by)
+		if evidence and evidence.status in ("Approved", "Auto-Approved")
+		else None
+	)
+	frappe.db.set_value(
+		"Service Request",
+		doc.name,
+		{
+			"discount_exception_request": exception_name,
+			"discount_approved_by": approved_by,
+		},
+		update_modified=False,
+	)
+	return {
+		"status": result.get("status") or "Pending",
+		"service_request": doc.name,
+		"exception_request": exception_name,
+		"approved_by": approved_by,
+	}
+
+
+@frappe.whitelist(methods=["POST"])
+def approve_service_discount(
+	service_request,
+	approver_user=None,
+	remarks=None,
+	otp_code=None,
+	otp_mobile=None,
+):
+	require_role_setting(
+		"service_manager_roles",
+		("Service Manager", "System Manager"),
+		action=_("approve a service discount"),
+	)
+	doc = _get_locked_service_request(service_request)
+	actor = frappe.session.user
+	if approver_user and approver_user != actor:
+		frappe.throw(_("Approver identity is derived from the authenticated session."), frappe.PermissionError)
+	if not doc.discount_exception_request:
+		frappe.throw(_("Request service discount approval before approving it."))
+
+	from ch_item_master.ch_item_master.exception_api import approve_exception
+
+	approve_exception(
+		exception_name=doc.discount_exception_request,
+		approver_user=actor,
+		channel="Workflow Approval",
+		otp_code=otp_code,
+		otp_mobile=otp_mobile,
+		remarks=remarks,
+	)
+	frappe.db.set_value(
+		"Service Request",
+		doc.name,
+		"discount_approved_by",
+		actor,
+		update_modified=True,
+	)
+	return {
+		"status": "Approved",
+		"service_request": doc.name,
+		"exception_request": doc.discount_exception_request,
+		"approved_by": actor,
+	}
+
+@frappe.whitelist(methods=["POST"])
 def request_item_replacement(service_request, original_serial_no, replacement_serial_no, reason=None):
 	"""Open a formal replacement request on a submitted Service Request."""
-	doc = frappe.get_doc("Service Request", service_request)
-	doc.check_permission("write")
+	doc = _get_locked_service_request(service_request)
 
 	if not original_serial_no or not replacement_serial_no:
 		frappe.throw(_("Original and replacement serial numbers are required."))
 	if original_serial_no == replacement_serial_no:
 		frappe.throw(_("Replacement serial number must be different from the original serial number."))
+	if doc.get("serial_no") and original_serial_no != doc.serial_no:
+		frappe.throw(
+			_("Original serial number does not match the Service Request."),
+			frappe.ValidationError,
+		)
+	for serial_no in (original_serial_no, replacement_serial_no):
+		serial_doc = frappe.get_doc("Serial No", serial_no)
+		serial_doc.check_permission("read")
+	if doc.get("device_item"):
+		replacement_item = frappe.db.get_value("Serial No", replacement_serial_no, "item_code")
+		if replacement_item != doc.device_item:
+			frappe.throw(
+				_("Replacement serial number does not belong to the Service Request item."),
+				frappe.ValidationError,
+			)
 
 	updates = {
 		"original_serial_no": original_serial_no,
 		"replacement_serial_no": replacement_serial_no,
 		"substitution_reason": reason or _("Replacement requested during service"),
+		"substitution_approved_by": None,
+		"substitution_exception_request": None,
 	}
 	frappe.db.set_value("Service Request", doc.name, updates, update_modified=True)
 	doc.reload()
@@ -1846,7 +2063,7 @@ def request_item_replacement(service_request, original_serial_no, replacement_se
 			),
 		)
 	except Exception:
-		pass
+		frappe.log_error(frappe.get_traceback(), f"Failed to audit replacement request for {doc.name}")
 
 	return {
 		"status": "Requested",
@@ -1857,14 +2074,33 @@ def request_item_replacement(service_request, original_serial_no, replacement_se
 	}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def approve_item_replacement(service_request, approver_user=None, remarks=None):
 	"""Approve a pending item replacement request."""
-	frappe.only_for(["Sales Manager", "System Manager", "Service Manager"])
-	doc = frappe.get_doc("Service Request", service_request)
-	doc.check_permission("write")
+	require_role_setting(
+		"service_manager_roles",
+		("Service Manager", "System Manager"),
+		action=_("approve an item replacement"),
+	)
+	doc = _get_locked_service_request(service_request)
 
-	approver_user = approver_user or frappe.session.user
+	actor = frappe.session.user
+	if approver_user and approver_user != actor:
+		frappe.throw(
+			_("Approver identity is derived from the authenticated session."),
+			frappe.PermissionError,
+		)
+	approver_user = actor
+	if not doc.substitution_exception_request:
+		frappe.throw(_("A linked substitution exception is required before approval."))
+	from ch_item_master.ch_item_master.exception_api import approve_exception
+
+	approve_exception(
+		exception_name=doc.substitution_exception_request,
+		approver_user=approver_user,
+		channel="Workflow Approval",
+		remarks=remarks or _("Approved from Service Request replacement workflow"),
+	)
 	frappe.db.set_value(
 		"Service Request",
 		doc.name,
@@ -1873,29 +2109,13 @@ def approve_item_replacement(service_request, approver_user=None, remarks=None):
 		update_modified=True,
 	)
 	doc.reload()
-
-	if doc.substitution_exception_request:
-		try:
-			from ch_item_master.ch_item_master.exception_api import approve_exception
-			approve_exception(
-				exception_name=doc.substitution_exception_request,
-				approver_user=approver_user,
-				channel="Workflow Approval",
-				remarks=remarks or _("Approved from Service Request replacement workflow"),
-			)
-		except Exception:
-			frappe.log_error(frappe.get_traceback(), _("Replacement approval sync failed for {0}").format(doc.name))
-
-	try:
-		doc.add_comment(
-			"Comment",
-			_("Item replacement approved by {0}. {1}").format(
-				approver_user,
-				remarks or "",
-			),
-		)
-	except Exception:
-		pass
+	doc.add_comment(
+		"Comment",
+		_("Item replacement approved by {0}. {1}").format(
+			approver_user,
+			remarks or "",
+		),
+	)
 
 	return {
 		"status": "Approved",
@@ -1905,20 +2125,37 @@ def approve_item_replacement(service_request, approver_user=None, remarks=None):
 	}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def complete_item_replacement(service_request, replacement_serial_no=None, completed_by=None):
 	"""Finalize the approved serial substitution on the Service Request."""
-	doc = frappe.get_doc("Service Request", service_request)
-	doc.check_permission("write")
+	require_role_setting(
+		"service_manager_roles",
+		("Service Manager", "System Manager"),
+		action=_("complete an item replacement"),
+	)
+	doc = _get_locked_service_request(service_request)
+	actor = frappe.session.user
+	if completed_by and completed_by != actor:
+		frappe.throw(
+			_("Completion identity is derived from the authenticated session."),
+			frappe.PermissionError,
+		)
 
 	if replacement_serial_no and replacement_serial_no != doc.replacement_serial_no:
-		frappe.db.set_value("Service Request", doc.name, "replacement_serial_no", replacement_serial_no, update_modified=True)
-		doc.reload()
+		frappe.throw(
+			_("The approved replacement serial number cannot be changed during completion."),
+			frappe.ValidationError,
+		)
 
 	if not doc.original_serial_no or not doc.replacement_serial_no:
 		frappe.throw(_("Replacement request details are incomplete."))
 	if not doc.substitution_approved_by:
 		frappe.throw(_("Replacement approval is required before completion."))
+	exception_status = frappe.db.get_value(
+		"CH Exception Request", doc.substitution_exception_request, "status"
+	)
+	if exception_status not in ("Approved", "Auto-Approved"):
+		frappe.throw(_("The linked substitution exception is not approved."))
 
 	updates = {}
 	if doc.meta.has_field("serial_no"):
@@ -1928,20 +2165,14 @@ def complete_item_replacement(service_request, replacement_serial_no=None, compl
 	if updates:
 		frappe.db.set_value("Service Request", doc.name, updates, update_modified=True)
 
-	try:
-		frappe.get_doc({
-			"doctype": "Comment",
-			"comment_type": "Info",
-			"reference_doctype": "Service Request",
-			"reference_name": doc.name,
-			"content": _("Replacement completed by {0}: {1} replaced with {2}").format(
-				completed_by or frappe.session.user,
-				doc.original_serial_no,
-				doc.replacement_serial_no,
-			),
-		}).insert(ignore_permissions=True)
-	except Exception:
-		pass
+	doc.add_comment(
+		"Info",
+		_("Replacement completed by {0}: {1} replaced with {2}").format(
+			actor,
+			doc.original_serial_no,
+			doc.replacement_serial_no,
+		),
+	)
 
 	return {
 		"status": "Completed",
@@ -1958,10 +2189,14 @@ def get_device_item_details(item_code: str) -> dict:
 	the template.  This function falls back to the template brand so the
 	Service Request and Quick Intake always show the correct brand.
 	"""
-	item = frappe.get_cached_doc("Item", item_code)
+	_require_service_lookup_access(_("view device item details"))
+	item = frappe.get_doc("Item", item_code)
+	item.check_permission("read")
 	brand = item.brand or ""
 	if not brand and item.variant_of:
-		brand = frappe.db.get_value("Item", item.variant_of, "brand") or ""
+		template = frappe.get_doc("Item", item.variant_of)
+		template.check_permission("read")
+		brand = template.brand or ""
 	return {"item_name": item.item_name, "brand": brand}
 
 
@@ -1973,38 +2208,39 @@ def get_warehouse_state(warehouse) -> dict:
 	"""
 	if not warehouse:
 		return {}
-	
-	try:
-		warehouse_doc = frappe.get_doc("Warehouse", warehouse)
-		
-		# Try to get from warehouse address
-		if warehouse_doc.address:
-			address = frappe.get_doc("Address", warehouse_doc.address)
+	_require_service_lookup_access(_("view warehouse state"))
+	warehouse_doc = frappe.get_doc("Warehouse", warehouse)
+	warehouse_doc.check_permission("read")
+	from gofix.scope_guard import assert_warehouse
+
+	assert_warehouse(warehouse=warehouse, company=warehouse_doc.company)
+	if warehouse_doc.address:
+		address = frappe.get_doc("Address", warehouse_doc.address)
+		address.check_permission("read")
+		return {
+			"state_name": address.state or "",
+			"state_code": address.get("gst_state_number") or "",
+		}
+	if warehouse_doc.company:
+		company = frappe.get_doc("Company", warehouse_doc.company)
+		company.check_permission("read")
+		company_addresses = frappe.get_all(
+			"Dynamic Link",
+			filters={
+				"link_doctype": "Company",
+				"link_name": warehouse_doc.company,
+				"parenttype": "Address",
+			},
+			fields=["parent"],
+			limit=1,
+		)
+		if company_addresses:
+			address = frappe.get_doc("Address", company_addresses[0].parent)
+			address.check_permission("read")
 			return {
 				"state_name": address.state or "",
-				"state_code": address.get("gst_state_number") or ""
+				"state_code": address.get("gst_state_number") or "",
 			}
-		
-		# Fallback: Try company address
-		if warehouse_doc.company:
-			company_addresses = frappe.get_all("Dynamic Link",
-				filters={
-					"link_doctype": "Company",
-					"link_name": warehouse_doc.company,
-					"parenttype": "Address"
-				},
-				fields=["parent"],
-				limit=1)
-			
-			if company_addresses:
-				address = frappe.get_doc("Address", company_addresses[0].parent)
-				return {
-					"state_name": address.state or "",
-					"state_code": address.get("gst_state_number") or ""
-				}
-	except Exception as e:
-		frappe.log_error(f"Error fetching warehouse state: {str(e)}")
-	
 	return {}
 
 
@@ -2026,7 +2262,12 @@ def _get_active_address(customer_doc, address_type="Billing"):
 
 
 @frappe.whitelist()
-def get_customer_billing_address(customer):
+def get_customer_billing_address(
+	customer,
+	service_request=None,
+	company=None,
+	warehouse=None,
+):
 	"""Return the active Billing CH Customer Address for *customer*.
 
 	Called from the SR form JS after customer is selected.
@@ -2034,30 +2275,61 @@ def get_customer_billing_address(customer):
 	"""
 	if not customer:
 		return None
+	_require_service_lookup_access(_("view a customer billing address"))
+
+	if service_request:
+		doc = assert_service_request_access(service_request, permission_type="read")
+		if doc.get("customer") != customer:
+			frappe.throw(_("Customer does not match the Service Request."), frappe.PermissionError)
+		if company and doc.get("company") != company:
+			frappe.throw(_("Company does not match the Service Request."), frappe.PermissionError)
+		if warehouse and warehouse not in _request_warehouse_anchors(doc):
+			frappe.throw(_("Warehouse does not match the Service Request."), frappe.PermissionError)
+	elif not is_privileged_user():
+		if not company or not warehouse:
+			frappe.throw(
+				_("Company and warehouse are required for a new Service Request."),
+				frappe.PermissionError,
+			)
+		frappe.has_permission("Service Request", ptype="create", throw=True)
+		company_doc = frappe.get_doc("Company", company)
+		company_doc.check_permission("read")
+		warehouse_doc = frappe.get_doc("Warehouse", warehouse)
+		warehouse_doc.check_permission("read")
+		if warehouse_doc.company != company:
+			frappe.throw(_("Warehouse does not belong to the selected company."), frappe.PermissionError)
+		from gofix.scope_guard import assert_warehouse
+
+		assert_warehouse(warehouse=warehouse, company=company)
+
 	customer_doc = frappe.get_doc("Customer", customer)
+	customer_doc.check_permission("read")
 	addr = _get_active_address(customer_doc, "Billing")
 	if not addr:
 		return None
 	return {
 		"address_line1": addr.address_line1,
 		"address_line2": addr.address_line2 or "",
-                "city": addr.city_name or addr.city,
-		"country": addr.country or "India",
+		"city": addr.city_name or addr.city,
+		"state": addr.state or "",
+		"state_code": addr.state_code or "",
+		"pincode": addr.pincode or "",
+		"country": addr.country or get_setting("company_country", ""),
 		"gstin": addr.gstin or "",
 	}
 
 
-def flag_unclaimed_devices(days_threshold=15):
-	"""Daily scheduler: Flag devices not picked up after completion.
-
-	Service Requests with decision in (Completed, Invoiced) and no delivery
-	date for more than *days_threshold* days are marked unclaimed.
-	"""
+def flag_unclaimed_devices(days_threshold=None):
+	"""Flag one bounded batch of completed, undelivered devices."""
 	from frappe.utils import add_days, today
 
+	days_threshold = max(
+		cint(days_threshold) or get_int_setting("unclaimed_device_days", 15, minimum=1),
+		1,
+	)
+	batch_limit = min(get_int_setting("scheduler_batch_limit", 500, minimum=1), 5000)
 	cutoff = add_days(today(), -days_threshold)
-
-	unclaimed = frappe.db.get_all(
+	rows = frappe.get_all(
 		"Service Request",
 		filters={
 			"decision": ["in", ["Completed", "Invoiced"]],
@@ -2066,17 +2338,25 @@ def flag_unclaimed_devices(days_threshold=15):
 			"modified": ["<=", cutoff],
 		},
 		pluck="name",
+		order_by="modified asc, name asc",
+		limit=batch_limit + 1,
 	)
-
-	for name in unclaimed:
-		frappe.db.set_value("Service Request", name, {
-			"unclaimed_flag": 1,
-			"unclaimed_date": today(),
-		}, update_modified=False)
-
+	unclaimed = rows[:batch_limit]
 	if unclaimed:
-		frappe.db.commit()
+		frappe.db.sql(
+			"""
+				UPDATE `tabService Request`
+				SET `unclaimed_flag` = 1, `unclaimed_date` = %(today)s
+				WHERE `name` IN %(names)s
+				  AND `decision` IN ('Completed', 'Invoiced')
+				  AND `unclaimed_flag` = 0
+				  AND `docstatus` = 1
+				  AND `modified` <= %(cutoff)s
+			""",
+			{"names": tuple(unclaimed), "today": today(), "cutoff": cutoff},
+		)
 		frappe.logger("gofix").info(f"Flagged {len(unclaimed)} unclaimed devices")
+	return {"flagged": len(unclaimed), "has_more": len(rows) > batch_limit}
 
 
 def ensure_service_order_on_accept(doc, method=None):
@@ -2092,17 +2372,17 @@ def ensure_service_order_on_accept(doc, method=None):
 		)
 
 
-def auto_expire_stale_requests(days_threshold=30):
-	"""Daily scheduler: expire Draft Service Requests older than threshold.
-
-	SRs still in Draft (no acceptance, no SO) after 30 days are unlikely
-	to convert. Mark them Expired so they stop cluttering the queue.
-	"""
+def auto_expire_stale_requests(days_threshold=None):
+	"""Expire one bounded batch of untouched draft Service Requests."""
 	from frappe.utils import add_days, today
 
+	days_threshold = max(
+		cint(days_threshold) or get_int_setting("stale_request_expiry_days", 30, minimum=1),
+		1,
+	)
+	batch_limit = min(get_int_setting("scheduler_batch_limit", 500, minimum=1), 5000)
 	cutoff = add_days(today(), -days_threshold)
-
-	stale = frappe.db.get_all(
+	rows = frappe.get_all(
 		"Service Request",
 		filters={
 			"decision": "Draft",
@@ -2111,49 +2391,33 @@ def auto_expire_stale_requests(days_threshold=30):
 			"creation": ["<=", cutoff],
 		},
 		pluck="name",
+		order_by="creation asc, name asc",
+		limit=batch_limit + 1,
 	)
-
-	for name in stale:
-		frappe.db.set_value("Service Request", name, {
-			"decision": "Expired",
-			"status": "Expired",
-		}, update_modified=True)
-
+	stale = rows[:batch_limit]
 	if stale:
-		frappe.db.commit()
+		now = frappe.utils.now_datetime()
+		frappe.db.sql(
+			"""
+				UPDATE `tabService Request`
+				SET `decision` = 'Expired',
+				    `status` = 'Expired',
+				    `modified` = %(modified)s,
+				    `modified_by` = %(actor)s
+				WHERE `name` IN %(names)s
+				  AND `decision` = 'Draft'
+				  AND `docstatus` < 2
+				  AND (`service_order` IS NULL OR `service_order` = '')
+				  AND `creation` <= %(cutoff)s
+			""",
+			{
+				"names": tuple(stale),
+				"cutoff": cutoff,
+				"modified": now,
+				"actor": frappe.session.user,
+			},
+		)
 		frappe.logger("gofix").info(
 			f"Auto-expired {len(stale)} stale Draft SRs older than {days_threshold} days"
 		)
-
-
-def bulk_create_so_for_orphans():
-	"""One-time utility: create SOs for Accepted SRs that have no service_order.
-
-	Run via: bench --site <site> execute gofix.gofix_services.doctype.service_request.service_request.bulk_create_so_for_orphans
-	"""
-	orphans = frappe.get_all(
-		"Service Request",
-		filters={
-			"decision": ["in", ["Accepted", "In Service"]],
-			"service_order": ["in", [None, ""]],
-			"docstatus": ["<", 2],
-		},
-		pluck="name",
-	)
-
-	created = 0
-	failed = []
-	for sr_name in orphans:
-		try:
-			doc = frappe.get_doc("Service Request", sr_name)
-			doc.create_service_order()
-			created += 1
-			frappe.logger("gofix").info(f"Created SO for orphan SR {sr_name}")
-		except Exception as e:
-			failed.append({"sr": sr_name, "error": str(e)})
-			frappe.log_error(f"Failed to create SO for {sr_name}: {e}")
-
-	frappe.db.commit()
-	print(f"Created {created} SOs, {len(failed)} failures")
-	for f in failed:
-		print(f"  FAILED: {f['sr']} — {f['error']}")
+	return {"expired": len(stale), "has_more": len(rows) > batch_limit}

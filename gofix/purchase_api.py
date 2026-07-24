@@ -4,6 +4,9 @@ import frappe
 from frappe import _
 from frappe.utils import add_days, flt, nowdate
 
+from gofix.config import get_int_setting
+from gofix.scope_guard import assert_warehouse
+
 
 def _store_for_warehouse(warehouse):
 	"""CH Store owning a warehouse (None for hub bins without a store row)."""
@@ -105,7 +108,7 @@ def reroute_open_spare_procurement(sr, new_warehouse) -> dict:
 			se.remarks = f"Spare re-route for {sr.name}: follow device to {new_warehouse}"
 			for r in se_rows:
 				se.append("items", r)
-			se.flags.ignore_permissions = True
+			frappe.has_permission("Stock Entry", "create", throw=True)
 			se.insert()
 			result["transfer_se"] = se.name
 
@@ -191,7 +194,7 @@ def allocate_received_spares_to_tickets(doc, method=None):
 		frappe.log_error(frappe.get_traceback(), f"Spare allocation on {doc.name} failed")
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def create_pos_from_material_request(material_request: str) -> dict:
     """Gap 14: Convert a spare-parts Material Request into POs grouped by default supplier.
 
@@ -199,29 +202,54 @@ def create_pos_from_material_request(material_request: str) -> dict:
     Creates one PO per supplier, adds all their items, and returns the list of PO names.
     Returns an error message for items with no supplier configured.
     """
-    frappe.has_permission("Purchase Order", "write", throw=True)
-
     mr = frappe.get_doc("Material Request", material_request)
+    mr.check_permission("read")
+    frappe.has_permission("Purchase Order", "create", throw=True)
+    warehouses = {mr.set_warehouse, *(row.warehouse for row in mr.items)} - {None, ""}
+    if not warehouses:
+        assert_warehouse(company=mr.company)
+    for warehouse in warehouses:
+        assert_warehouse(warehouse=warehouse, company=mr.company)
     if mr.docstatus != 1:
         frappe.throw(_("Material Request must be submitted before converting to POs."))
     if mr.material_request_type != "Purchase":
         frappe.throw(_("Only Purchase type Material Requests can be converted to POs."))
 
-    # Group items by supplier
     supplier_items: dict[str, list] = {}
     no_supplier = []
-
-    for item in mr.items:
-        pending_qty = (item.qty or 0) - (item.ordered_qty or 0)
-        if pending_qty <= 0:
-            continue
-
-        supplier = frappe.db.get_value(
+    pending_items = [
+        item for item in mr.items if (flt(item.qty) - flt(item.ordered_qty)) > 0 and item.item_code
+    ]
+    item_codes = list(dict.fromkeys(item.item_code for item in pending_items))
+    suppliers = {}
+    if item_codes:
+        for row in frappe.get_all(
             "Item Supplier",
-            {"parent": item.item_code, "parenttype": "Item"},
-            "supplier",
-            order_by="idx asc",
-        )
+            filters={"parent": ["in", item_codes], "parenttype": "Item"},
+            fields=["parent", "supplier"],
+            order_by="parent asc, idx asc",
+        ):
+            suppliers.setdefault(row.parent, row.supplier)
+
+    rates = {}
+    if item_codes:
+        for row in frappe.get_all(
+            "Item Price",
+            filters={
+                "item_code": ["in", item_codes],
+                "price_list": "Standard Buying",
+                "selling": 0,
+            },
+            fields=["item_code", "price_list_rate"],
+            order_by="item_code asc, valid_from desc, modified desc",
+        ):
+            rates.setdefault(row.item_code, flt(row.price_list_rate))
+
+    lead_days = get_int_setting("spare_procurement_lead_days", 3)
+
+    for item in pending_items:
+        pending_qty = flt(item.qty) - flt(item.ordered_qty)
+        supplier = suppliers.get(item.item_code)
         if not supplier:
             no_supplier.append(item.item_code)
             continue
@@ -233,10 +261,9 @@ def create_pos_from_material_request(material_request: str) -> dict:
             "qty": pending_qty,
             "uom": item.uom or "Nos",
             "stock_uom": item.stock_uom or "Nos",
-            "rate": frappe.db.get_value("Item Price", {"item_code": item.item_code,
-                "price_list": "Standard Buying", "selling": 0}, "price_list_rate") or 0,
+            "rate": rates.get(item.item_code, 0),
             "warehouse": item.warehouse or mr.set_warehouse,
-            "schedule_date": add_days(nowdate(), 7),
+            "schedule_date": add_days(nowdate(), lead_days),
             "material_request": material_request,
             "material_request_item": item.name,
         })
@@ -249,13 +276,13 @@ def create_pos_from_material_request(material_request: str) -> dict:
             "company": mr.company,
             "supplier": supplier,
             "transaction_date": nowdate(),
-            "schedule_date": add_days(nowdate(), 7),
+            "schedule_date": add_days(nowdate(), lead_days),
             "set_warehouse": target_wh,
             "custom_target_store": _store_for_warehouse(target_wh),
             "custom_purchase_type": "Taxable",  # standard GST purchase of repair spares
             "items": items,
         })
-        po.insert(ignore_permissions=True)
+        po.insert()
         created_pos.append(po.name)
 
     result = {"created": created_pos}

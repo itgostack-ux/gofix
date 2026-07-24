@@ -12,7 +12,6 @@ from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 def create_competitive_ops_fields():
 	"""Add location model, repairability, estimate versioning, QC enhancements, and WhatsApp templates."""
 	_create_service_request_location_fields()
-	_create_service_request_estimate_version_fields()
 	_create_qc_issue_level_fields()
 	_create_whatsapp_estimate_template_fields()
 
@@ -180,11 +179,6 @@ def _create_service_request_location_fields():
 
 	create_custom_fields(custom_fields, update=True)
 	frappe.logger("gofix").info("GoFix: Location model + repairability + estimate version fields created.")
-
-
-def _create_service_request_estimate_version_fields():
-	"""Placeholder — estimate version table is already added in location fields above."""
-	pass
 
 
 def _create_qc_issue_level_fields():

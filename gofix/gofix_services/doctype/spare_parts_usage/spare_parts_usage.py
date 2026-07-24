@@ -4,7 +4,10 @@
 import frappe
 from frappe.model.document import Document
 from frappe import _
-from frappe.utils import flt
+from frappe.utils import cint, flt
+
+from gofix.config import get_int_setting, is_privileged_user, require_role_setting
+from gofix.security import assert_service_request_access
 
 
 PART_STATUS_TRANSITIONS = {
@@ -24,8 +27,57 @@ SPARE_DISPOSITION_CHOICES = (
 
 
 class SparePartsUsage(Document):
+	_APPROVAL_CONTEXT = object()
+	_APPROVAL_FIELDS = (
+		"requires_approval",
+		"approval_status",
+		"approved_by",
+		"approval_datetime",
+		"approval_remarks",
+		"approval_rule",
+		"approval_threshold",
+	)
+	_APPROVAL_SENSITIVE_FIELDS = (
+		"service_request",
+		"spare_part_item",
+		"qty_used",
+		"sales_price",
+		"purchase_cost",
+		"warehouse",
+		"barcode_value",
+	)
+
+	def _authorize_approval_transition(self):
+		self.flags.spare_approval_context = self._APPROVAL_CONTEXT
+
+	def _has_approval_context(self):
+		return self.flags.get("spare_approval_context") is self._APPROVAL_CONTEXT
+
+	def _validate_approval_evidence(self):
+		if self._has_approval_context():
+			return
+		before = self.get_doc_before_save() if not self.is_new() else None
+		if before is None:
+			if any(self.get(fieldname) not in (None, "", 0, 0.0) for fieldname in self._APPROVAL_FIELDS):
+				frappe.throw(_("Spare approval state and evidence are server-managed."), frappe.PermissionError)
+			return
+		if any(self.get(fieldname) != before.get(fieldname) for fieldname in self._APPROVAL_FIELDS):
+			frappe.throw(
+				_("Spare approval state can only be changed through the approval action."),
+				frappe.PermissionError,
+			)
+		if before.approval_status == "Approved" and any(
+			self.get(fieldname) != before.get(fieldname)
+			for fieldname in self._APPROVAL_SENSITIVE_FIELDS
+		):
+			self.approval_status = ""
+			self.approved_by = None
+			self.approval_datetime = None
+			self.approval_remarks = None
+
 	def validate(self):
 		"""Validate spare parts usage"""
+		self._validate_approval_evidence()
 		self.validate_service_request()
 		self.validate_device_compatibility()
 		self.validate_barcode()
@@ -89,13 +141,23 @@ class SparePartsUsage(Document):
 	def set_line_seq_no(self):
 		"""Set line sequence number"""
 		if not self.line_seq_no:
-			max_seq = frappe.db.sql("""
-				SELECT MAX(line_seq_no) as max_seq
+			if not self.service_request:
+				frappe.throw(_("Service Request is required before assigning a spare line number."))
+			frappe.db.sql(
+				"SELECT name FROM `tabService Request` WHERE name = %s FOR UPDATE",
+				(self.service_request,),
+			)
+			last = frappe.db.sql(
+				"""
+				SELECT line_seq_no
 				FROM `tabSpare Parts Usage`
 				WHERE service_request = %s
-			""", self.service_request, as_dict=1)
-
-			self.line_seq_no = (max_seq[0].max_seq or 0) + 1 if max_seq else 1
+				ORDER BY line_seq_no DESC
+				LIMIT 1
+				""",
+				(self.service_request,),
+			)
+			self.line_seq_no = (cint(last[0][0]) if last else 0) + 1
 
 	def fetch_item_details(self):
 		"""Fetch item details from Item master"""
@@ -110,9 +172,6 @@ class SparePartsUsage(Document):
 
 	def check_approval_requirement(self):
 		"""Check if this spare part usage requires manager approval."""
-		if self.approval_status == "Approved":
-			return  # Already approved
-
 		total_value = flt(self.sales_price) * flt(self.qty_used)
 
 		# Find matching approval rule
@@ -125,13 +184,25 @@ class SparePartsUsage(Document):
 			self.requires_approval = 1
 			self.approval_rule = rule.name
 			self.approval_threshold = rule.threshold_amount
-			if not self.approval_status:
+			if self.approval_status != "Approved":
 				self.approval_status = "Pending"
+		else:
+			self.requires_approval = 0
+			self.approval_rule = None
+			self.approval_threshold = 0
+			self.approval_status = ""
+			self.approved_by = None
+			self.approval_datetime = None
+			self.approval_remarks = None
 
 	def validate_approval_gate(self):
 		"""Block submission if approval is required but not granted."""
 		if not self.requires_approval:
 			return
+		if self.approval_status == "Approved" and (
+			not self.approved_by or not self.approval_datetime
+		):
+			frappe.throw(_("Approved spare usage is missing authoritative approval evidence."), frappe.PermissionError)
 		if self.approval_status not in ("Approved",):
 			if self.docstatus == 1 or self.part_status in ("Issued", "Consumed"):
 				frappe.throw(
@@ -202,8 +273,9 @@ class SparePartsUsage(Document):
 			"amount": (self.qty_used or 0) * (self.sales_price or 0),
 			"spu_reference": self.name,
 		})
+		sr.check_permission("write")
 		sr.flags.ignore_validate = True
-		sr.save(ignore_permissions=True)
+		sr.save()
 
 	def create_stock_entry(self):
 		"""Create stock entry for spare part consumption"""
@@ -237,7 +309,8 @@ class SparePartsUsage(Document):
 		})
 
 		try:
-			stock_entry.insert(ignore_permissions=True)
+			frappe.has_permission("Stock Entry", "create", throw=True)
+			stock_entry.insert()
 			stock_entry.submit()
 			self.db_set("stock_entry", stock_entry.name, update_modified=False)
 			frappe.msgprint(_("Stock Entry {0} created").format(stock_entry.name))
@@ -284,7 +357,7 @@ class SparePartsUsage(Document):
 				"link_doctype": "Service Request",
 				"link_name": self.service_request,
 				"user": frappe.session.user,
-			}).insert(ignore_permissions=True)
+			}).insert()
 		except Exception:
 			frappe.log_error(frappe.get_traceback(), _("Spare parts audit log failed"))
 
@@ -303,7 +376,7 @@ class SparePartsUsage(Document):
 		# Create stock entry to return to warehouse
 		self.create_return_stock_entry()
 
-		self.save(ignore_permissions=True)
+		self.save()
 		self.update_spare_parts_count()
 
 		frappe.msgprint(_("Spare part moved to Main Stock"))
@@ -320,7 +393,7 @@ class SparePartsUsage(Document):
 		self.reason_desc = reason
 		self.moved_to_stock_type = "Dispose Stock"
 
-		self.save(ignore_permissions=True)
+		self.save()
 		self.update_spare_parts_count()
 
 		frappe.msgprint(_("Spare part moved to Dispose Stock"))
@@ -339,7 +412,7 @@ class SparePartsUsage(Document):
 		if action == "Return to Vendor":
 			self._create_defective_return_entry()
 
-		self.save(ignore_permissions=True)
+		self.save()
 		self.update_spare_parts_count()
 		frappe.msgprint(_("Part marked as defective: {0}").format(defect_type))
 
@@ -373,7 +446,8 @@ class SparePartsUsage(Document):
 		})
 
 		try:
-			stock_entry.insert(ignore_permissions=True)
+			frappe.has_permission("Stock Entry", "create", throw=True)
+			stock_entry.insert()
 			stock_entry.submit()
 			self.db_set("defective_stock_entry", stock_entry.name, update_modified=False)
 		except Exception as e:
@@ -407,7 +481,8 @@ class SparePartsUsage(Document):
 		})
 
 		try:
-			stock_entry.insert(ignore_permissions=True)
+			frappe.has_permission("Stock Entry", "create", throw=True)
+			stock_entry.insert()
 			stock_entry.submit()
 		except Exception as e:
 			frappe.log_error(message=str(e), title="Spare Parts Return Stock Entry Error")
@@ -471,7 +546,7 @@ class SparePartsUsage(Document):
 		self.reason_desc = _disposition_reason_map.get(disposition, "")
 		self.recovery_disposition = disposition
 
-		self.save(ignore_permissions=True)
+		self.save()
 		self.update_spare_parts_count()
 		self._unsync_from_service_request()
 		self._log_parts_consumption()
@@ -498,7 +573,8 @@ class SparePartsUsage(Document):
 			"t_warehouse": target_wh,
 			"serial_no": self.barcode_value if self.barcode_value else None,
 		})
-		se.insert(ignore_permissions=True)
+		frappe.has_permission("Stock Entry", "create", throw=True)
+		se.insert()
 		se.submit()
 		self.db_set("recovery_stock_entry", se.name, update_modified=False)
 
@@ -525,7 +601,8 @@ class SparePartsUsage(Document):
 			"t_warehouse": target_wh,
 			"serial_no": self.barcode_value if self.barcode_value else None,
 		})
-		se.insert(ignore_permissions=True)
+		frappe.has_permission("Stock Entry", "create", throw=True)
+		se.insert()
 		se.submit()
 		self.db_set("recovery_stock_entry", se.name, update_modified=False)
 
@@ -537,8 +614,9 @@ class SparePartsUsage(Document):
 			for row in to_remove:
 				sr.remove(row)
 			if to_remove:
+				sr.check_permission("write")
 				sr.flags.ignore_validate = True
-				sr.save(ignore_permissions=True)
+				sr.save()
 		except Exception:
 			frappe.log_error(frappe.get_traceback(), f"Failed to unsync spare {self.name} from SR")
 
@@ -561,38 +639,66 @@ def _get_matching_approval_rule(rule_type, value, service_request=None):
 
 
 # API Methods
-@frappe.whitelist()
+def _get_locked_spare_usage(name):
+	doc = frappe.get_doc("Spare Parts Usage", name)
+	doc.check_permission("write")
+	assert_service_request_access(doc.service_request, permission_type="write")
+	if not frappe.db.get_value("Spare Parts Usage", doc.name, "name", for_update=True):
+		frappe.throw(_("Spare Parts Usage {0} no longer exists.").format(name), frappe.DoesNotExistError)
+	doc.reload()
+	doc.check_permission("write")
+	assert_service_request_access(doc.service_request, permission_type="write")
+	return doc
+
+
+@frappe.whitelist(methods=["POST"])
 def move_to_main_stock(name, reason) -> dict:
 	"""Whitelisted method to move spare part to main stock"""
-	frappe.only_for(["Sales Manager", "System Manager", "Service Manager", "Sales User"])
-	doc = frappe.get_doc("Spare Parts Usage", name)
+	require_role_setting(
+		"sales_operation_roles",
+		("Sales Manager", "System Manager", "Service Manager", "Sales User"),
+		action=_("return a spare to main stock"),
+	)
+	doc = _get_locked_spare_usage(name)
 	doc.move_to_main_stock(reason)
 	return {"message": "Moved to Main Stock"}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def move_to_dispose_stock(name, reason) -> dict:
 	"""Whitelisted method to move spare part to dispose stock"""
-	frappe.only_for(["Sales Manager", "System Manager", "Service Manager"])
-	doc = frappe.get_doc("Spare Parts Usage", name)
+	require_role_setting(
+		"service_manager_roles",
+		("Service Manager", "System Manager"),
+		action=_("dispose a spare"),
+	)
+	doc = _get_locked_spare_usage(name)
 	doc.move_to_dispose_stock(reason)
 	return {"message": "Moved to Dispose Stock"}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def mark_defective(name, defect_type, description=None, action=None) -> dict:
 	"""Mark a spare part as defective."""
-	frappe.only_for(["Sales Manager", "System Manager", "Service Manager", "Service Engineer"])
-	doc = frappe.get_doc("Spare Parts Usage", name)
+	require_role_setting(
+		"engineer_operation_roles",
+		("Sales Manager", "System Manager", "Service Manager", "Service Engineer"),
+		action=_("mark a spare defective"),
+	)
+	doc = _get_locked_spare_usage(name)
 	doc.mark_defective(defect_type, description or "", action or "")
 	return {"message": f"Marked as defective: {defect_type}"}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def change_part_status(name, new_status) -> dict:
 	"""Transition part status through lifecycle."""
-	frappe.only_for(["Sales Manager", "System Manager", "Service Manager", "Service Engineer", "Sales User"])
-	doc = frappe.get_doc("Spare Parts Usage", name)
+	require_role_setting(
+		"engineer_operation_roles",
+		("Sales Manager", "System Manager", "Service Manager", "Service Engineer"),
+		action=_("change spare status"),
+	)
+	doc = _get_locked_spare_usage(name)
 
 	old_status = doc.part_status or "Reserved"
 	allowed = PART_STATUS_TRANSITIONS.get(old_status, [])
@@ -601,44 +707,61 @@ def change_part_status(name, new_status) -> dict:
 			old_status, new_status, ", ".join(allowed) or "None"))
 
 	doc.part_status = new_status
+	doc.validate_approval_gate()
+	doc.save()
 
-	# If consumed and not yet submitted, create stock entry
 	if new_status == "Consumed" and not doc.stock_entry:
 		doc.create_stock_entry()
 	elif new_status == "Returned":
 		doc.move_to_main_stock("Part returned unused")
 		return {"message": "Part returned to stock"}
 
-	doc.save(ignore_permissions=True)
 	return {"message": f"Part status changed to {new_status}"}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def approve_spare_part(name, remarks=None) -> dict:
 	"""Approve a spare part that requires approval."""
-	frappe.only_for(["Sales Manager", "System Manager", "Service Manager", "Store Manager"])
-	doc = frappe.get_doc("Spare Parts Usage", name)
+	require_role_setting(
+		"qc_approval_roles",
+		("QC Manager", "Store Manager", "System Manager"),
+		action=_("approve a spare"),
+	)
+	doc = _get_locked_spare_usage(name)
 	if not doc.requires_approval:
 		frappe.throw(_("This spare part does not require approval"), title=_("Spare Parts Usage Error"))
 	if doc.approval_status == "Approved":
 		frappe.throw(_("Already approved"), title=_("Spare Parts Usage Error"))
+	if doc.owner == frappe.session.user and not is_privileged_user():
+		frappe.throw(_("The spare usage creator cannot approve their own request."), frappe.PermissionError)
+	required_role = frappe.db.get_value("GoFix Approval Rule", doc.approval_rule, "approver_role")
+	if required_role and not is_privileged_user() and required_role not in frappe.get_roles():
+		frappe.throw(
+			_("This approval requires the configured {0} role.").format(required_role),
+			frappe.PermissionError,
+		)
 
+	doc._authorize_approval_transition()
 	doc.approval_status = "Approved"
 	doc.approved_by = frappe.session.user
 	doc.approval_datetime = frappe.utils.now()
 	doc.approval_remarks = remarks or ""
-	doc.save(ignore_permissions=True)
+	doc.save()
 	return {"message": "Spare part approved"}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def recover_spare(name, disposition, remarks=None) -> dict:
 	"""Recover a consumed spare part when device is Not Repairable.
 
 	disposition: "Good - Back to Stock" | "Faulty - Supplier Return" | "Damaged by Technician"
 	"""
-	frappe.only_for(["Sales Manager", "System Manager", "Service Manager", "Service Engineer"])
-	doc = frappe.get_doc("Spare Parts Usage", name)
+	require_role_setting(
+		"engineer_operation_roles",
+		("Sales Manager", "System Manager", "Service Manager", "Service Engineer"),
+		action=_("recover a spare"),
+	)
+	doc = _get_locked_spare_usage(name)
 	doc.recover_spare(disposition, remarks)
 	return {"message": f"Spare recovered: {disposition}"}
 
@@ -646,7 +769,8 @@ def recover_spare(name, disposition, remarks=None) -> dict:
 @frappe.whitelist()
 def get_pending_recovery_spares(service_request) -> list:
 	"""Return consumed spares that need recovery disposition for a Service Request."""
-	frappe.has_permission("Service Request", doc=service_request, throw=True)
+	assert_service_request_access(service_request, permission_type="read")
+	frappe.has_permission("Spare Parts Usage", "read", throw=True)
 	return frappe.get_all("Spare Parts Usage",
 		filters={
 			"service_request": service_request,
@@ -656,32 +780,71 @@ def get_pending_recovery_spares(service_request) -> list:
 		},
 		fields=["name", "spare_part_item", "item_name", "qty_used", "uom",
 				"barcode_value", "purchase_cost", "sales_price"],
+		limit_page_length=get_int_setting("token_queue_limit", 200),
 	)
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def bulk_recover_spares(service_request, dispositions_json) -> dict:
 	"""Recover all consumed spares for a service request in one go.
 
 	dispositions_json: JSON list of {"spu_name": "...", "disposition": "...", "remarks": "..."}
 	"""
 	import json as _json
-	frappe.only_for(["Sales Manager", "System Manager", "Service Manager", "Service Engineer"])
+	require_role_setting(
+		"engineer_operation_roles",
+		("Sales Manager", "System Manager", "Service Manager", "Service Engineer"),
+		action=_("recover spares"),
+	)
 	dispositions = _json.loads(dispositions_json) if isinstance(dispositions_json, str) else dispositions_json
+	if not isinstance(dispositions, list):
+		frappe.throw(_("Dispositions must be a JSON list."), frappe.ValidationError)
+	row_limit = get_int_setting("token_queue_limit", 200)
+	if len(dispositions) > row_limit:
+		frappe.throw(
+			_("A maximum of {0} spares can be recovered at once.").format(row_limit),
+			frappe.ValidationError,
+		)
+	assert_service_request_access(service_request, permission_type="write")
+	frappe.has_permission("Spare Parts Usage", "write", throw=True)
+	spu_names = tuple(dict.fromkeys(
+		entry.get("spu_name")
+		for entry in dispositions
+		if isinstance(entry, dict) and entry.get("spu_name")
+	))
+	spu_rows = frappe.get_all(
+		"Spare Parts Usage",
+		filters={"name": ("in", spu_names)},
+		fields=["name", "service_request"],
+		limit_page_length=len(spu_names),
+	) if spu_names else []
+	spu_service_request = {row.name: row.service_request for row in spu_rows}
 
 	recovered = []
 	errors = []
 	for entry in dispositions:
+		if not isinstance(entry, dict) or not entry.get("spu_name"):
+			errors.append({"spu_name": None, "error": _("Invalid disposition row.")})
+			continue
+		if spu_service_request.get(entry["spu_name"]) != service_request:
+			errors.append({
+				"spu_name": entry["spu_name"],
+				"error": _("Spare does not belong to this Service Request."),
+			})
+			continue
 		try:
 			doc = frappe.get_doc("Spare Parts Usage", entry["spu_name"])
+			doc.check_permission("write")
 			doc.recover_spare(entry["disposition"], entry.get("remarks"))
 			recovered.append(entry["spu_name"])
-		except Exception as e:
-			errors.append({"spu_name": entry["spu_name"], "error": str(e)})
+		except Exception:
+			errors.append({
+				"spu_name": entry["spu_name"],
+				"error": _("Spare recovery failed. Review the server error log."),
+			})
 			frappe.log_error(frappe.get_traceback(),
 				f"Spare recovery failed: {entry['spu_name']}")
 
-	frappe.db.commit()
 	return {
 		"recovered": len(recovered),
 		"errors": errors,

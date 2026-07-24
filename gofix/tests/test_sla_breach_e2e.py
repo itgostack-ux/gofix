@@ -68,6 +68,22 @@ def _get_or_create_device_item(company):
     return i.name
 
 
+def _ensure_issue_category():
+    category_name = "Screen Damage"
+    if frappe.db.exists("Issue Category", category_name):
+        return category_name
+    category = frappe.get_doc({
+        "doctype": "Issue Category",
+        "category_name": category_name,
+        "category_code": "SCR-E2E",
+        "is_active": 1,
+    })
+    category.insert(ignore_permissions=True)
+    frappe.db.commit()
+    _FLOW["created_issue_category"] = category.name
+    return category.name
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # TEST 1: Create GoFix SLA Rule
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -394,6 +410,13 @@ def _cleanup():
             except Exception:
                 pass
 
+    category = _FLOW.get("created_issue_category")
+    if category and frappe.db.exists("Issue Category", category):
+        try:
+            frappe.delete_doc("Issue Category", category, force=True, ignore_permissions=True)
+        except Exception:
+            pass
+
     frappe.db.commit()
 
 
@@ -410,6 +433,7 @@ def run_all():
     print("GoFix SLA Breach E2E Test")
     print("=" * 70 + "\n")
 
+    _ensure_issue_category()
     test_create_sla_rule()
     test_sla_rule_matching()
     test_sla_breach_service_request()

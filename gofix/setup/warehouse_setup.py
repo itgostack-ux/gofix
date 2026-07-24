@@ -9,14 +9,14 @@ Creates warehouse structure and links addresses
 import frappe
 from frappe import _
 
+from gofix.config import require_role_setting
 
-def create_warehouse_structure(company):
+
+def create_warehouse_structure(company, stores=None):
 	"""Create warehouse hierarchy for GoFix stores"""
 	
 	if not company:
 		frappe.throw(_("Company is required"), title=_("Validation Error"))
-	
-	company_abbr = frappe.get_cached_value("Company", company, "abbr")
 	
 	warehouses = []
 	
@@ -40,17 +40,12 @@ def create_warehouse_structure(company):
 	# Set as company's master hub warehouse
 	frappe.db.set_value("Company", company, "master_hub_warehouse", master_hub)
 	
-	# Create store warehouses (examples)
-	stores = [
-		{"name": "Store A - Chennai T.Nagar", "city": "Chennai", "area": "T.Nagar"},
-		{"name": "Store B - Chennai Velachery", "city": "Chennai", "area": "Velachery"},
-		{"name": "Store C - Bangalore Koramangala", "city": "Bangalore", "area": "Koramangala"},
-		{"name": "Store D - Mumbai Andheri", "city": "Mumbai", "area": "Andheri"},
-	]
-	
-	for store in stores:
+	for store in frappe.parse_json(stores) if stores else []:
+		store_name = (store.get("name") or "").strip()
+		if not store_name:
+			frappe.throw(_("Every store entry must include a name."))
 		store_wh = create_warehouse(
-			warehouse_name=store["name"],
+			warehouse_name=store_name,
 			company=company,
 			parent_warehouse=parent_warehouse,
 			is_group=0
@@ -73,7 +68,6 @@ def create_warehouse(warehouse_name, company, parent_warehouse=None, is_group=0)
 	warehouse_id = f"{warehouse_name} - {company_abbr}"
 	
 	if frappe.db.exists("Warehouse", warehouse_id):
-		print(f"Warehouse {warehouse_id} already exists")
 		return warehouse_id
 	
 	warehouse = frappe.new_doc("Warehouse")
@@ -83,17 +77,18 @@ def create_warehouse(warehouse_name, company, parent_warehouse=None, is_group=0)
 	warehouse.parent_warehouse = parent_warehouse
 	
 	warehouse.insert()
-	frappe.db.commit()
-	
-	print(f"Created warehouse: {warehouse_id}")
 	return warehouse.name
 
 
-@frappe.whitelist()
-def setup_warehouses_for_company(company) -> dict:
+@frappe.whitelist(methods=["POST"])
+def setup_warehouses_for_company(company, stores=None) -> dict:
 	"""Public API to setup warehouses"""
-	frappe.only_for("System Manager")
-	return create_warehouse_structure(company)
+	require_role_setting(
+		"warehouse_setup_roles",
+		("System Manager",),
+		action=_("set up service warehouses"),
+	)
+	return create_warehouse_structure(company, stores)
 
 
 def link_address_to_warehouse(warehouse, address):
@@ -114,11 +109,15 @@ def link_address_to_warehouse(warehouse, address):
 	)
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def create_store_address(warehouse, address_line1, city, state, pincode, country="India") -> dict:
 	"""Create and link address for a store warehouse"""
 	
-	frappe.only_for("System Manager")
+	require_role_setting(
+		"warehouse_setup_roles",
+		("System Manager",),
+		action=_("create a store address"),
+	)
 	
 	if not frappe.db.exists("Warehouse", warehouse):
 		frappe.throw(_("Warehouse {0} does not exist").format(warehouse), title=_("Validation Error"))
@@ -156,11 +155,15 @@ def create_store_address(warehouse, address_line1, city, state, pincode, country
 	return address.name
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def set_user_default_warehouse(user, warehouse) -> None:
 	"""Set default warehouse for a user"""
 	
-	frappe.only_for("System Manager")
+	require_role_setting(
+		"warehouse_setup_roles",
+		("System Manager",),
+		action=_("set a user's default warehouse"),
+	)
 	
 	if not frappe.db.exists("User", user):
 		frappe.throw(_("User {0} does not exist").format(user), title=_("Validation Error"))

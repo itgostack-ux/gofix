@@ -152,6 +152,105 @@
     "update_field": null,
     "update_value": null,
     "workflow_builder_id": null
+   },
+   {
+    "allow_edit": "System Manager",
+    "doc_status": "0",
+    "is_optional_state": 0,
+    "parent": "Service Order Workflow",
+    "parentfield": "states",
+    "parenttype": "Workflow",
+    "state": "Draft",
+    "update_field": null,
+    "update_value": null
+   },
+   {
+    "allow_edit": "System Manager",
+    "doc_status": "1",
+    "is_optional_state": 0,
+    "parent": "Service Order Workflow",
+    "parentfield": "states",
+    "parenttype": "Workflow",
+    "state": "Submitted",
+    "update_field": null,
+    "update_value": null
+   },
+   {
+    "allow_edit": "System Manager",
+    "doc_status": "1",
+    "is_optional_state": 0,
+    "parent": "Service Order Workflow",
+    "parentfield": "states",
+    "parenttype": "Workflow",
+    "state": "Work in Progress",
+    "update_field": "qc_status",
+    "update_value": "Pending"
+   },
+   {
+    "allow_edit": "System Manager",
+    "doc_status": "1",
+    "is_optional_state": 0,
+    "parent": "Service Order Workflow",
+    "parentfield": "states",
+    "parenttype": "Workflow",
+    "state": "QC Awaiting",
+    "update_field": "qc_status",
+    "update_value": "Awaiting"
+   },
+   {
+    "allow_edit": "System Manager",
+    "doc_status": "1",
+    "is_optional_state": 0,
+    "parent": "Service Order Workflow",
+    "parentfield": "states",
+    "parenttype": "Workflow",
+    "state": "QC Pass",
+    "update_field": "qc_status",
+    "update_value": "Pass"
+   },
+   {
+    "allow_edit": "System Manager",
+    "doc_status": "1",
+    "is_optional_state": 1,
+    "parent": "Service Order Workflow",
+    "parentfield": "states",
+    "parenttype": "Workflow",
+    "state": "QC Fail",
+    "update_field": "qc_status",
+    "update_value": "Fail"
+   },
+   {
+    "allow_edit": "System Manager",
+    "doc_status": "1",
+    "is_optional_state": 1,
+    "parent": "Service Order Workflow",
+    "parentfield": "states",
+    "parenttype": "Workflow",
+    "state": "Not Repairable",
+    "update_field": "repair_outcome",
+    "update_value": "Not Repairable"
+   },
+   {
+    "allow_edit": "System Manager",
+    "doc_status": "1",
+    "is_optional_state": 1,
+    "parent": "Service Order Workflow",
+    "parentfield": "states",
+    "parenttype": "Workflow",
+    "state": "Customer Cancelled",
+    "update_field": "repair_outcome",
+    "update_value": "Customer Cancelled"
+   },
+   {
+    "allow_edit": "System Manager",
+    "doc_status": "1",
+    "is_optional_state": 0,
+    "parent": "Service Order Workflow",
+    "parentfield": "states",
+    "parenttype": "Workflow",
+    "state": "Closed",
+    "update_field": null,
+    "update_value": null
    }
   ],
   "transitions": [
@@ -336,6 +435,127 @@
     "send_email_to_creator": 0,
     "state": "Customer Cancelled",
     "workflow_builder_id": null
+   },
+   {
+    "action": "Submit",
+    "allow_self_approval": 0,
+    "allowed": "System Manager",
+    "condition": "",
+    "next_state": "Submitted",
+    "parent": "Service Order Workflow",
+    "parentfield": "transitions",
+    "parenttype": "Workflow",
+    "state": "Draft"
+   },
+   {
+    "action": "Start Work",
+    "allow_self_approval": 0,
+    "allowed": "System Manager",
+    "condition": "doc.is_service_order == 1",
+    "next_state": "Work in Progress",
+    "parent": "Service Order Workflow",
+    "parentfield": "transitions",
+    "parenttype": "Workflow",
+    "state": "Submitted"
+   },
+   {
+    "action": "Complete Job",
+    "allow_self_approval": 0,
+    "allowed": "System Manager",
+    "condition": "frappe.db.count('Job Assignment', {'service_order': doc.name, 'assignment_status': ['in', ['Completed', 'Closed']]}) > 0",
+    "next_state": "QC Awaiting",
+    "parent": "Service Order Workflow",
+    "parentfield": "transitions",
+    "parenttype": "Workflow",
+    "state": "Work in Progress"
+   },
+   {
+    "action": "Mark Not Repairable",
+    "allow_self_approval": 0,
+    "allowed": "System Manager",
+    "condition": "doc.is_service_order == 1",
+    "next_state": "Not Repairable",
+    "parent": "Service Order Workflow",
+    "parentfield": "transitions",
+    "parenttype": "Workflow",
+    "state": "Work in Progress"
+   },
+   {
+    "action": "Customer Cancelled",
+    "allow_self_approval": 0,
+    "allowed": "System Manager",
+    "condition": "doc.is_service_order == 1",
+    "next_state": "Customer Cancelled",
+    "parent": "Service Order Workflow",
+    "parentfield": "transitions",
+    "parenttype": "Workflow",
+    "state": "Work in Progress"
+   },
+   {
+    "action": "QC Pass",
+    "allow_self_approval": 0,
+    "allowed": "System Manager",
+    "condition": "",
+    "next_state": "QC Pass",
+    "parent": "Service Order Workflow",
+    "parentfield": "transitions",
+    "parenttype": "Workflow",
+    "state": "QC Awaiting"
+   },
+   {
+    "action": "QC Fail",
+    "allow_self_approval": 0,
+    "allowed": "System Manager",
+    "condition": "",
+    "next_state": "QC Fail",
+    "parent": "Service Order Workflow",
+    "parentfield": "transitions",
+    "parenttype": "Workflow",
+    "state": "QC Awaiting"
+   },
+   {
+    "action": "Rework",
+    "allow_self_approval": 0,
+    "allowed": "System Manager",
+    "condition": "",
+    "next_state": "Work in Progress",
+    "parent": "Service Order Workflow",
+    "parentfield": "transitions",
+    "parenttype": "Workflow",
+    "state": "QC Fail"
+   },
+   {
+    "action": "Close",
+    "allow_self_approval": 0,
+    "allowed": "System Manager",
+    "condition": "",
+    "next_state": "Closed",
+    "parent": "Service Order Workflow",
+    "parentfield": "transitions",
+    "parenttype": "Workflow",
+    "state": "QC Pass"
+   },
+   {
+    "action": "Close",
+    "allow_self_approval": 0,
+    "allowed": "System Manager",
+    "condition": "",
+    "next_state": "Closed",
+    "parent": "Service Order Workflow",
+    "parentfield": "transitions",
+    "parenttype": "Workflow",
+    "state": "Not Repairable"
+   },
+   {
+    "action": "Close",
+    "allow_self_approval": 0,
+    "allowed": "System Manager",
+    "condition": "",
+    "next_state": "Closed",
+    "parent": "Service Order Workflow",
+    "parentfield": "transitions",
+    "parenttype": "Workflow",
+    "state": "Customer Cancelled"
    }
   ],
   "workflow_data": null,

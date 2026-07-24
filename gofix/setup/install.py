@@ -16,6 +16,8 @@ def after_install():
 	create_custom_fields()
 	create_item_custom_fields()
 	ensure_service_order_workflow()
+	from gofix.setup.permissions import ensure_default_permissions
+	ensure_default_permissions()
 
 
 def create_custom_fields():

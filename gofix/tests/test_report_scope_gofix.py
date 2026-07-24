@@ -71,14 +71,14 @@ def _get_or_create_ch_store(name: str, warehouse: str, company: str) -> None:
     doc.insert(ignore_permissions=True)
 
 
-def _make_scope(user: str, store: str) -> None:
+def _make_scope(user: str, store: str, company: str) -> None:
     for row in frappe.get_all("CH User Scope", filters={"user": user}, pluck="name"):
         frappe.delete_doc("CH User Scope", row, ignore_permissions=True, force=True)
     doc = frappe.new_doc("CH User Scope")
     doc.user = user
     doc.scope_role = "Store Executive"
     doc.enabled = 1
-    doc.append("stores", {"store": store})
+    doc.append("stores", {"company": company, "store": store})
     doc.flags.ignore_permissions = True
     doc.insert(ignore_permissions=True)
 
@@ -94,7 +94,7 @@ class TestReportScopeGofix(unittest.TestCase):
         cls.wh_in_scope = _get_or_create_warehouse("Tier4 Gofix A WH", cls.company)
         _get_or_create_ch_store(_TEST_STORE, cls.wh_in_scope, cls.company)
         _ensure_user(_TEST_USER)
-        _make_scope(_TEST_USER, _TEST_STORE)
+        _make_scope(_TEST_USER, _TEST_STORE, cls.company)
         clear_scope_cache(_TEST_USER)
         frappe.db.commit()
 

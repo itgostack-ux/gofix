@@ -22,7 +22,9 @@ import frappe
 from frappe import _
 from frappe.utils import add_days, cint, flt, getdate, nowdate
 
+from gofix.config import get_int_setting, require_role_setting
 from gofix.gofix_services.store_context import active_company, build_store_context
+from gofix.security import assert_service_request_access
 
 no_cache = 1
 
@@ -45,6 +47,7 @@ def get_queue(warehouse=None, search=None, date_from=None, date_to=None, stage_f
 	Unlike Ops Hub (which requires a Service Order), this shows ALL requests
 	including new intakes that haven't been accepted yet.
 	"""
+	require_role_setting("service_access_roles", action=_("view the store service queue"))
 	frappe.has_permission("Service Request", "read", throw=True)
 	company = active_company(company)
 
@@ -77,6 +80,7 @@ def get_queue(warehouse=None, search=None, date_from=None, date_to=None, stage_f
 		if frappe.db.has_column("Service Request", cf):
 			extra_fields.append(cf)
 
+	queue_limit = min(get_int_setting("service_queue_row_limit", 200), 2000)
 	sr_list = frappe.get_list(
 		"Service Request",
 		filters=filters,
@@ -92,8 +96,15 @@ def get_queue(warehouse=None, search=None, date_from=None, date_to=None, stage_f
 			"service_invoice", "walkin_status",
 		] + extra_fields,
 		order_by="priority desc, service_date asc",
-		limit=200,
+		limit_page_length=queue_limit + 1,
 	)
+	if len(sr_list) > queue_limit:
+		frappe.throw(
+			_("The service queue exceeds the configured limit of {0} rows. Narrow the dates or filters.").format(
+				queue_limit
+			),
+			frappe.ValidationError,
+		)
 
 	# Batch: Get estimate version counts
 	sr_names = [r["name"] for r in sr_list]
@@ -214,8 +225,7 @@ def _empty_summary():
 @frappe.whitelist()
 def get_request_detail(sr_name) -> dict:
 	"""Return full SR detail for the store executive detail panel."""
-	frappe.has_permission("Service Request", sr_name, "read", throw=True)
-	sr = frappe.get_doc("Service Request", sr_name)
+	sr = assert_service_request_access(sr_name, permission_type="read")
 
 	# Estimate versions
 	estimate_versions = []
@@ -278,7 +288,7 @@ def get_request_detail(sr_name) -> dict:
 	}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def quick_accept(service_request) -> dict:
 	"""Quick-accept an SR from Store Queue and ensure Service Order is created.
 

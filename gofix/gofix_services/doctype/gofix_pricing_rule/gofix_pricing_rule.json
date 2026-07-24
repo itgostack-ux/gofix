@@ -209,31 +209,32 @@
  "owner": "Administrator",
  "permissions": [
   {
+   "role": "System Manager",
+   "read": 1,
+   "write": 1,
    "create": 1,
    "delete": 1,
    "email": 1,
    "export": 1,
+   "import": 1,
    "print": 1,
-   "read": 1,
    "report": 1,
-   "role": "System Manager",
-   "share": 1,
-   "write": 1
+   "share": 1
   },
   {
+   "role": "Service Manager",
+   "read": 1,
+   "write": 1,
    "create": 1,
    "email": 1,
    "export": 1,
    "print": 1,
-   "read": 1,
    "report": 1,
-   "role": "Service Manager",
-   "share": 1,
-   "write": 1
+   "share": 1
   },
   {
-   "read": 1,
-   "role": "Service Engineer"
+   "role": "Service Engineer",
+   "read": 1
   }
  ],
  "sort_field": "priority_order",

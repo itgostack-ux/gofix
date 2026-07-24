@@ -3,12 +3,15 @@
 
 import frappe
 from frappe import _
-from frappe.utils import flt
 
 from ch_erp15.ch_erp15.report_scope import scope_where_clause
+from gofix.config import get_int_setting, require_role_setting
 
 
 def execute(filters=None):
+	require_role_setting("service_dashboard_roles", action=_("view technician performance"))
+	frappe.has_permission("Job Assignment", "read", throw=True)
+	frappe.has_permission("Sales Order", "read", throw=True)
 	columns = get_columns()
 	data = get_data(filters)
 	chart = get_chart(data)
@@ -43,89 +46,82 @@ def get_data(filters):
 		conditions += " AND COALESCE(sr.company, so.company) = %(company)s"
 		params["company"] = company
 
-	# Tier 4: Job Assignment has no store/warehouse of its own — reach scope
-	# through the linked Sales Order (service order). LEFT JOIN keeps rows
-	# whose SO is missing only when the caller is a bypass user (scope is None);
-	# for scoped users, an absent SO fails the IN check and drops — fail-closed.
 	scope = scope_where_clause(warehouse_field="so.set_warehouse")
-	needs_so_join = bool(scope or company)
-	needs_sr_join = bool(company)
-	so_join = "LEFT JOIN `tabSales Order` so ON so.name = ja.service_order" if needs_so_join else ""
-	sr_join = "LEFT JOIN `tabService Request` sr ON sr.name = ja.service_request" if needs_sr_join else ""
 	scope_sql = f" AND {scope}" if scope else ""
+	row_limit = min(get_int_setting("interactive_report_row_limit", 2000), 10000)
+	params["result_limit"] = row_limit + 1
 
 	query = f"""
+		WITH scoped_assignments AS (
+			SELECT
+				COALESCE(emp.employee_name, ja.service_engineer, ja.user, 'Unassigned') AS technician,
+				COALESCE(ja.service_engineer, ja.user, 'Unassigned') AS technician_id,
+				ja.assignment_status,
+				ja.actual_hours,
+				ja.repair_outcome,
+				ja.service_order,
+				so.qc_status,
+				so.rework_count,
+				so.is_service_order
+			FROM `tabJob Assignment` ja
+			LEFT JOIN `tabEmployee` emp ON emp.name = ja.service_engineer
+			LEFT JOIN `tabSales Order` so ON so.name = ja.service_order
+			LEFT JOIN `tabService Request` sr ON sr.name = ja.service_request
+			WHERE ja.docstatus < 2
+			{conditions}{scope_sql}
+		),
+		assignment_metrics AS (
+			SELECT
+				technician,
+				technician_id,
+				SUM(CASE WHEN assignment_status IN ('Completed', 'Closed') THEN 1 ELSE 0 END) AS jobs_completed,
+				SUM(CASE WHEN assignment_status IN ('Open', 'In Progress') THEN 1 ELSE 0 END) AS jobs_open,
+				AVG(actual_hours) AS avg_hours,
+				SUM(COALESCE(actual_hours, 0)) AS total_hours,
+				SUM(CASE WHEN repair_outcome = 'Not Repairable' THEN 1 ELSE 0 END) AS not_repairable
+			FROM scoped_assignments
+			GROUP BY technician_id, technician
+		),
+		completed_service_orders AS (
+			SELECT DISTINCT technician_id, service_order, qc_status, rework_count
+			FROM scoped_assignments
+			WHERE assignment_status IN ('Completed', 'Closed')
+			  AND service_order IS NOT NULL
+			  AND is_service_order = 1
+		),
+		service_metrics AS (
+			SELECT
+				technician_id,
+				COUNT(*) AS qc_total,
+				SUM(CASE WHEN qc_status = 'Pass' THEN 1 ELSE 0 END) AS qc_passes,
+				SUM(COALESCE(rework_count, 0)) AS rework_jobs
+			FROM completed_service_orders
+			GROUP BY technician_id
+		)
 		SELECT
-			COALESCE(emp.employee_name, ja.service_engineer, ja.user, 'Unassigned') as technician,
-			COALESCE(ja.service_engineer, ja.user, 'Unassigned') as technician_id,
-			SUM(CASE WHEN ja.assignment_status IN ('Completed', 'Closed') THEN 1 ELSE 0 END) as jobs_completed,
-			SUM(CASE WHEN ja.assignment_status IN ('Open', 'In Progress') THEN 1 ELSE 0 END) as jobs_open,
-			AVG(ja.actual_hours) as avg_hours,
-			SUM(COALESCE(ja.actual_hours, 0)) as total_hours,
-			SUM(CASE WHEN ja.repair_outcome = 'Not Repairable' THEN 1 ELSE 0 END) as not_repairable
-		FROM `tabJob Assignment` ja
-		LEFT JOIN `tabEmployee` emp ON emp.name = ja.service_engineer
-		{so_join}
-		{sr_join}
-		WHERE ja.docstatus < 2
-		{conditions}{scope_sql}
-		GROUP BY COALESCE(ja.service_engineer, ja.user, 'Unassigned'), COALESCE(emp.employee_name, ja.service_engineer, ja.user, 'Unassigned')
-		ORDER BY jobs_completed DESC
+			metrics.technician,
+			metrics.technician_id,
+			metrics.jobs_completed,
+			metrics.jobs_open,
+			metrics.avg_hours,
+			metrics.total_hours,
+			metrics.not_repairable,
+			COALESCE(100.0 * service.qc_passes / NULLIF(service.qc_total, 0), 0) AS qc_pass_rate,
+			COALESCE(service.rework_jobs, 0) AS rework_jobs
+		FROM assignment_metrics metrics
+		LEFT JOIN service_metrics service ON service.technician_id = metrics.technician_id
+		ORDER BY metrics.jobs_completed DESC, metrics.technician_id ASC
+		LIMIT %(result_limit)s
 	"""
 
 	data = frappe.db.sql(query, params, as_dict=True)
-
-	# Calculate QC pass rate and rework from Sales Orders
-	for row in data:
-		tech = row.get("technician_id") or row.technician
-		if tech and tech != "Unassigned":
-			# Get SO names for this technician's completed jobs
-			extra = ""
-			tech_params = {"tech": tech}
-			if company:
-				extra += " AND COALESCE(sr.company, so.company) = %(company)s"
-				tech_params["company"] = company
-			if scope:
-				extra += f" AND {scope}"
-
-			so_names = frappe.db.sql(f"""
-				SELECT DISTINCT ja.service_order
-				FROM `tabJob Assignment` ja
-				LEFT JOIN `tabSales Order` so ON so.name = ja.service_order
-				LEFT JOIN `tabService Request` sr ON sr.name = ja.service_request
-				WHERE (ja.service_engineer = %(tech)s OR ja.user = %(tech)s)
-				  AND ja.assignment_status IN ('Completed', 'Closed')
-				  AND ja.service_order IS NOT NULL
-				  {extra}
-			""", tech_params, as_dict=True)
-
-			if so_names:
-				so_list = [s.service_order for s in so_names if s.service_order]
-				if so_list:
-					qc_data = frappe.db.sql("""
-						SELECT
-							SUM(CASE WHEN qc_status = 'Pass' THEN 1 ELSE 0 END) as passes,
-							SUM(COALESCE(rework_count, 0)) as reworks,
-							COUNT(*) as total
-						FROM `tabSales Order`
-						WHERE name IN %s AND is_service_order = 1
-					""", [so_list], as_dict=True)
-
-					if qc_data and qc_data[0].total:
-						row.qc_pass_rate = flt(qc_data[0].passes) / flt(qc_data[0].total) * 100
-						row.rework_jobs = qc_data[0].reworks or 0
-					else:
-						row.qc_pass_rate = 0
-						row.rework_jobs = 0
-				else:
-					row.qc_pass_rate = 0
-					row.rework_jobs = 0
-			else:
-				row.qc_pass_rate = 0
-				row.rework_jobs = 0
-		else:
-			row.qc_pass_rate = 0
-			row.rework_jobs = 0
+	if len(data) > row_limit:
+		frappe.throw(
+			_("Technician Performance exceeds the configured limit of {0} rows. Narrow the filters.").format(
+				row_limit
+			),
+			frappe.ValidationError,
+		)
 
 	return data
 

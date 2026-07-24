@@ -2,6 +2,7 @@ import frappe
 
 
 WORKFLOW_NAME = "Service Order Workflow"
+SYSTEM_MANAGER_ROLE = "System Manager"
 
 ROLE_NAMES = (
 	"Service Manager",
@@ -210,6 +211,54 @@ WORKFLOW_TRANSITIONS = (
 )
 
 
+def workflow_states_with_system_manager_parity():
+	"""Return configured states plus one equivalent System Manager row per state/docstatus."""
+	rows = [dict(state) for state in WORKFLOW_STATES]
+	existing = {
+		(state["state"], str(state["doc_status"]))
+		for state in WORKFLOW_STATES
+		if state["allow_edit"] == SYSTEM_MANAGER_ROLE
+	}
+	for state in WORKFLOW_STATES:
+		key = (state["state"], str(state["doc_status"]))
+		if key in existing:
+			continue
+		parity = dict(state)
+		parity["allow_edit"] = SYSTEM_MANAGER_ROLE
+		rows.append(parity)
+		existing.add(key)
+	return rows
+
+
+def workflow_transitions_with_system_manager_parity():
+	"""Return transitions plus one equivalent System Manager route per unique action path."""
+	rows = [dict(transition) for transition in WORKFLOW_TRANSITIONS]
+	existing = {
+		(
+			transition["state"],
+			transition["action"],
+			transition["next_state"],
+			transition["condition"],
+		)
+		for transition in WORKFLOW_TRANSITIONS
+		if transition["allowed"] == SYSTEM_MANAGER_ROLE
+	}
+	for transition in WORKFLOW_TRANSITIONS:
+		key = (
+			transition["state"],
+			transition["action"],
+			transition["next_state"],
+			transition["condition"],
+		)
+		if key in existing:
+			continue
+		parity = dict(transition)
+		parity["allowed"] = SYSTEM_MANAGER_ROLE
+		rows.append(parity)
+		existing.add(key)
+	return rows
+
+
 def ensure_service_order_workflow():
 	"""Ensure GoFix workflow metadata is valid for Frappe's single-role workflow schema."""
 	ensure_roles()
@@ -327,7 +376,7 @@ def ensure_workflow_document():
 	workflow.set("states", [])
 	workflow.set("transitions", [])
 
-	for state in WORKFLOW_STATES:
+	for state in workflow_states_with_system_manager_parity():
 		workflow.append(
 			"states",
 			{
@@ -341,7 +390,7 @@ def ensure_workflow_document():
 			},
 		)
 
-	for transition in WORKFLOW_TRANSITIONS:
+	for transition in workflow_transitions_with_system_manager_parity():
 		workflow.append(
 			"transitions",
 			{
@@ -359,5 +408,3 @@ def ensure_workflow_document():
 		workflow.insert(ignore_permissions=True)
 	else:
 		workflow.save(ignore_permissions=True)
-
-	frappe.db.commit()

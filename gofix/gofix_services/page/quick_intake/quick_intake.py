@@ -6,15 +6,34 @@ import frappe
 from frappe import _
 from frappe.utils import today, flt
 
+from gofix.config import get_int_setting, require_role_setting
 from gofix.gofix_services.store_context import active_company, build_store_context
 
 _GSTIN_RE = re.compile(r'^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$')
-_VIP_THRESHOLD = 10
+_QUICK_INTAKE_ROLES = (
+	"Service Manager",
+	"Service Engineer",
+	"Service User",
+	"Store Manager",
+	"Store Executive",
+	"GoFix Floor Manager",
+)
+
+
+def _require_intake_access(*read_doctypes):
+	require_role_setting("app_access_roles", _QUICK_INTAKE_ROLES, action=_("use quick intake"))
+	for doctype in read_doctypes:
+		if not frappe.has_permission(doctype, ptype="read"):
+			frappe.throw(
+				_("You do not have read permission for {0}.").format(doctype),
+				frappe.PermissionError,
+			)
 
 
 @frappe.whitelist()
 def get_intake_context(company=None) -> dict:
 	"""Return context for the intake form: warehouses, recent customers, config."""
+	_require_intake_access("Service Request", "Customer", "Warehouse", "CH Store")
 	from gofix.scope_guard import user_scope
 	allowed_wh, _allowed_co, bypass = user_scope()
 
@@ -63,10 +82,19 @@ def get_intake_context(company=None) -> dict:
 @frappe.whitelist()
 def search_serial(serial_no) -> dict:
 	"""Look up serial and return device details + warranty + open SRs."""
-	if not frappe.db.exists("Serial No", serial_no):
+	_require_intake_access("Serial No", "Item", "Service Request")
+	serial_no = (serial_no or "").strip()
+	if not serial_no or len(serial_no) > 140 or not frappe.db.exists("Serial No", serial_no):
 		return {"found": False}
 
 	sn = frappe.get_doc("Serial No", serial_no)
+	sn.check_permission("read")
+	from gofix.scope_guard import assert_warehouse
+	assert_warehouse(
+		warehouse=sn.warehouse,
+		company=sn.company,
+		msg=_("This serial number is outside your assigned store scope."),
+	)
 
 	# Check warranty via ch_item_master
 	warranty_info = {"warranty_covered": False, "warranty_status": "No Warranty"}
@@ -105,7 +133,9 @@ def search_serial(serial_no) -> dict:
 @frappe.whitelist()
 def search_customer(query) -> list:
 	"""Find customers by phone or name fragment."""
-	if not query or len(query) < 3:
+	_require_intake_access("Customer", "Service Request")
+	query = (query or "").strip()
+	if len(query) < 3 or len(query) > 140:
 		return []
 
 	# Restrict the service-history search to the caller's in-scope stores so a
@@ -136,7 +166,7 @@ def search_customer(query) -> list:
 	else:
 		results = []
 
-	if not results:
+	if not results and bypass:
 		# Fallback: search Customer doctype
 		results = frappe.get_all("Customer", filters={
 			"customer_name": ["like", f"%{query}%"],
@@ -164,17 +194,25 @@ def get_customer_classification(customer: str) -> dict:
 	detect_visit_type() so the POS operator sees the same classification
 	before the SR is saved.
 	"""
-	gstin = frappe.db.get_value("Customer", customer, "gstin") or ""
+	_require_intake_access("Customer", "Service Request")
+	customer_doc = frappe.get_doc("Customer", customer)
+	customer_doc.check_permission("read")
+	gstin = customer_doc.gstin or ""
 	customer_type = "B2B" if _GSTIN_RE.match(gstin.strip().upper()) else "B2C"
 
-	prior_count = frappe.db.count(
-		"Service Request",
-		filters={"customer": customer, "docstatus": ["<", 2]},
-	)
+	from gofix.scope_guard import user_scope
+	allowed_wh, _allowed_co, bypass = user_scope()
+	filters = {"customer": customer, "docstatus": ["<", 2]}
+	if not bypass:
+		if not allowed_wh:
+			frappe.throw(_("No service-store scope is assigned to your user."), frappe.PermissionError)
+		filters["source_warehouse"] = ["in", sorted(allowed_wh)]
+	prior_count = frappe.db.count("Service Request", filters=filters)
+	vip_threshold = get_int_setting("vip_customer_request_threshold", 10, minimum=1)
 
 	if prior_count == 0:
 		visit_type = "New"
-	elif prior_count < _VIP_THRESHOLD:
+	elif prior_count < vip_threshold:
 		visit_type = "Regular"
 	else:
 		visit_type = "VIP"
@@ -196,12 +234,15 @@ def get_token_intake_defaults(token_name: str) -> dict:
 	(GoFix Symptom.backend_category), so the Service Request lands in the same
 	service taxonomy the token reports use.
 	"""
-	from gofix.api.token_api import _ensure_fde
+	from gofix.api.token_api import _assert_token_scope, _ensure_fde
 
 	_ensure_fde()
+	_require_intake_access("GoFix Token")
 	if not token_name or not frappe.db.exists("GoFix Token", token_name):
 		frappe.throw(_("GoFix Token {0} not found.").format(token_name or ""))
 	token = frappe.get_doc("GoFix Token", token_name)
+	token.check_permission("read")
+	_assert_token_scope(token)
 
 	# Canonical item-master Brand behind the customer-facing label (e.g.
 	# "Google Pixel" → "Google") so the job card and Item analytics agree.
@@ -265,6 +306,7 @@ def _link_gofix_token(sr, token_name: str) -> None:
 	if not frappe.db.exists("GoFix Token", token_name):
 		frappe.throw(_("GoFix Token {0} not found.").format(token_name))
 	token = frappe.get_doc("GoFix Token", token_name)
+	token.check_permission("write")
 	label = token.token_number or token_name
 	if token.service_request and token.service_request != sr.name:
 		frappe.throw(
@@ -278,16 +320,21 @@ def _link_gofix_token(sr, token_name: str) -> None:
 				label, token.company, sr.company
 			)
 		)
+	if token.store and token.store != sr.source_warehouse:
+		frappe.throw(
+			_("Token {0} belongs to another store and cannot be linked to this job card.").format(label),
+			frappe.PermissionError,
+		)
 	if token.status in {STATUS_WAITING, STATUS_CALLED}:
 		token.status = STATUS_ATTENDING
-		token.save(ignore_permissions=True)
+		token.save()
 	token.service_request = sr.name
 	if token.status == STATUS_ATTENDING:
 		token.status = STATUS_JOB_CARD
-	token.save(ignore_permissions=True)
+	token.save()
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def submit_intake(data) -> dict:
 	"""Create a Service Request from quick intake data.
 
@@ -299,6 +346,18 @@ def submit_intake(data) -> dict:
 	import json
 	if isinstance(data, str):
 		data = json.loads(data)
+	require_role_setting("app_access_roles", _QUICK_INTAKE_ROLES, action=_("create quick intake"))
+	for doctype, permission_type in (
+		("Service Request", "create"),
+		("Service Request", "submit"),
+		("Customer", "read"),
+		("Item", "read"),
+	):
+		if not frappe.has_permission(doctype, ptype=permission_type):
+			frappe.throw(
+				_("You do not have {0} permission for {1}.").format(permission_type, doctype),
+				frappe.PermissionError,
+			)
 
 	required = ["customer", "contact_number", "device_item", "issue_description", "source_warehouse"]
 	for field in required:
@@ -308,13 +367,21 @@ def submit_intake(data) -> dict:
 	# Bind the intake to a warehouse the caller is entitled to — a technician
 	# must not file a Service Request against another store's warehouse.
 	from gofix.scope_guard import assert_warehouse
+	warehouse_company = frappe.db.get_value(
+		"Warehouse", data["source_warehouse"], ["company", "disabled"], as_dict=True
+	)
+	if not warehouse_company or warehouse_company.disabled:
+		frappe.throw(_("The intake warehouse is missing or disabled."), frappe.ValidationError)
+	if data.get("company") and data["company"] != warehouse_company.company:
+		frappe.throw(_("The intake company does not match the warehouse."), frappe.ValidationError)
 	assert_warehouse(
 		warehouse=data["source_warehouse"],
+		company=warehouse_company.company,
 		msg=_("You are not entitled to create intake at this warehouse."),
 	)
 
 	sr = frappe.new_doc("Service Request")
-	sr.company = data.get("company") or frappe.defaults.get_user_default("company")
+	sr.company = warehouse_company.company
 	sr.customer = data["customer"]
 	sr.customer_name = data.get("customer_name") or frappe.db.get_value("Customer", data["customer"], "customer_name")
 	sr.contact_number = data["contact_number"]

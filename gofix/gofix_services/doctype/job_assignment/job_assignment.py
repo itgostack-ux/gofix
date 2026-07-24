@@ -8,11 +8,35 @@ from frappe import _
 from frappe.model.document import Document
 from frappe.utils import flt, get_datetime, now_datetime, time_diff_in_hours
 
+from gofix.config import get_int_setting, has_role_setting, is_privileged_user, require_role_setting
+from gofix.security import assert_service_request_access
+
+
+def _bounded_rows(doctype, *, batch_limit=None, **kwargs):
+	batch_limit = min(
+		max(int(batch_limit or get_int_setting("scheduler_batch_limit", 500)), 1),
+		5000,
+	)
+	start = 0
+	while True:
+		rows = frappe.get_all(
+			doctype,
+			start=start,
+			limit_page_length=batch_limit,
+			**kwargs,
+		)
+		if not rows:
+			break
+		yield from rows
+		if len(rows) < batch_limit:
+			break
+		start += len(rows)
+
 
 def _job_assignment_status_transitions(job_assignment):
 	"""Return assignment-status transitions recorded in Version history."""
 	transitions = []
-	for row in frappe.get_all(
+	for row in _bounded_rows(
 		"Version",
 		filters={
 			"ref_doctype": "Job Assignment",
@@ -98,7 +122,7 @@ def _insert_custody_period(assignment, started_at, ended_at, note):
 	return hours
 
 
-def reconcile_job_assignment_actual_hours(job_assignments=None, commit=False):
+def reconcile_job_assignment_actual_hours(job_assignments=None, commit=False, batch_limit=None):
 	"""Backfill missing actual hours from status history.
 
 	Only submitted, completed assignments whose actual hours are zero are
@@ -115,6 +139,17 @@ def reconcile_job_assignment_actual_hours(job_assignments=None, commit=False):
 
 	if isinstance(job_assignments, str):
 		job_assignments = [job_assignments]
+	batch_limit = min(
+		max(int(batch_limit or get_int_setting("scheduler_batch_limit", 500)), 1),
+		5000,
+	)
+	if job_assignments:
+		job_assignments = list(dict.fromkeys(job_assignments))
+		if len(job_assignments) > batch_limit:
+			frappe.throw(
+				_("A maximum of {0} Job Assignments can be reconciled in one targeted run.").format(batch_limit),
+				frappe.ValidationError,
+			)
 
 	filters = {
 		"docstatus": 1,
@@ -123,7 +158,7 @@ def reconcile_job_assignment_actual_hours(job_assignments=None, commit=False):
 	if job_assignments:
 		filters["name"] = ("in", tuple(job_assignments))
 
-	rows = frappe.get_all(
+	rows = _bounded_rows(
 		"Job Assignment",
 		filters=filters,
 		fields=[
@@ -131,6 +166,7 @@ def reconcile_job_assignment_actual_hours(job_assignments=None, commit=False):
 			"start_datetime", "end_datetime", "actual_hours",
 		],
 		order_by="creation asc",
+		batch_limit=batch_limit,
 	)
 	summary = {
 		"examined": 0,
@@ -164,18 +200,21 @@ def reconcile_job_assignment_actual_hours(job_assignments=None, commit=False):
 		)
 		if total_hours <= 0:
 			summary["skipped"] += 1
-			summary["results"].append({
+			result = {
 				"job_assignment": row.name,
 				"status": "SKIPPED",
 				"reason": "No recoverable In Progress period",
-			})
+			}
+			if len(summary["results"]) < batch_limit:
+				summary["results"].append(result)
 			continue
 
-		existing_periods = frappe.get_all(
+		existing_periods = list(_bounded_rows(
 			"GoFix Custody Log",
 			filters={"job_assignment": row.name},
 			fields=["taken_at", "released_at"],
-		)
+			batch_limit=batch_limit,
+		))
 		for started_at, ended_at in periods:
 			if _custody_period_exists(existing_periods, started_at, ended_at):
 				continue
@@ -199,15 +238,21 @@ def reconcile_job_assignment_actual_hours(job_assignments=None, commit=False):
 			update_modified=False,
 		)
 		summary["repaired"] += 1
-		summary["results"].append({
+		result = {
 			"job_assignment": row.name,
 			"status": "REPAIRED",
 			"actual_hours": round(total_hours, 2),
 			"periods": len(periods),
-		})
+		}
+		if len(summary["results"]) < batch_limit:
+			summary["results"].append(result)
 
 	if commit:
 		frappe.db.commit()
+	summary["results_truncated"] = max(
+		summary["examined"] - len(summary["results"]),
+		0,
+	)
 	return summary
 
 
@@ -552,7 +597,7 @@ class JobAssignment(Document):
 		
 		self.flags.ignore_validate_update_after_submit = True
 		self.append("technician_audit", audit_entry)
-		self.save(ignore_permissions=True)
+		self.save()
 	
 	def mark_received_from_technician(self):
 		"""Mark job as received from technician"""
@@ -574,31 +619,98 @@ class JobAssignment(Document):
 				audit.operation = "RECEIVED"
 				break
 		
-		self.save(ignore_permissions=True)
+		self.save()
 		
 		frappe.msgprint(_("Marked as received from {0}").format(self.service_engineer))
 
 
 # API Methods
-@frappe.whitelist()
 def get_technician_workload(engineer) -> dict:
 	"""Get count of open/in-progress jobs for a technician.
 	Returns dict with open_count and list of active job names.
 	"""
-	active_jobs = frappe.get_all(
+	require_role_setting(
+		"technician_workload_roles",
+		("Service Manager", "Service Engineer", "GoFix Floor Manager"),
+		action=_("view technician workload"),
+	)
+	frappe.has_permission("Job Assignment", "read", throw=True)
+	if not frappe.db.exists("Employee", engineer):
+		frappe.throw(_("Technician {0} does not exist.").format(engineer))
+	employee = frappe.get_doc("Employee", engineer)
+	employee.check_permission("read")
+	warehouse_field = (
+		"gofix_service_warehouse"
+		if frappe.db.has_column("Employee", "gofix_service_warehouse")
+		else None
+	)
+	warehouse = employee.get(warehouse_field) if warehouse_field else None
+	if not is_privileged_user() and not warehouse:
+		frappe.throw(_("Technician warehouse scope is not configured."), frappe.PermissionError)
+	from gofix.scope_guard import assert_warehouse
+
+	assert_warehouse(warehouse=warehouse, company=employee.company)
+	row_limit = min(get_int_setting("technician_workload_record_limit", 200), 1000)
+	candidates = frappe.get_list(
 		"Job Assignment",
 		filters={
 			"service_engineer": engineer,
 			"assignment_status": ["in", ["Open", "In Progress"]],
 			"docstatus": ["<", 2],
 		},
-		fields=["name", "service_order", "job_type", "assignment_date"],
+		fields=["name", "service_request", "service_order", "job_type", "assignment_date"],
 		order_by="assignment_date desc",
+		limit=row_limit,
 	)
+	active_jobs = []
+	for row in candidates:
+		service_request = row.service_request or frappe.db.get_value(
+			"Sales Order", row.service_order, "service_request"
+		)
+		if not service_request:
+			continue
+		try:
+			assert_service_request_access(service_request, permission_type="read")
+		except frappe.PermissionError:
+			continue
+		row.pop("service_request", None)
+		active_jobs.append(row)
 	return {"open_count": len(active_jobs), "active_jobs": active_jobs}
 
 
-@frappe.whitelist()
+def authorize_job_assignment_creation(service_request, service_engineer=None):
+	"""Authorize a named, scoped service ticket before creating an assignment."""
+	require_role_setting(
+		"job_assignment_creation_roles",
+		("Service Manager", "Service Engineer", "GoFix Floor Manager"),
+		action=_("create a Job Assignment"),
+	)
+	frappe.has_permission("Job Assignment", ptype="create", throw=True)
+	sr = assert_service_request_access(service_request, permission_type="write")
+
+	if not service_engineer:
+		return sr
+
+	if not frappe.db.exists("Employee", service_engineer):
+		frappe.throw(_("Engineer {0} not found").format(service_engineer))
+	employee = frappe.get_doc("Employee", service_engineer)
+	if not frappe.has_permission("Employee", ptype="read", doc=employee):
+		frappe.throw(_("You cannot assign this employee."), frappe.PermissionError)
+	if employee.status != "Active":
+		frappe.throw(_("Engineer {0} is not active.").format(service_engineer))
+	if sr.get("company") and employee.company and employee.company != sr.company:
+		frappe.throw(_("The engineer belongs to a different company."), frappe.PermissionError)
+
+	can_assign_others = has_role_setting(
+		"job_assignment_manager_roles",
+		("Service Manager", "GoFix Floor Manager"),
+	)
+	if not can_assign_others and employee.user_id != frappe.session.user:
+		frappe.throw(_("You may only create an assignment for yourself."), frappe.PermissionError)
+	return sr
+
+
+@frappe.whitelist(methods=["POST"])
 def create_job_sheet_from_service_order(service_order, service_engineer=None, job_type="Repair", estimated_hours=None) -> dict:
 	"""Create Job Sheet (Job Assignment) from Service Order
 	
@@ -608,16 +720,36 @@ def create_job_sheet_from_service_order(service_order, service_engineer=None, jo
 		job_type (str): Type of job (Repair, Diagnosis, etc.)
 		estimated_hours (float): Estimated hours for the job
 	"""
+	if not service_order:
+		frappe.throw(_("Service Order is required."))
 	so = frappe.get_doc("Sales Order", service_order)
+	so.check_permission("read")
 	
 	# Check if Service Order is marked as service order
 	if not hasattr(so, 'is_service_order') or not so.is_service_order:
 		frappe.throw(_("This is not a Service Order"), title=_("Job Assignment Error"))
+	service_request = getattr(so, "service_request", None)
+	if not service_request:
+		frappe.throw(_("The Service Order is not linked to a Service Request."))
+	authorize_job_assignment_creation(service_request, service_engineer)
+	frappe.db.sql(
+		"SELECT name FROM `tabSales Order` WHERE name = %s FOR UPDATE",
+		(service_order,),
+	)
+	allowed_job_types = {
+		value.strip()
+		for value in (
+			frappe.get_meta("Job Assignment").get_field("job_type").options or ""
+		).splitlines()
+		if value.strip()
+	}
+	if job_type not in allowed_job_types:
+		frappe.throw(_("Invalid job type {0}.").format(job_type))
 	
 	# Create Job Sheet
 	job_sheet = frappe.new_doc("Job Assignment")
 	job_sheet.service_order = service_order
-	job_sheet.service_request = so.service_request if hasattr(so, 'service_request') else None
+	job_sheet.service_request = service_request
 	job_sheet.assignment_date = frappe.utils.today()
 	job_sheet.assignment_datetime = frappe.utils.now()
 	job_sheet.assigned_by = frappe.session.user
@@ -626,8 +758,12 @@ def create_job_sheet_from_service_order(service_order, service_engineer=None, jo
 	job_sheet.priority = so.service_priority if hasattr(so, 'service_priority') else "Medium"
 	
 	# Set estimated hours if provided
-	if estimated_hours:
-		job_sheet.estimated_hours = estimated_hours
+	if estimated_hours is not None:
+		hours = flt(estimated_hours)
+		max_hours = get_int_setting("max_job_estimated_hours", 1000)
+		if hours <= 0 or hours > max_hours:
+			frappe.throw(_("Estimated hours must be between 0 and {0}.").format(max_hours))
+		job_sheet.estimated_hours = hours
 	
 	# Assign service engineer if provided
 	if service_engineer:
@@ -636,7 +772,7 @@ def create_job_sheet_from_service_order(service_order, service_engineer=None, jo
 		job_sheet.assignment_status = "In Progress"
 		# GF-12 fix: Warn if technician has high workload
 		workload = get_technician_workload(service_engineer)
-		if workload["open_count"] >= 10:
+		if workload["open_count"] >= get_int_setting("technician_workload_warning_count", 10):
 			frappe.msgprint(
 				_("Warning: {0} already has {1} open jobs").format(
 					service_engineer, workload["open_count"]
@@ -648,31 +784,22 @@ def create_job_sheet_from_service_order(service_order, service_engineer=None, jo
 		job_sheet.assignment_type = "User Assignment"
 		job_sheet.user = frappe.session.user
 	
-	job_sheet.insert(ignore_permissions=True)
+	duplicate = frappe.db.exists(
+		"Job Assignment",
+		{
+			"service_order": service_order,
+			"service_engineer": service_engineer,
+			"assignment_status": ("in", ("Open", "In Progress")),
+			"docstatus": ("<", 2),
+		},
+	) if service_engineer else None
+	if duplicate:
+		frappe.throw(_("Active Job Assignment {0} already exists.").format(duplicate))
+
+	job_sheet.insert()
 	
 	frappe.msgprint(_("Job Sheet {0} created successfully").format(job_sheet.name),
 		title=_("Success"),
 		indicator="green")
 	
 	return job_sheet.name
-
-
-def _get_least_loaded_technician(company=None):
-	"""GF-12 fix: Find the technician with the fewest open jobs for auto-balancing."""
-	filters = {"designation": ["like", "%Technician%"], "status": "Active"}
-	if company:
-		filters["company"] = company
-	technicians = frappe.get_all("Employee", filters=filters, pluck="name", limit=50)
-	if not technicians:
-		return None
-
-	best = None
-	for emp in technicians:
-		count = frappe.db.count("Job Assignment", {
-			"service_engineer": emp,
-			"assignment_status": ["in", ["Open", "In Progress"]],
-			"docstatus": ["<", 2],
-		})
-		if best is None or count < best["open_count"]:
-			best = {"engineer": emp, "open_count": count}
-	return best

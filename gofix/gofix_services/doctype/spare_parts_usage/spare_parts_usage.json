@@ -57,7 +57,11 @@
   "defective_action",
   "defective_stock_entry",
   "section_break_stock_link",
-  "stock_entry"
+  "stock_entry",
+  "section_break_recovery",
+  "recovery_disposition",
+  "column_break_recovery",
+  "recovery_stock_entry"
  ],
  "fields": [
   {
@@ -287,6 +291,8 @@
    "fieldtype": "Check",
    "label": "Requires Approval",
    "read_only": 1,
+   "no_copy": 1,
+   "permlevel": 1,
    "description": "Auto-set when part value exceeds threshold or part is a substitute"
   },
   {
@@ -296,7 +302,10 @@
    "options": "\nPending\nApproved\nRejected",
    "depends_on": "eval:doc.requires_approval",
    "in_standard_filter": 1,
-   "search_index": 1
+   "search_index": 1,
+   "no_copy": 1,
+   "read_only": 1,
+   "permlevel": 1
   },
   {
    "fieldname": "approved_by",
@@ -304,6 +313,8 @@
    "label": "Approved By",
    "options": "User",
    "read_only": 1,
+   "no_copy": 1,
+   "permlevel": 1,
    "depends_on": "eval:doc.approval_status=='Approved'"
   },
   {
@@ -311,12 +322,17 @@
    "fieldtype": "Datetime",
    "label": "Approval Date & Time",
    "read_only": 1,
+   "no_copy": 1,
+   "permlevel": 1,
    "depends_on": "eval:doc.approval_status=='Approved'"
   },
   {
    "fieldname": "approval_remarks",
    "fieldtype": "Small Text",
-   "label": "Approval Remarks"
+   "label": "Approval Remarks",
+   "no_copy": 1,
+   "read_only": 1,
+   "permlevel": 1
   },
   {
    "fieldname": "column_break_approval",
@@ -328,6 +344,8 @@
    "label": "Approval Rule",
    "options": "GoFix Approval Rule",
    "read_only": 1,
+   "no_copy": 1,
+   "permlevel": 1,
    "description": "The rule that triggered approval requirement"
   },
   {
@@ -335,6 +353,8 @@
    "fieldtype": "Currency",
    "label": "Approval Threshold",
    "read_only": 1,
+   "no_copy": 1,
+   "permlevel": 1,
    "description": "The threshold amount that was exceeded"
   },
   {
@@ -434,90 +454,128 @@
  "owner": "Administrator",
  "permissions": [
   {
-   "create": 1,
-   "delete": 1,
-   "email": 1,
-   "export": 1,
-   "print": 1,
-   "read": 1,
-   "report": 1,
    "role": "System Manager",
-   "share": 1,
-   "write": 1
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "import": 1,
+   "print": 1,
+   "report": 1,
+   "share": 1
   },
   {
+   "role": "System Manager",
+   "permlevel": 1,
+   "read": 1,
+   "write": 1,
+   "create": 1
+  },
+  {
+   "role": "Service Manager",
+   "permlevel": 1,
+   "read": 1
+  },
+  {
+   "role": "QC Manager",
+   "permlevel": 1,
+   "read": 1
+  },
+  {
+   "role": "Store Manager",
+   "permlevel": 1,
+   "read": 1
+  },
+  {
+   "role": "Service Manager",
+   "read": 1,
+   "write": 1,
    "create": 1,
    "delete": 1,
    "email": 1,
    "export": 1,
    "print": 1,
-   "read": 1,
    "report": 1,
-   "role": "Service Manager",
-   "share": 1,
-   "write": 1
+   "share": 1
   },
   {
-   "create": 1,
-   "email": 1,
-   "export": 1,
-   "print": 1,
-   "read": 1,
-   "report": 1,
    "role": "Service User",
-   "share": 1,
-   "write": 1
-  },
-  {
+   "read": 1,
+   "write": 1,
    "create": 1,
    "email": 1,
    "export": 1,
    "print": 1,
-   "read": 1,
    "report": 1,
+   "share": 1
+  },
+  {
    "role": "Sales Manager",
-   "share": 1,
-   "write": 1
-  },
-  {
+   "read": 1,
+   "write": 1,
    "create": 1,
    "email": 1,
    "export": 1,
    "print": 1,
-   "read": 1,
    "report": 1,
+   "share": 1
+  },
+  {
    "role": "Sales User",
-   "share": 1,
-   "write": 1
-  },
-  {
+   "read": 1,
+   "write": 1,
    "create": 1,
    "email": 1,
    "export": 1,
    "print": 1,
-   "read": 1,
    "report": 1,
+   "share": 1
+  },
+  {
    "role": "Service Engineer",
-   "share": 1,
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "report": 1,
+   "share": 1
+  },
+  {
+   "role": "Service Viewer",
+   "read": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "report": 1,
+   "share": 1
+  },
+  {
+   "role": "Stock User",
+   "read": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "report": 1,
+   "share": 1
+  },
+  {
+   "role": "GoFix Floor Manager",
+   "read": 1,
    "write": 1
   },
   {
-   "email": 1,
-   "export": 1,
-   "print": 1,
+   "role": "QC Manager",
    "read": 1,
-   "report": 1,
-   "role": "Service Viewer",
-   "share": 1
+   "write": 1
   },
   {
-   "email": 1,
-   "export": 1,
-   "print": 1,
+   "role": "Store Manager",
    "read": 1,
-   "report": 1,
-   "role": "Stock User",
-   "share": 1
+   "write": 1
   }
  ],
  "sort_field": "modified",

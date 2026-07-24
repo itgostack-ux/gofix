@@ -11,11 +11,22 @@
 
 import frappe
 from frappe import _
-from frappe.utils import flt, cint, nowdate, add_days, getdate
+from frappe.utils import add_days, cint, flt, nowdate
+
+from gofix.config import get_int_setting, is_privileged_user, require_role_setting
+from gofix.security import assert_service_request_access
+from gofix.scope_guard import assert_warehouse
 
 
 @frappe.whitelist()
-def get_recommended_technicians(service_request=None, issue_category=None, minimum_grade=None, limit=5) -> list:
+def get_recommended_technicians(
+	service_request=None,
+	issue_category=None,
+	minimum_grade=None,
+	limit=5,
+	company=None,
+	warehouse=None,
+) -> list:
 	"""Return ranked technicians with scores for a given SR or issue category.
 
 	Each technician gets a composite score (0–100) based on:
@@ -23,54 +34,118 @@ def get_recommended_technicians(service_request=None, issue_category=None, minim
 	  - workload_score (0–30): fewer active jobs = higher score
 	  - performance_score (0–30): completion rate, low rework, speed
 	"""
-	limit = cint(limit) or 5
+	require_role_setting(
+		"job_assignment_creation_roles",
+		action=_("view technician recommendations"),
+	)
+	for doctype in ("Service Request", "Employee", "Job Assignment", "Technician Grade"):
+		frappe.has_permission(doctype, ptype="read", throw=True)
 
-	# Resolve issue category from SR if not provided
-	if service_request and not issue_category:
-		issue_category = frappe.db.get_value("Service Request", service_request, "issue_category")
-
-	company = None
-	warehouse = None
 	if service_request:
-		sr = frappe.db.get_value(
-			"Service Request", service_request,
-			["company", "source_warehouse", "current_processing_location"],
-			as_dict=True,
+		sr = assert_service_request_access(service_request, permission_type="read")
+		sr_company = sr.get("company")
+		sr_warehouse = (
+			sr.get("current_processing_location")
+			or sr.get("transferred_to_store")
+			or sr.get("current_location")
+			or sr.get("source_warehouse")
 		)
-		if sr:
-			company = sr.company
-			warehouse = sr.current_processing_location or sr.source_warehouse
+		if company and company != sr_company:
+			frappe.throw(_("Company does not match the Service Request."), frappe.PermissionError)
+		if warehouse and warehouse != sr_warehouse:
+			frappe.throw(_("Warehouse does not match the Service Request."), frappe.PermissionError)
+		if issue_category and sr.get("issue_category") and issue_category != sr.issue_category:
+			frappe.throw(_("Issue category does not match the Service Request."), frappe.PermissionError)
+		company = sr_company
+		warehouse = sr_warehouse
+		issue_category = sr.get("issue_category") or issue_category
+	elif not is_privileged_user() and (not company or not warehouse):
+		frappe.throw(
+			_("A Service Request or an explicit company and warehouse is required."),
+			frappe.PermissionError,
+		)
 
-	# Get all active technician employees
+	if company:
+		company_doc = frappe.get_doc("Company", company)
+		company_doc.check_permission("read")
+	if warehouse:
+		warehouse_doc = frappe.get_doc("Warehouse", warehouse)
+		warehouse_doc.check_permission("read")
+		if company and warehouse_doc.company != company:
+			frappe.throw(_("Warehouse does not belong to the selected company."), frappe.PermissionError)
+		company = company or warehouse_doc.company
+		assert_warehouse(warehouse=warehouse, company=company)
+
+	if issue_category:
+		issue_doc = frappe.get_doc("Issue Category", issue_category)
+		issue_doc.check_permission("read")
+	if minimum_grade:
+		grade_doc = frappe.get_doc("Technician Grade", minimum_grade)
+		grade_doc.check_permission("read")
+
 	filters = {"status": "Active"}
 	if company:
 		filters["company"] = company
+	has_warehouse_field = frappe.db.has_column("Employee", "gofix_service_warehouse")
+	if warehouse and has_warehouse_field:
+		filters["gofix_service_warehouse"] = warehouse
+	elif warehouse and not is_privileged_user():
+		return []
 
-	employees = frappe.get_all(
+	candidate_limit = min(get_int_setting("technician_candidate_limit", 200), 500)
+	employee_fields = [
+		"name", "employee_name", "technician_grade", "designation", "default_shift",
+	]
+	if has_warehouse_field:
+		employee_fields.append("gofix_service_warehouse")
+	employees = frappe.get_list(
 		"Employee",
 		filters=filters,
-		fields=["name", "employee_name", "technician_grade", "designation", "default_shift"],
+		fields=employee_fields,
+		order_by="employee_name, name",
+		limit_page_length=candidate_limit,
 	)
 
 	if not employees:
 		return []
 
-	# Build scoring context
-	emp_names = [e.name for e in employees]
-	workload_map = _get_workload_map(emp_names)
-	perf_map = _get_performance_map(emp_names, days=90)
-	skill_map = _get_skill_map(emp_names, issue_category, days=180) if issue_category else {}
+	emp_names = tuple(e.name for e in employees)
+	workload_map = _get_workload_map(emp_names, company=company, warehouse=warehouse)
+	performance_window_days = get_int_setting("technician_performance_window_days", 90)
+	skill_window_days = get_int_setting("technician_skill_window_days", 180)
+	perf_map = _get_performance_map(
+		emp_names,
+		company=company,
+		warehouse=warehouse,
+		days=performance_window_days,
+	)
+	skill_map = (
+		_get_skill_map(
+			emp_names,
+			issue_category,
+			company=company,
+			warehouse=warehouse,
+			days=skill_window_days,
+		)
+		if issue_category else {}
+	)
 
-	# Grade filtering
-	req_level = 0
+	grade_names = {employee.technician_grade for employee in employees if employee.technician_grade}
 	if minimum_grade:
-		req_level = cint(frappe.db.get_value("Technician Grade", minimum_grade, "grade_level") or 0)
+		grade_names.add(minimum_grade)
+	grade_rows = frappe.get_list(
+		"Technician Grade",
+		filters={"name": ("in", tuple(grade_names))},
+		fields=["name", "grade_name", "grade_level"],
+		limit_page_length=len(grade_names),
+	) if grade_names else []
+	grade_by_name = {grade.name: grade for grade in grade_rows}
+	req_level = cint((grade_by_name.get(minimum_grade) or {}).get("grade_level"))
 
 	results = []
 	for emp in employees:
-		emp_level = 0
-		if emp.technician_grade:
-			emp_level = cint(frappe.db.get_value("Technician Grade", emp.technician_grade, "grade_level") or 0)
+		grade = grade_by_name.get(emp.technician_grade)
+		emp_level = cint(grade.grade_level if grade else 0)
 
 		if req_level and emp_level < req_level:
 			continue
@@ -118,15 +193,10 @@ def get_recommended_technicians(service_request=None, issue_category=None, minim
 
 		composite = round(skill_score + workload_score + perf_score, 1)
 
-		grade_display = ""
-		if emp.technician_grade:
-			grade = frappe.db.get_value(
-				"Technician Grade", emp.technician_grade,
-				["grade_name", "grade_level"], as_dict=True,
-			)
-			grade_display = f"L{grade.grade_level} — {grade.grade_name}" if grade else emp.technician_grade
-		else:
-			grade_display = "Ungraded"
+		grade_display = (
+			f"L{grade.grade_level} — {grade.grade_name}"
+			if grade else (emp.technician_grade or "Ungraded")
+		)
 
 		results.append({
 			"employee": emp.name,
@@ -139,34 +209,50 @@ def get_recommended_technicians(service_request=None, issue_category=None, minim
 			"workload_score": round(workload_score, 1),
 			"performance_score": round(perf_score, 1),
 			"category_experience": category_jobs,
-			"total_completed_90d": total_done,
-			"rework_count_90d": rework_count,
+			"total_completed_window": total_done,
+			"rework_count_window": rework_count,
+			"performance_window_days": performance_window_days,
 			"recommendation": _get_recommendation_label(composite),
 		})
 
-	# Sort by score descending
-	results.sort(key=lambda x: x["score"], reverse=True)
-	return results[:cint(limit)]
+	results.sort(key=lambda row: (-row["score"], row["employee"]))
+	result_limit = min(
+		max(cint(limit) or 5, 1),
+		min(get_int_setting("technician_recommendation_limit", 25), 100),
+	)
+	return results[:result_limit]
 
 
-def _get_workload_map(emp_names):
+def _get_workload_map(emp_names, company=None, warehouse=None):
 	"""Count active (Open/In Progress) Job Assignments per technician."""
 	if not emp_names:
 		return {}
 
 	data = frappe.db.sql("""
-		SELECT service_engineer, COUNT(*) as cnt
-		FROM `tabJob Assignment`
-		WHERE service_engineer IN %(names)s
-			AND docstatus = 1
-			AND assignment_status IN ('Open', 'In Progress')
-		GROUP BY service_engineer
-	""", {"names": emp_names}, as_dict=True)
+		SELECT ja.service_engineer, COUNT(*) AS cnt
+		FROM `tabJob Assignment` ja
+		INNER JOIN `tabService Request` sr ON sr.name = ja.service_request
+		WHERE ja.service_engineer IN %(names)s
+			AND ja.docstatus = 1
+			AND ja.assignment_status IN ('Open', 'In Progress')
+			AND (%(company)s = '' OR sr.company = %(company)s)
+			AND (
+				%(warehouse)s = ''
+				OR sr.source_warehouse = %(warehouse)s
+				OR sr.current_location = %(warehouse)s
+				OR sr.transferred_to_store = %(warehouse)s
+			)
+		GROUP BY ja.service_engineer
+	""", {
+		"names": emp_names,
+		"company": company or "",
+		"warehouse": warehouse or "",
+	}, as_dict=True)
 
 	return {r.service_engineer: r.cnt for r in data}
 
 
-def _get_performance_map(emp_names, days=90):
+def _get_performance_map(emp_names, company=None, warehouse=None, days=90):
 	"""Get completion stats per technician over the last N days."""
 	if not emp_names:
 		return {}
@@ -175,17 +261,30 @@ def _get_performance_map(emp_names, days=90):
 
 	data = frappe.db.sql("""
 		SELECT
-			service_engineer,
+			ja.service_engineer,
 			COUNT(*) as completed,
-			SUM(CASE WHEN assignment_type = 'Rework' THEN 1 ELSE 0 END) as rework,
-			AVG(TIMESTAMPDIFF(HOUR, creation, modified)) as avg_hours
-		FROM `tabJob Assignment`
-		WHERE service_engineer IN %(names)s
-			AND docstatus = 1
-			AND assignment_status = 'Completed'
-			AND creation >= %(cutoff)s
-		GROUP BY service_engineer
-	""", {"names": emp_names, "cutoff": cutoff}, as_dict=True)
+			SUM(CASE WHEN ja.assignment_type = 'Rework' THEN 1 ELSE 0 END) as rework,
+			AVG(TIMESTAMPDIFF(HOUR, ja.creation, ja.modified)) as avg_hours
+		FROM `tabJob Assignment` ja
+		INNER JOIN `tabService Request` sr ON sr.name = ja.service_request
+		WHERE ja.service_engineer IN %(names)s
+			AND ja.docstatus = 1
+			AND ja.assignment_status = 'Completed'
+			AND ja.creation >= %(cutoff)s
+			AND (%(company)s = '' OR sr.company = %(company)s)
+			AND (
+				%(warehouse)s = ''
+				OR sr.source_warehouse = %(warehouse)s
+				OR sr.current_location = %(warehouse)s
+				OR sr.transferred_to_store = %(warehouse)s
+			)
+		GROUP BY ja.service_engineer
+	""", {
+		"names": emp_names,
+		"cutoff": cutoff,
+		"company": company or "",
+		"warehouse": warehouse or "",
+	}, as_dict=True)
 
 	result = {}
 	for r in data:
@@ -197,7 +296,7 @@ def _get_performance_map(emp_names, days=90):
 	return result
 
 
-def _get_skill_map(emp_names, issue_category, days=180):
+def _get_skill_map(emp_names, issue_category, company=None, warehouse=None, days=180):
 	"""Count how many jobs each technician has done for this issue category."""
 	if not emp_names or not issue_category:
 		return {}
@@ -215,8 +314,21 @@ def _get_skill_map(emp_names, issue_category, days=180):
 			AND ja.docstatus = 1
 			AND sr.issue_category = %(category)s
 			AND ja.creation >= %(cutoff)s
+			AND (%(company)s = '' OR sr.company = %(company)s)
+			AND (
+				%(warehouse)s = ''
+				OR sr.source_warehouse = %(warehouse)s
+				OR sr.current_location = %(warehouse)s
+				OR sr.transferred_to_store = %(warehouse)s
+			)
 		GROUP BY ja.service_engineer
-	""", {"names": emp_names, "category": issue_category, "cutoff": cutoff}, as_dict=True)
+	""", {
+		"names": emp_names,
+		"category": issue_category,
+		"cutoff": cutoff,
+		"company": company or "",
+		"warehouse": warehouse or "",
+	}, as_dict=True)
 
 	result = {}
 	for r in data:
@@ -229,11 +341,14 @@ def _get_skill_map(emp_names, issue_category, days=180):
 
 def _get_recommendation_label(score):
 	"""Human-readable recommendation label."""
-	if score >= 70:
+	high_score = get_int_setting("technician_recommendation_high_score", 70)
+	recommended_score = get_int_setting("technician_recommendation_score", 50)
+	available_score = get_int_setting("technician_available_score", 30)
+	if score >= high_score:
 		return "Highly Recommended"
-	elif score >= 50:
+	elif score >= recommended_score:
 		return "Recommended"
-	elif score >= 30:
+	elif score >= available_score:
 		return "Available"
 	else:
 		return "Low Match"

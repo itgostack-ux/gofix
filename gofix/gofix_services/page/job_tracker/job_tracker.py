@@ -2,7 +2,10 @@ import frappe
 from frappe import _
 from frappe.utils import nowdate, add_days
 
+from gofix.config import get_int_setting, require_role_setting
 from gofix.gofix_services.store_context import active_company
+from gofix.security import assert_service_request_access
+from gofix.scope_guard import assert_warehouse
 
 no_cache = 1
 
@@ -15,8 +18,10 @@ def get_context(context):
 @frappe.whitelist()
 def get_board_data(warehouse=None, date_from=None, date_to=None, search=None, company=None) -> dict:
 	"""Return all active Service Requests grouped by decision for the Kanban board."""
+	require_role_setting("service_access_roles", action=_("view the service job board"))
 	frappe.has_permission("Service Request", "read", throw=True)
 	company = active_company(company)
+	assert_warehouse(warehouse=warehouse, company=company)
 
 	if not date_from:
 		date_from = add_days(nowdate(), -30)
@@ -47,7 +52,7 @@ def get_board_data(warehouse=None, date_from=None, date_to=None, search=None, co
 			"source_warehouse",
 		],
 		order_by="service_date asc, priority desc",
-		limit=200,
+		limit_page_length=min(get_int_setting("token_queue_limit", 200), 500),
 	)
 
 	if not sr_list:
@@ -108,18 +113,19 @@ def get_board_data(warehouse=None, date_from=None, date_to=None, search=None, co
 @frappe.whitelist()
 def get_sr_detail(sr_name) -> dict:
 	"""Return full details of a single Service Request for the side panel."""
-	frappe.has_permission("Service Request", "read", throw=True)
-
-	sr = frappe.get_doc("Service Request", sr_name)
+	require_role_setting("service_access_roles", action=_("view service request details"))
+	sr = assert_service_request_access(sr_name, permission_type="read")
 
 	# Customer info
 	customer_info = {}
 	if sr.customer:
-		customer_info = frappe.db.get_value(
-			"Customer", sr.customer,
-			["customer_name", "mobile_no", "email_id"],
-			as_dict=True,
-		) or {}
+		customer = frappe.get_doc("Customer", sr.customer)
+		customer.check_permission("read")
+		customer_info = {
+			"customer_name": customer.customer_name,
+			"mobile_no": customer.mobile_no,
+			"email_id": customer.email_id,
+		}
 
 	# All Job Assignments
 	assignments = frappe.get_list(
@@ -131,9 +137,20 @@ def get_sr_detail(sr_name) -> dict:
 			"estimated_hours", "actual_hours", "work_performed",
 		],
 		order_by="assignment_date desc",
+		limit_page_length=get_int_setting("token_queue_limit", 200),
 	)
+	engineer_ids = {assignment["service_engineer"] for assignment in assignments if assignment.get("service_engineer")}
+	if engineer_ids:
+		frappe.has_permission("Employee", "read", throw=True)
+	engineer_rows = frappe.get_all(
+		"Employee",
+		filters={"name": ("in", tuple(engineer_ids))},
+		fields=["name", "employee_name"],
+		limit_page_length=len(engineer_ids),
+	) if engineer_ids else []
+	engineer_names = {row.name: row.employee_name for row in engineer_rows}
 	for a in assignments:
-		emp_name = frappe.db.get_value("Employee", a["service_engineer"], "employee_name") if a.get("service_engineer") else None
+		emp_name = engineer_names.get(a.get("service_engineer"))
 		a["engineer_display"] = emp_name or a.get("service_engineer") or a.get("team") or "—"
 
 	# Spare Parts
@@ -152,62 +169,20 @@ def get_sr_detail(sr_name) -> dict:
 	}
 
 
-# @frappe.whitelist()
-# def create_assignment(service_request, engineer, job_type="Repair", estimated_hours=None) -> dict:
-# 	"""Quick-assign a service engineer to a Service Request."""
-# 	frappe.has_permission("Job Assignment", "create", throw=True)
-
-# 	# GF-12 fix: Check technician workload before assigning
-# 	from gofix.gofix_services.doctype.job_assignment.job_assignment import get_technician_workload
-# 	workload = get_technician_workload(engineer)
-# 	if workload["open_count"] >= 10:
-# 		frappe.msgprint(
-# 			_("Warning: {0} already has {1} open jobs").format(engineer, workload["open_count"]),
-# 			indicator="orange",
-# 			alert=True,
-# 		)
-
-# 	from frappe.utils import nowdate
-# 	ja = frappe.new_doc("Job Assignment")
-# 	ja.service_request = service_request
-# 	ja.assignment_date = nowdate()
-# 	ja.service_engineer = engineer
-# 	ja.assignment_type = "Technician Assignment"
-# 	ja.job_type = job_type
-# 	ja.assignment_status = "Open"
-# 	if estimated_hours:
-# 		ja.estimated_hours = float(estimated_hours)
-# 	ja.flags.ignore_permissions = True
-# 	ja.insert()
-# 	ja.submit()
-# 	return {"name": ja.name, "status": "created"}
-
-
-
-
-
-
-
-
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def create_assignment(service_request, engineer, job_type="Repair", estimated_hours=None) -> dict:
 	"""Quick-assign a service engineer to a Service Request."""
 
-	frappe.has_permission("Job Assignment", "create", throw=True)
-
-	if not frappe.db.exists("Service Request", service_request):
-		frappe.throw(_("Service Request {0} not found").format(service_request))
-
-	if not frappe.db.exists("Employee", engineer) and not frappe.db.exists("User", engineer):
-		frappe.throw(_("Engineer {0} not found").format(engineer))
-
 	from gofix.gofix_services.doctype.job_assignment.job_assignment import (
+		authorize_job_assignment_creation,
 		get_technician_workload,
 	)
+	authorize_job_assignment_creation(service_request, engineer)
 
 	workload = get_technician_workload(engineer)
 
-	if workload.get("open_count", 0) >= 10:
+	warning_count = get_int_setting("technician_workload_warning_count", 10)
+	if workload.get("open_count", 0) >= warning_count:
 		frappe.msgprint(
 			_("Warning: {0} already has {1} open jobs").format(
 				engineer, workload.get("open_count", 0)
@@ -219,10 +194,10 @@ def create_assignment(service_request, engineer, job_type="Repair", estimated_ho
 	current_user = frappe.session.user
 
 	if not current_user or current_user == "Guest":
-		current_user = "Administrator"
+		frappe.throw(_("Sign in before assigning a technician."), frappe.AuthenticationError)
 
 	if not frappe.db.exists("User", current_user):
-		current_user = "Administrator"
+		frappe.throw(_("The signed-in user account no longer exists."), frappe.AuthenticationError)
 
 	ja = frappe.new_doc("Job Assignment")
 	ja.service_request = service_request
@@ -238,13 +213,11 @@ def create_assignment(service_request, engineer, job_type="Repair", estimated_ho
 	if estimated_hours:
 		try:
 			ja.estimated_hours = float(estimated_hours)
-		except Exception:
-			pass
+		except (TypeError, ValueError):
+			frappe.throw(_("Estimated hours must be a number."))
 
-	ja.insert(ignore_permissions=True)
+	ja.insert()
 	ja.submit()
-
-	frappe.db.commit()
 
 	return {
 		"name": ja.name,

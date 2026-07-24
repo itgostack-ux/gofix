@@ -6,12 +6,52 @@ from frappe import _
 from frappe.utils import flt
 from erpnext.selling.doctype.sales_order.sales_order import SalesOrder
 
+from gofix.config import (
+	get_business_role_users,
+	get_int_setting,
+	get_role_setting,
+	has_any_role,
+	has_role_setting,
+)
+
 
 class CustomSalesOrder(SalesOrder):
 	"""Extended Sales Order with Service Order sync"""
+	_SERVER_EVIDENCE_FIELDS = (
+		"estimate_approval_status",
+		"estimate_approved_datetime",
+		"estimate_approval_rule",
+		"decision_approval_status",
+		"decision_approved_by",
+		"decision_approval_datetime",
+		"decision_approval_rule",
+		"decision_approval_remarks",
+		"delivery_otp",
+		"delivery_otp_verified",
+		"delivery_otp_sent_at",
+		"delivery_otp_attempts",
+		"delivery_otp_locked_until",
+		"delivery_otp_consumed_at",
+	)
+
+	def _validate_server_evidence(self):
+		before = self.get_doc_before_save() if not self.is_new() else None
+		if before is None:
+			if any(self.get(fieldname) not in (None, "", 0, 0.0) for fieldname in self._SERVER_EVIDENCE_FIELDS):
+				frappe.throw(_("Service-order approval and OTP evidence is server-managed."), frappe.PermissionError)
+			return
+		if any(
+			self.get(fieldname) != before.get(fieldname)
+			for fieldname in self._SERVER_EVIDENCE_FIELDS
+		):
+			frappe.throw(
+				_("Service-order approval and OTP evidence can only be changed through authorized actions."),
+				frappe.PermissionError,
+			)
 
 	def validate(self):
 		"""Validate Service Order workflow"""
+		self._validate_server_evidence()
 		super().validate()
 		if self.is_service_order and self.service_request:
 			self.validate_service_order_status()
@@ -104,8 +144,7 @@ class CustomSalesOrder(SalesOrder):
 				# Check role permissions
 				if transition.allowed_roles:
 					allowed_roles = [r.strip() for r in transition.allowed_roles.split(',')]
-					user_roles = frappe.get_roles(frappe.session.user)
-					if not any(role in user_roles for role in allowed_roles):
+					if not has_any_role(allowed_roles):
 						continue  # Try next transition
 				
 				# Check condition script — declarative matcher only (no safe_eval)
@@ -173,7 +212,7 @@ class CustomSalesOrder(SalesOrder):
 
 		Supports simple expressions like:
 		  doc.status == "Completed"
-		  doc.grand_total > 5000
+		  doc.grand_total > a configured numeric threshold
 		  doc.qc_status == "Passed" and doc.repair_outcome != "Not Repairable"
 
 		Complex Python expressions are rejected — configure simpler conditions.
@@ -386,9 +425,9 @@ def update_service_request_on_qc(doc, method=None):
 	if hasattr(doc, 'is_service_order') and doc.is_service_order and doc.service_request and hasattr(doc, 'qc_status'):
 		if doc.qc_status == "Pass":
 			# GF-5 fix: Only users with QC Manager/Store Manager/System Manager role can approve QC Pass
-			allowed_roles = {"QC Manager", "Store Manager", "System Manager", "Administrator"}
-			user_roles = set(frappe.get_roles())
-			if not user_roles.intersection(allowed_roles):
+			if not has_role_setting(
+				"qc_approval_roles", ("QC Manager", "Store Manager", "System Manager")
+			):
 				frappe.throw(
 					_("Only QC Managers or Store Managers can approve QC Pass."),
 					title=_("Insufficient Permission"),
@@ -458,23 +497,29 @@ def _update_service_costing(doc):
 			"assignment_status": ["in", ["Completed", "Closed"]],
 		},
 		fields=["actual_hours", "service_engineer"])
+	employee_names = tuple({js.service_engineer for js in job_sheets if js.service_engineer})
+	employee_rates = {}
+	if employee_names:
+		annual_working_hours = get_int_setting("annual_working_hours", 2080)
+		employee_fields = ["name", "ctc"]
+		has_hourly_rate = frappe.db.has_column("Employee", "custom_hourly_rate")
+		if has_hourly_rate:
+			employee_fields.append("custom_hourly_rate")
+		for employee in frappe.get_all(
+			"Employee",
+			filters={"name": ("in", employee_names)},
+			fields=employee_fields,
+			limit_page_length=len(employee_names),
+		):
+			hourly_rate = flt(employee.get("custom_hourly_rate")) if has_hourly_rate else 0
+			if not hourly_rate and flt(employee.ctc):
+				hourly_rate = flt(employee.ctc) / annual_working_hours
+			employee_rates[employee.name] = hourly_rate
 
 	suggested_labor = 0
 	for js in job_sheets:
 		hours = flt(js.actual_hours)
-		hourly_rate = 0
-		if js.service_engineer:
-			# Try to get hourly rate from Employee custom field, fallback to ctc/2080
-			hourly_rate = (
-				flt(frappe.db.get_value("Employee", js.service_engineer, "custom_hourly_rate"))
-				if frappe.db.has_column("Employee", "custom_hourly_rate")
-				else 0
-			)
-			if not hourly_rate:
-				ctc = flt(frappe.db.get_value("Employee", js.service_engineer, "ctc"))
-				if ctc:
-					hourly_rate = ctc / 2080  # Annual CTC ÷ working hours/year
-		suggested_labor += hours * hourly_rate
+		suggested_labor += hours * employee_rates.get(js.service_engineer, 0)
 
 	# Use suggested labor if calculated, otherwise fall back to manual labor_cost
 	labor_cost = flt(getattr(doc, "labor_cost", 0)) or suggested_labor
@@ -514,16 +559,32 @@ def _update_service_costing(doc):
 
 
 def _alert_max_rework(doc, rework_count, max_rework):
-	"""Alert managers when max rework limit is reached."""
+	"""Alert bounded service managers scoped to the order's company/store."""
 	message = _(
 		"⚠️ Service Order {0} has reached {1} rework attempts (limit: {2}). "
 		"Immediate attention required — consider reassigning technician or escalating."
 	).format(doc.name, rework_count, max_rework)
 
-	# Send real-time alert to Service Managers
-	manager_users = frappe.get_all("Has Role",
-		filters={"role": "Service Manager", "parenttype": "User"},
-		pluck="parent")
+	notification_roles = get_role_setting("service_notification_roles", ("Service Manager",))
+	sr_scope = frappe.db.get_value(
+		"Service Request",
+		doc.service_request,
+		["company", "source_warehouse"],
+		as_dict=True,
+	) if doc.service_request else frappe._dict()
+	company = doc.company or sr_scope.get("company")
+	store = None
+	if sr_scope.get("source_warehouse"):
+		store = frappe.db.get_value(
+			"CH Store",
+			{"warehouse": sr_scope.source_warehouse},
+			"name",
+		)
+	manager_users = get_business_role_users(
+		notification_roles,
+		company=company,
+		store=store,
+	)
 
 	for user in manager_users:
 		frappe.publish_realtime("msgprint",
@@ -653,5 +714,6 @@ def _populate_qc_checklist(doc, force=False):
 	if not doc.qc_checklist:
 		return
 
+	doc.check_permission("write")
 	doc.flags.ignore_validate = True
-	doc.save(ignore_permissions=True)
+	doc.save()

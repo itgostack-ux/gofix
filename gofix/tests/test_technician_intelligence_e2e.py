@@ -57,7 +57,7 @@ def _get_or_create_customer():
 def _get_or_create_issue_category(name="Screen Damage"):
     if not frappe.db.exists("Issue Category", name):
         ic = frappe.new_doc("Issue Category")
-        ic.issue_category_name = name
+        ic.category_name = name
         ic.is_active = 1
         ic.insert(ignore_permissions=True)
         frappe.db.commit()
@@ -337,6 +337,7 @@ def test_skill_map():
 
 def test_skill_matching():
     flow = "SkillMatch"
+    issue_category = _get_or_create_issue_category("Screen Damage")
 
     try:
         from gofix.gofix_services.technician_intelligence import get_recommended_technicians
@@ -345,7 +346,7 @@ def test_skill_matching():
         return
 
     # 6a. No employees → returns empty list
-    result = get_recommended_technicians(issue_category="Screen Damage", limit=5)
+    result = get_recommended_technicians(issue_category=issue_category, limit=5)
     if isinstance(result, list):
         _ok(flow, f"get_recommended_technicians returns list ({len(result)} results)")
     else:
@@ -375,7 +376,7 @@ def test_skill_matching():
             _fail(flow, "Results not sorted by score", str(scores))
 
     # 6d. limit parameter respected
-    result_limited = get_recommended_technicians(issue_category="Screen Damage", limit=2)
+    result_limited = get_recommended_technicians(issue_category=issue_category, limit=2)
     if len(result_limited) <= 2:
         _ok(flow, f"limit=2 respected ({len(result_limited)} results)")
     else:
@@ -397,7 +398,7 @@ def test_skill_matching():
             sr.device_item = item
             sr.device_item_name = "TI Test Device"
             sr.brand = "Samsung"
-            sr.issue_category = "Screen Damage"
+            sr.issue_category = issue_category
             sr.issue_description = "Screen test"
             sr.product_condition_desc = "OK"
             sr.backup_info = "Backed up"

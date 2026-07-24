@@ -1,9 +1,9 @@
 import frappe
 
+
 def has_app_permission(user=None):
     """Check if user has permission to access GoFix app"""
-    if not user:
-        user = frappe.session.user
-    
-    # Allow all users for now, can be customized based on roles
-    return True
+    from gofix.config import has_role_setting
+
+    user = user or frappe.session.user
+    return has_role_setting("app_access_roles", defaults=(), user=user)

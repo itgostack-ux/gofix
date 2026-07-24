@@ -26,8 +26,11 @@ from typing import Any
 
 import frappe
 from frappe import _
+from frappe.rate_limiter import rate_limit
 from frappe.utils import cint, get_datetime, now_datetime, nowdate, time_diff_in_seconds
 
+from gofix.config import get_int_setting, has_role_setting, is_privileged_user
+from gofix.security import assert_service_request_access, get_user_service_scope
 from gofix.gofix_services.doctype.gofix_token.gofix_token import (
 	ACTIVE_STATUSES,
 	STATUS_ATTENDING,
@@ -46,10 +49,7 @@ from gofix.gofix_services.doctype.gofix_token.gofix_token import (
 # Constants
 # ---------------------------------------------------------------------------
 
-_MAX_ISSUES = 3
-_FDE_ROLES = {"System Manager", "Service Manager", "Store Manager", "Store Executive"}
-_GUEST_RATE_LIMIT = 30  # per store per hour
-_GUEST_RATE_WINDOW = 3600
+_DEFAULT_TOKEN_ROLES = {"System Manager", "Service Manager", "Store Manager", "Store Executive"}
 
 
 # ---------------------------------------------------------------------------
@@ -58,18 +58,12 @@ _GUEST_RATE_WINDOW = 3600
 
 
 def _company_is_gofix_enabled(company: str | None) -> bool:
-	"""Return True when the Company is flagged for GoFix Token.
-
-	Fail-open when the ``gofix_enabled`` column does not yet exist so that
-	the API keeps working in the brief window between code deploy and the
-	next ``bench migrate``. Once the column is present the check is
-	authoritative.
-	"""
+	"""Return True only when the Company is explicitly enabled for GoFix Token."""
 
 	if not company:
 		return False
 	if not frappe.db.has_column("Company", "gofix_enabled"):
-		return True
+		return False
 	return bool(frappe.db.get_value("Company", company, "gofix_enabled"))
 
 
@@ -157,7 +151,7 @@ def _resolve_store(identifier: str | None) -> dict | None:
 
 
 def _rate_limit_guest(bucket: str) -> None:
-	"""Simple Redis rolling-window limiter — mirrors ``ch_pos.api.token_api``.
+	"""Atomic Redis fixed-window limiter for guest store operations.
 
 	Skipped for authenticated users so FDE testing / smoke tests aren't
 	throttled.
@@ -165,21 +159,22 @@ def _rate_limit_guest(bucket: str) -> None:
 
 	if frappe.session.user and frappe.session.user != "Guest":
 		return
-	import time
-
-	now = time.time()
-	window_start = now - _GUEST_RATE_WINDOW
-	cache_key = f"gofix_token_rate::{bucket}"
-	hits = frappe.cache().get_value(cache_key) or []
-	hits = [t for t in hits if t > window_start]
-	if len(hits) >= _GUEST_RATE_LIMIT:
+	window_seconds = get_int_setting("guest_rate_window_seconds", 3600)
+	request_limit = get_int_setting("guest_rate_limit", 30)
+	request = getattr(frappe.local, "request", None)
+	client_ip = getattr(request, "remote_addr", None) or "unknown"
+	cache_key = f"gofix_token_rate::{client_ip}::{bucket}"
+	redis_key = frappe.cache.make_key(cache_key)
+	frappe.cache.set(redis_key, 0, nx=True, ex=window_seconds)
+	hits = cint(frappe.cache.incrby(redis_key, 1))
+	if frappe.cache.ttl(redis_key) < 0:
+		frappe.cache.expire(redis_key, window_seconds)
+	if hits > request_limit:
 		frappe.throw(
 			_("Too many requests from this store. Please slow down."),
 			frappe.RateLimitExceededError,
 			title=_("Rate Limit"),
 		)
-	hits.append(now)
-	frappe.cache().set_value(cache_key, hits, expires_in_sec=_GUEST_RATE_WINDOW)
 
 
 # ---------------------------------------------------------------------------
@@ -188,6 +183,7 @@ def _rate_limit_guest(bucket: str) -> None:
 
 
 @frappe.whitelist(allow_guest=True)
+@rate_limit(limit=120, seconds=300, ip_based=True)
 def get_tablet_config(store: str) -> dict:
 	"""Return everything the customer tablet needs to render the wizard."""
 
@@ -196,24 +192,28 @@ def get_tablet_config(store: str) -> dict:
 		frappe.throw(_("Store {0} is not configured for GoFix.").format(store))
 
 	_rate_limit_guest(f"config::{resolved['warehouse']}")
+	queue_limit = min(get_int_setting("token_queue_limit", 200), 2000)
 
 	device_types = frappe.get_all(
 		"GoFix Device Type",
 		filters={"disabled": 0},
 		fields=["device_type", "icon", "display_order"],
 		order_by="display_order asc, device_type asc",
+		limit_page_length=queue_limit,
 	)
 	visit_reasons = frappe.get_all(
 		"GoFix Visit Reason",
 		filters={"disabled": 0},
 		fields=["reason_name", "is_repair", "display_order"],
 		order_by="display_order asc, reason_name asc",
+		limit_page_length=get_int_setting("token_queue_limit", 200),
 	)
 	brand_rows = frappe.get_all(
 		"GoFix Brand Option",
 		filters={"disabled": 0},
 		fields=["device_type", "brand_name", "display_order"],
 		order_by="device_type asc, display_order asc, brand_name asc",
+		limit_page_length=get_int_setting("token_queue_limit", 200),
 	)
 	symptom_rows = frappe.get_all(
 		"GoFix Symptom",
@@ -226,6 +226,7 @@ def get_tablet_config(store: str) -> dict:
 			"display_order",
 		],
 		order_by="device_type asc, display_order asc, symptom_name asc",
+		limit_page_length=get_int_setting("token_queue_limit", 200),
 	)
 
 	brands_by_device: dict[str, list[dict]] = {}
@@ -267,7 +268,7 @@ def get_tablet_config(store: str) -> dict:
 		"brands_by_device": brands_by_device,
 		"symptoms_by_device": symptoms_by_device,
 		"rules": {
-			"max_issues": _MAX_ISSUES,
+			"max_issues": get_int_setting("max_selected_issues", 3),
 			"expert_check_exclusive": True,
 			"other_notes_required": False,
 			"phone_country_code": "+91",
@@ -327,7 +328,8 @@ def _parse_issues(payload: Any, resolved_symptoms: dict[str, dict]) -> list[dict
 	return rows
 
 
-@frappe.whitelist(allow_guest=True)
+@frappe.whitelist(allow_guest=True, methods=["POST"])
+@rate_limit(limit=20, seconds=300, methods=["POST"], ip_based=True)
 def create_token(
 	store: str,
 	customer_name: str,
@@ -345,8 +347,7 @@ def create_token(
 
 	Returns ``{token_number, name, queue_position, whatsapp_status}``. All
 	validation errors bubble as ``frappe.ValidationError`` and are shown to
-	the customer inline. Runs with ``ignore_permissions`` because the guest
-	tablet has no Desk role.
+	the customer inline.
 	"""
 
 	if not (customer_name or "").strip():
@@ -404,8 +405,15 @@ def create_token(
 		for row in issues:
 			doc.append("selected_issues", row)
 	doc.additional_notes = (additional_notes or "").strip() or None
-	doc.insert(ignore_permissions=True)
-	frappe.db.commit()
+	previous_capability = frappe.flags.get("gofix_guest_token_creation")
+	frappe.flags.gofix_guest_token_creation = True
+	try:
+		doc.insert()
+	finally:
+		if previous_capability is None:
+			frappe.flags.pop("gofix_guest_token_creation", None)
+		else:
+			frappe.flags.gofix_guest_token_creation = previous_capability
 
 	# Whatsapp send is fire-and-forget; failure must not block the token.
 	try:
@@ -475,6 +483,7 @@ def _queue_position(token_name: str, warehouse: str, business_date) -> int:
 
 
 @frappe.whitelist(allow_guest=True)
+@rate_limit(limit=120, seconds=300, ip_based=True)
 def get_queue_position(token_number: str, store: str) -> dict:
 	"""Poll endpoint used by the confirmation screen."""
 
@@ -509,8 +518,61 @@ def get_queue_position(token_number: str, store: str) -> dict:
 
 
 def _ensure_fde() -> None:
-	if not (set(frappe.get_roles()) & _FDE_ROLES):
+	if not has_role_setting("token_transition_roles", _DEFAULT_TOKEN_ROLES):
 		frappe.throw(_("Not permitted"), frappe.PermissionError)
+
+
+def _apply_authorized_token_scope(filters: dict[str, Any]) -> dict[str, Any]:
+	"""Apply both company and store scope to token queries; empty scope matches none."""
+	scope = get_user_service_scope()
+	if scope is None:
+		return filters
+	companies = sorted(scope.get("companies") or ())
+	warehouses = sorted(scope.get("warehouses") or ())
+	if not companies or not warehouses:
+		filters["name"] = ("in", ["__no_gofix_token_scope__"])
+		return filters
+	filters["company"] = ("in", companies)
+	filters["store"] = ("in", warehouses)
+	return filters
+
+
+def _assert_resolved_store_scope(resolved: dict) -> None:
+	scope = get_user_service_scope()
+	if scope is None:
+		return
+	if (
+		resolved.get("company") not in set(scope.get("companies") or ())
+		or resolved.get("warehouse") not in set(scope.get("warehouses") or ())
+	):
+		frappe.throw(_("This store is outside your assigned GoFix scope."), frappe.PermissionError)
+
+
+def _assert_token_scope(doc) -> None:
+	scope = get_user_service_scope()
+	if scope is None:
+		return
+	if (
+		doc.get("company") not in set(scope.get("companies") or ())
+		or doc.get("store") not in set(scope.get("warehouses") or ())
+	):
+		frappe.throw(_("This token is outside your assigned GoFix scope."), frappe.PermissionError)
+
+
+def _assert_token_assignee(user: str, doc) -> None:
+	row = frappe.db.get_value("User", user, ["enabled", "user_type"], as_dict=True)
+	if not row or not row.enabled or row.user_type != "System User":
+		frappe.throw(_("The selected assignee is not an active System User."), frappe.PermissionError)
+	if not is_privileged_user(user) and not has_role_setting(
+		"token_transition_roles", _DEFAULT_TOKEN_ROLES, user=user
+	):
+		frappe.throw(_("The selected user is not configured to operate GoFix tokens."), frappe.PermissionError)
+	assignee_scope = get_user_service_scope(user)
+	if assignee_scope is not None and (
+		doc.company not in set(assignee_scope.get("companies") or ())
+		or doc.store not in set(assignee_scope.get("warehouses") or ())
+	):
+		frappe.throw(_("The selected user is not assigned to this store."), frappe.PermissionError)
 
 
 @frappe.whitelist()
@@ -523,10 +585,22 @@ def get_fde_stores() -> list[dict]:
 	"""
 
 	_ensure_fde()
+	scope = get_user_service_scope()
+	if scope is not None and (
+		not scope.get("companies") or not scope.get("warehouses")
+	):
+		return []
 	companies = frappe.get_all(
 		"Company",
-		filters={"gofix_enabled": 1},
+		filters={
+			"gofix_enabled": 1,
+			**(
+				{"name": ("in", sorted(scope["companies"]))}
+				if scope is not None else {}
+			),
+		},
 		pluck="name",
+		limit_page_length=get_int_setting("token_queue_limit", 200),
 	)
 	if not companies:
 		return []
@@ -540,9 +614,12 @@ def get_fde_stores() -> list[dict]:
 			filters={"company": ("in", companies), "disabled": 0},
 			fields=["name", "store_code", "store_name", "warehouse", "company"],
 			order_by="store_name asc, store_code asc",
+			limit_page_length=get_int_setting("token_queue_limit", 200),
 		)
 		for r in rows:
 			if not r.get("warehouse"):
+				continue
+			if scope is not None and r["warehouse"] not in scope["warehouses"]:
 				continue
 			seen[r["warehouse"]] = {
 				"warehouse": r["warehouse"],
@@ -560,8 +637,11 @@ def get_fde_stores() -> list[dict]:
 			filters={"company": ("in", companies), "is_group": 0, "disabled": 0},
 			fields=["name", "warehouse_name", "company"],
 			order_by="warehouse_name asc",
+			limit_page_length=get_int_setting("token_queue_limit", 200),
 		)
 		for w in wh_rows:
+			if scope is not None and w["name"] not in scope["warehouses"]:
+				continue
 			code, name = resolve_store_code(w["name"])
 			seen[w["name"]] = {
 				"warehouse": w["name"],
@@ -597,17 +677,13 @@ def list_active_tokens(store: str | None = None, statuses: Any = None) -> list[d
 		resolved = _resolve_store(store)
 		if not resolved:
 			frappe.throw(_("Store {0} is not configured for GoFix.").format(store))
+		_assert_resolved_store_scope(resolved)
 		filters["store"] = resolved["warehouse"]
+		filters["company"] = resolved["company"]
 	else:
-		companies = frappe.get_all(
-			"Company",
-			filters={"gofix_enabled": 1},
-			pluck="name",
-		)
-		if not companies:
-			return []
-		filters["company"] = ["in", companies]
+		_apply_authorized_token_scope(filters)
 
+	queue_limit = get_int_setting("token_queue_limit", 200)
 	rows = frappe.get_all(
 		"GoFix Token",
 		filters=filters,
@@ -635,21 +711,23 @@ def list_active_tokens(store: str | None = None, statuses: Any = None) -> list[d
 			"whatsapp_status",
 		],
 		order_by="creation asc",
+		limit_page_length=queue_limit,
 	)
 
+	issue_map: dict[str, list[str]] = {r["name"]: [] for r in rows}
+	if issue_map:
+		for issue in frappe.get_all(
+			"GoFix Token Issue",
+			filters={"parent": ("in", list(issue_map))},
+				fields=["parent", "symptom_name"],
+				order_by="parent asc, idx asc",
+				limit_page_length=get_int_setting("token_queue_limit", 200) * get_int_setting("max_selected_issues", 3),
+		):
+			issue_map.setdefault(issue.parent, []).append(issue.symptom_name)
 	now = now_datetime()
 	for r in rows:
 		r["waiting_seconds"] = int(time_diff_in_seconds(now, r["creation"]))
-		# Fetch symptoms lazily — cheap enough at queue length.
-		r["symptoms"] = [
-			row.symptom_name
-			for row in frappe.get_all(
-				"GoFix Token Issue",
-				filters={"parent": r["name"]},
-				fields=["symptom_name"],
-				order_by="idx asc",
-			)
-		]
+		r["symptoms"] = issue_map.get(r["name"], [])
 	return rows
 
 
@@ -658,7 +736,7 @@ def list_active_tokens(store: str | None = None, statuses: Any = None) -> list[d
 # ---------------------------------------------------------------------------
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def transition_token(
 	name: str,
 	to_status: str,
@@ -673,7 +751,7 @@ def transition_token(
 	"""
 
 	_ensure_fde()
-	doc = frappe.get_doc("GoFix Token", name)
+	doc = _load_token(name, for_update=True)
 	doc.status = to_status
 	if to_status in {STATUS_CANCELLED, STATUS_LEFT}:
 		if reason:
@@ -681,9 +759,9 @@ def transition_token(
 		if notes is not None:
 			doc.cancellation_notes = notes
 	if assigned_fde:
+		_assert_token_assignee(assigned_fde, doc)
 		doc.assigned_fde = assigned_fde
 	doc.save()
-	frappe.db.commit()
 	return {
 		"name": doc.name,
 		"status": doc.status,
@@ -697,21 +775,29 @@ def transition_token(
 # ---------------------------------------------------------------------------
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def link_service_request(name: str, service_request: str) -> dict:
 	"""Attach an existing Service Request to a token."""
 
 	_ensure_fde()
-	if not frappe.db.exists("Service Request", service_request):
-		frappe.throw(_("Service Request {0} not found.").format(service_request))
-	doc = frappe.get_doc("GoFix Token", name)
+	doc = _load_token(name, for_update=True)
+	sr = assert_service_request_access(service_request, permission_type="write")
+	if sr.company != doc.company:
+		frappe.throw(_("Token and Service Request must belong to the same company."), frappe.PermissionError)
+	sr_locations = {
+		value for value in (
+			sr.get("source_warehouse"), sr.get("current_location"),
+			sr.get("current_processing_location"), sr.get("transferred_to_store"),
+		) if value
+	}
+	if doc.store not in sr_locations:
+		frappe.throw(_("Token and Service Request must belong to the same store."), frappe.PermissionError)
 	doc.service_request = service_request
 	# Automatically transition to Job Card Created if still Attending — this
 	# is the natural signal the FDE has handed off to the technician queue.
 	if doc.status == STATUS_ATTENDING:
 		doc.status = STATUS_JOB_CARD
 	doc.save()
-	frappe.db.commit()
 	return {"name": doc.name, "status": doc.status, "service_request": doc.service_request}
 
 
@@ -737,6 +823,7 @@ def get_cancellation_reasons(scope: str | None = None) -> list[dict]:
 		filters=filters,
 		fields=["name", "reason_name", "scope", "requires_note", "display_order"],
 		order_by="display_order asc, reason_name asc",
+		limit_page_length=get_int_setting("token_queue_limit", 200),
 	)
 
 
@@ -782,11 +869,14 @@ def _apply_scope(filters: dict, store: str | None) -> dict | None:
 	"""
 
 	if not store:
+		_apply_authorized_token_scope(filters)
 		return None
 	resolved = _resolve_store(store)
 	if not resolved:
 		frappe.throw(_("Store {0} is not configured for GoFix.").format(store))
+	_assert_resolved_store_scope(resolved)
 	filters["store"] = resolved["warehouse"]
+	filters["company"] = resolved["company"]
 	return resolved
 
 
@@ -858,10 +948,12 @@ def get_dashboard_stats(pos_profile: str | None = None, date_filter: str = "toda
 	elif start:
 		filters["creation"] = [">=", start]
 
+	analytics_limit = get_int_setting("token_analytics_row_limit", 5000)
 	rows = frappe.get_all(
 		"GoFix Token",
 		filters=filters,
 		fields=["status", "creation", "completed_at", "store", "store_name"],
+		limit_page_length=analytics_limit,
 	)
 
 	total = len(rows)
@@ -907,10 +999,12 @@ def get_dashboard_stats(pos_profile: str | None = None, date_filter: str = "toda
 		"avg_wait_minutes": avg_wait,
 		"completion_rate": completion_rate,
 		"store_breakdown": list(store_breakdown.values()),
+		"is_truncated": len(rows) >= analytics_limit,
+		"row_limit": analytics_limit,
 	}
 
 
-def _token_row_for_ui(r: dict, now) -> dict:
+def _token_row_for_ui(r: dict, now, user_names: dict[str, str] | None = None) -> dict:
 	"""Shape a GoFix Token row for the shared queue-mgmt table."""
 
 	created = get_datetime(r["creation"])
@@ -921,9 +1015,7 @@ def _token_row_for_ui(r: dict, now) -> dict:
 	device_label = " ".join(p for p in device_parts[1:] if p).strip()
 
 	tech = r.get("assigned_fde")
-	tech_name = (
-		frappe.db.get_value("User", tech, "full_name") if tech else None
-	) or (tech or None)
+	tech_name = (user_names or {}).get(tech) or (tech or None)
 
 	return {
 		"name": r["name"],
@@ -974,6 +1066,7 @@ def get_queue(pos_profile: str | None = None, status: str | None = None, date_fi
 		else:
 			filters["status"] = status
 
+	queue_limit = get_int_setting("token_queue_limit", 200)
 	rows = frappe.get_all(
 		"GoFix Token",
 		filters=filters,
@@ -984,11 +1077,27 @@ def get_queue(pos_profile: str | None = None, status: str | None = None, date_fi
 			"visit_reason", "assigned_fde", "store", "company",
 		],
 		order_by="creation desc",
-		limit=200,
+		limit_page_length=queue_limit + 1,
 	)
+	if len(rows) > queue_limit:
+		frappe.throw(
+			_("The token queue exceeds the configured limit of {0} rows. Narrow the filters.").format(
+				queue_limit
+			),
+			frappe.ValidationError,
+		)
 
+	tech_users = {r.get("assigned_fde") for r in rows if r.get("assigned_fde")}
+	user_names = {
+		row.name: row.full_name or row.name
+		for row in frappe.get_all(
+			"User",
+			filters={"name": ("in", list(tech_users))},
+			fields=["name", "full_name"],
+		)
+	} if tech_users else {}
 	now = now_datetime()
-	return [_token_row_for_ui(r, now) for r in rows]
+	return [_token_row_for_ui(r, now, user_names) for r in rows]
 
 
 @frappe.whitelist()
@@ -997,13 +1106,19 @@ def get_technician_tokens(technician: str | None = None) -> list[dict]:
 
 	_ensure_fde()
 	user = technician or frappe.session.user
+	if user != frappe.session.user and not has_role_setting(
+		"service_manager_roles", ("Service Manager", "System Manager")
+	):
+		frappe.throw(_("You can only view your own assigned tokens."), frappe.PermissionError)
 	today = frappe.utils.today()
+	filters = {
+		"assigned_fde": user,
+		"creation": [">=", today + " 00:00:00"],
+	}
+	_apply_authorized_token_scope(filters)
 	rows = frappe.get_all(
 		"GoFix Token",
-		filters={
-			"assigned_fde": user,
-			"creation": [">=", today + " 00:00:00"],
-		},
+		filters=filters,
 		fields=[
 			"name", "token_number", "status", "creation", "completed_at",
 			"customer_name", "customer_phone",
@@ -1011,9 +1126,11 @@ def get_technician_tokens(technician: str | None = None) -> list[dict]:
 			"visit_reason", "assigned_fde", "store", "company",
 		],
 		order_by="creation desc",
+		limit_page_length=get_int_setting("token_queue_limit", 200),
 	)
 	now = now_datetime()
-	return [_token_row_for_ui(r, now) for r in rows]
+	user_names = {user: frappe.db.get_value("User", user, "full_name") or user}
+	return [_token_row_for_ui(r, now, user_names) for r in rows]
 
 
 @frappe.whitelist()
@@ -1025,90 +1142,96 @@ def get_store_users(pos_profile: str | None = None, role: str | None = None) -> 
 
 	_ensure_fde()
 	users: list[dict] = []
-	if pos_profile:
-		resolved = _resolve_store(pos_profile)
-		if resolved and frappe.db.table_exists("CH Store"):
-			store_name = frappe.db.get_value(
-				"CH Store",
-				{"warehouse": resolved["warehouse"], "disabled": 0},
-				"name",
-			)
-			if store_name and frappe.db.exists("DocType", "CH Store User"):
-				filters: dict[str, Any] = {"parent": store_name, "parenttype": "CH Store"}
-				if role:
-					filters["role"] = role
-				rows = frappe.db.get_all(
-					"CH Store User",
-					filters=filters,
-					fields=["user", "full_name", "role"],
-					order_by="full_name",
-				)
-				for r in rows:
-					if not r.full_name:
-						r.full_name = frappe.db.get_value("User", r.user, "full_name") or r.user
-				users = rows
-
-	if not users:
-		rows = frappe.db.get_all(
-			"User",
-			filters={"enabled": 1, "user_type": "System User", "name": ("not in", ["Administrator", "Guest"])},
-			fields=["name as user", "full_name"],
-			order_by="full_name",
+	if not pos_profile:
+		return users
+	resolved = _resolve_store(pos_profile)
+	if not resolved:
+		frappe.throw(_("Store {0} is not configured for GoFix.").format(pos_profile))
+	_assert_resolved_store_scope(resolved)
+	if frappe.db.table_exists("CH Store"):
+		store_name = frappe.db.get_value(
+			"CH Store",
+			{"warehouse": resolved["warehouse"], "disabled": 0},
+			"name",
 		)
-		for r in rows:
-			r["role"] = ""
-		users = rows
+		if store_name and frappe.db.exists("DocType", "CH Store User"):
+			filters: dict[str, Any] = {"parent": store_name, "parenttype": "CH Store"}
+			if role:
+				filters["role"] = role
+			rows = frappe.db.get_all(
+				"CH Store User",
+				filters=filters,
+				fields=["user", "full_name", "role"],
+				order_by="full_name",
+				limit_page_length=get_int_setting("token_queue_limit", 200),
+			)
+			missing_names = {row.user for row in rows if row.user and not row.full_name}
+			full_names = {
+				row.name: row.full_name or row.name
+				for row in frappe.get_all(
+					"User",
+					filters={"name": ("in", tuple(missing_names))},
+					fields=["name", "full_name"],
+					limit_page_length=len(missing_names),
+				)
+			} if missing_names else {}
+			for row in rows:
+				if not row.full_name:
+					row.full_name = full_names.get(row.user) or row.user
+			users = rows
 
 	return users
 
 
-def _load_token(token_name: str):
+def _load_token(token_name: str, *, for_update: bool = False):
 	if not token_name or not frappe.db.exists("GoFix Token", token_name):
 		frappe.throw(_("Token {0} not found.").format(token_name or ""))
-	return frappe.get_doc("GoFix Token", token_name)
+	if for_update:
+		frappe.db.get_value("GoFix Token", token_name, "name", for_update=True)
+	doc = frappe.get_doc("GoFix Token", token_name)
+	_assert_token_scope(doc)
+	return doc
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def assign_token(token_name: str, technician: str) -> dict:
 	"""Set ``assigned_fde``. Moves Waiting → Called when appropriate."""
 
 	_ensure_fde()
-	doc = _load_token(token_name)
+	doc = _load_token(token_name, for_update=True)
+	_assert_token_assignee(technician, doc)
 	doc.assigned_fde = technician
 	if doc.status == STATUS_WAITING:
 		doc.status = STATUS_CALLED
 	doc.save()
-	frappe.db.commit()
 	return {"status": "ok", "token_status": doc.status}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def start_token(token_name: str) -> dict:
 	"""Manager-dashboard "Start" — moves Waiting/Called → Attending."""
 
 	_ensure_fde()
-	doc = _load_token(token_name)
+	doc = _load_token(token_name, for_update=True)
 	if doc.status in {STATUS_WAITING, STATUS_CALLED}:
 		doc.status = STATUS_ATTENDING
 		doc.save()
-		frappe.db.commit()
 	return {"status": "ok"}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def complete_token(token_name: str) -> dict:
 	"""Manager-dashboard "Complete" — closes the token."""
 
 	_ensure_fde()
-	doc = _load_token(token_name)
+	doc = _load_token(token_name, for_update=True)
 	if doc.status in {STATUS_ATTENDING, STATUS_JOB_CARD}:
 		doc.status = STATUS_COMPLETED
 		doc.save()
-		frappe.db.commit()
 	return {"status": "ok"}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def cancel_token(
 	token_name: str,
 	drop_reason: str | None = None,
@@ -1121,7 +1244,7 @@ def cancel_token(
 	"""
 
 	_ensure_fde()
-	doc = _load_token(token_name)
+	doc = _load_token(token_name, for_update=True)
 	reason = drop_reason
 	if not reason:
 		fallback = frappe.db.get_value(
@@ -1138,11 +1261,10 @@ def cancel_token(
 		doc.cancellation_notes = drop_remarks
 	doc.status = STATUS_CANCELLED
 	doc.save()
-	frappe.db.commit()
 	return {"status": "ok"}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def drop_token(
 	token_name: str,
 	drop_reason: str | None = None,
@@ -1152,7 +1274,7 @@ def drop_token(
 	"""Manager-dashboard "Drop" — customer walked away without service."""
 
 	_ensure_fde()
-	doc = _load_token(token_name)
+	doc = _load_token(token_name, for_update=True)
 	reason = drop_reason
 	if not reason:
 		fallback = frappe.db.get_value(
@@ -1169,7 +1291,6 @@ def drop_token(
 		doc.cancellation_notes = drop_remarks
 	doc.status = STATUS_LEFT
 	doc.save()
-	frappe.db.commit()
 	return {"status": "ok"}
 
 
@@ -1178,17 +1299,21 @@ def get_reports(pos_profile: str | None = None, days: int = 7) -> dict:
 	"""Daily-breakdown and FDE-performance data for the Reports tab."""
 
 	_ensure_fde()
-	days = max(1, cint(days) or 7)
+	days = min(max(1, cint(days) or 7), get_int_setting("token_report_max_days", 90))
 	today = frappe.utils.today()
 	start_date = frappe.utils.add_days(today, -(days - 1))
 	filters: dict[str, Any] = {"creation": [">=", start_date + " 00:00:00"]}
 	_apply_scope(filters, pos_profile)
 
-	rows = frappe.get_all(
+	analytics_limit = get_int_setting("token_analytics_row_limit", 5000)
+	raw_rows = frappe.get_all(
 		"GoFix Token",
 		filters=filters,
 		fields=["name", "status", "creation", "completed_at", "assigned_fde"],
+		limit_page_length=analytics_limit + 1,
 	)
+	is_truncated = len(raw_rows) > analytics_limit
+	rows = raw_rows[:analytics_limit]
 
 	daily_map: dict[str, dict] = {}
 	for r in rows:
@@ -1221,6 +1346,15 @@ def get_reports(pos_profile: str | None = None, days: int = 7) -> dict:
 			}
 		)
 
+	tech_users = {r.get("assigned_fde") for r in rows if r.get("assigned_fde")}
+	user_names = {
+		row.name: row.full_name or row.name
+		for row in frappe.get_all(
+			"User",
+			filters={"name": ("in", list(tech_users))},
+			fields=["name", "full_name"],
+		)
+	} if tech_users else {}
 	tech_map: dict[str, dict] = {}
 	for r in rows:
 		tech = r.get("assigned_fde")
@@ -1230,7 +1364,7 @@ def get_reports(pos_profile: str | None = None, days: int = 7) -> dict:
 			tech,
 			{
 				"technician": tech,
-				"name": frappe.db.get_value("User", tech, "full_name") or tech,
+					"name": user_names.get(tech) or tech,
 				"total": 0, "completed": 0, "time_sum": 0, "time_count": 0,
 			},
 		)
@@ -1258,4 +1392,6 @@ def get_reports(pos_profile: str | None = None, days: int = 7) -> dict:
 	return {
 		"daily_breakdown": daily_breakdown,
 		"tech_performance": tech_performance,
+		"is_truncated": is_truncated,
+		"row_limit": analytics_limit,
 	}

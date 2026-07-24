@@ -43,7 +43,7 @@ class GoFixTokenQueue {
 		if (!this.stores.length) {
 			this.body.html(`<div class="gtq-empty">
 				${__("No GoFix-enabled stores are available to you.")}<br>
-				<small>${__("Ask a System Manager to tick \"GoFix Token Enabled\" on your Company or grant Store Executive role.")}</small>
+				<small>${__("Ask an administrator to enable GoFix tokens for your company or configure your token-queue access.")}</small>
 			</div>`);
 			return;
 		}

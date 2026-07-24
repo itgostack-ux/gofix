@@ -106,7 +106,7 @@ def on_data_import_change(doc, method=None):
 		)
 		customer_names = list(dict.fromkeys(filter(None, customer_names)))
 		if customer_names:
-			sync_customer_addresses(customer_names=customer_names, commit=True)
+			sync_customer_addresses(customer_names=customer_names)
 	except Exception:
 		frappe.log_error(
 			title=f"Customer address import sync failed for {doc.name}",
@@ -321,7 +321,6 @@ def _create_standard_address(customer_doc, row):
 	address = frappe.new_doc("Address")
 	_fill_standard_address(address, customer_doc, row)
 	address.append("links", {"link_doctype": "Customer", "link_name": customer_doc.name})
-	address.flags.ignore_permissions = True
 	address.flags.ignore_mandatory = True
 	_insert_or_retry_without_pincode(address)
 	return address.name
@@ -332,7 +331,6 @@ def _update_standard_address(address_name, customer_doc, row):
 	_fill_standard_address(address, customer_doc, row)
 	if not _address_link_exists(address.name, customer_doc.name):
 		address.append("links", {"link_doctype": "Customer", "link_name": customer_doc.name})
-	address.flags.ignore_permissions = True
 	address.flags.ignore_mandatory = True
 	_save_or_retry_without_pincode(address)
 
@@ -358,22 +356,22 @@ def _fill_standard_address(address, customer_doc, row):
 
 def _insert_or_retry_without_pincode(address):
 	try:
-		address.insert(ignore_permissions=True)
+		address.insert()
 	except frappe.ValidationError as exc:
 		if not _is_postal_code_error(exc):
 			raise
 		address.pincode = ""
-		address.insert(ignore_permissions=True)
+		address.insert()
 
 
 def _save_or_retry_without_pincode(address):
 	try:
-		address.save(ignore_permissions=True)
+		address.save()
 	except frappe.ValidationError as exc:
 		if not _is_postal_code_error(exc):
 			raise
 		address.pincode = ""
-		address.save(ignore_permissions=True)
+		address.save()
 
 
 def _is_postal_code_error(exc):

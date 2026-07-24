@@ -16,12 +16,14 @@ import frappe
 from frappe import _
 from frappe.utils import flt, now_datetime, nowdate, today
 
+from gofix.config import get_float_setting, require_role_setting
+from gofix.security import assert_service_request_access
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 1. ESTIMATE VERSIONING
 # ═══════════════════════════════════════════════════════════════════════════════
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def create_estimate_version(service_request, reason=None, send_to_customer=False) -> dict:
 	"""Snapshot current issues/solutions/spares into a new Estimate Version.
 
@@ -32,8 +34,7 @@ def create_estimate_version(service_request, reason=None, send_to_customer=False
 	If send_to_customer=True, auto-sends WhatsApp for approval.
 	Pauses repair until approved.
 	"""
-	sr = frappe.get_doc("Service Request", service_request)
-	frappe.has_permission("Service Request", doc=sr, ptype="write", throw=True)
+	sr = assert_service_request_access(service_request, permission_type="write")
 	sr.flags.ignore_validate_update_after_submit = True
 
 	# Calculate costs using pricing engine if available
@@ -93,11 +94,10 @@ def create_estimate_version(service_request, reason=None, send_to_customer=False
 	}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def send_estimate_for_approval(service_request, version_number=None) -> dict:
 	"""Send the latest (or specified) estimate version to customer via WhatsApp."""
-	sr = frappe.get_doc("Service Request", service_request)
-	frappe.has_permission("Service Request", doc=sr, ptype="write", throw=True)
+	sr = assert_service_request_access(service_request, permission_type="write")
 
 	version_number = version_number or sr.get("latest_estimate_version")
 	_send_estimate_to_customer(sr, version_number)
@@ -105,18 +105,54 @@ def send_estimate_for_approval(service_request, version_number=None) -> dict:
 	return {"message": _("Estimate sent to customer for approval")}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def customer_approve_estimate(service_request, version_number=None, remarks=None) -> dict:
-	"""Customer approves the estimate — resume repair."""
-	sr = frappe.get_doc("Service Request", service_request)
-	frappe.has_permission("Service Request", doc=sr, ptype="write", throw=True)
+	"""Record an audited staff override for customer estimate approval."""
+	sr = assert_service_request_access(service_request, permission_type="write")
+	return _apply_customer_estimate_action(
+		sr, version_number, "approve", remarks, authorization="staff_override"
+	)
+
+
+@frappe.whitelist(methods=["POST"])
+def customer_reject_estimate(service_request, version_number=None, remarks=None) -> dict:
+	"""Record an audited staff override for customer estimate rejection."""
+	sr = assert_service_request_access(service_request, permission_type="write")
+	return _apply_customer_estimate_action(
+		sr, version_number, "reject", remarks, authorization="staff_override"
+	)
+
+
+def _apply_customer_estimate_action(sr, version_number, action, remarks=None, *, authorization=None) -> dict:
+	if isinstance(sr, str):
+		sr = frappe.get_doc("Service Request", sr)
+	if action not in {"approve", "reject"}:
+		frappe.throw(_("Invalid estimate action."), title=_("Validation Error"))
 	sr.flags.ignore_validate_update_after_submit = True
+	if authorization == "customer_token":
+		sr.flags.customer_estimate_authorized = True
+		sr.flags.ignore_permissions = True
+		audit_label = _("Authenticated customer tracking token")
+	elif authorization == "staff_override":
+		sr.check_permission("write")
+		require_role_setting(
+			"estimate_decision_override_roles",
+			("Service Manager",),
+			action=_("override a customer estimate decision"),
+		)
+		if not (remarks or "").strip():
+			frappe.throw(_("Override remarks are required."), frappe.ValidationError)
+		sr.flags.estimate_decision_override = True
+		audit_label = _("Staff override by {0}").format(frappe.session.user)
+	else:
+		frappe.throw(_("Authenticated estimate-decision proof is required."), frappe.PermissionError)
 
 	version_number = int(version_number or sr.get("latest_estimate_version") or 0)
+	target_status = "Customer Approved" if action == "approve" else "Customer Rejected"
 
 	for ev in (sr.get("estimate_versions") or []):
 		if ev.version_number == version_number and ev.status in ("Pending", "Sent to Customer"):
-			ev.status = "Customer Approved"
+			ev.status = target_status
 			ev.approved_by = frappe.session.user
 			ev.approved_at = now_datetime()
 			ev.customer_remarks = remarks
@@ -126,42 +162,27 @@ def customer_approve_estimate(service_request, version_number=None, remarks=None
 
 	sr.set("estimate_approval_pending", 0)
 
-	# Resume repair if no other blockers
-	if not _has_other_blockers(sr):
+	if action == "approve" and not _has_other_blockers(sr):
 		sr.set("repair_paused", 0)
 		sr.set("repair_pause_reason", "")
 
-	# If this is version 1 and no SO exists, create Service Order now
-	if not sr.service_order and sr.get("repairability_status") == "Repairable":
+	if action == "approve" and not sr.service_order and sr.get("repairability_status") == "Repairable":
 		sr.save()
 		sr.create_service_order()
 	else:
 		sr.save()
+	sr.add_comment(
+		"Comment",
+		_("{0}: estimate version {1} {2}. {3}").format(
+			audit_label,
+			version_number,
+			target_status,
+			(remarks or "").strip(),
+		),
+	)
 
-	return {"message": _("Estimate approved. Repair may proceed.")}
-
-
-@frappe.whitelist()
-def customer_reject_estimate(service_request, version_number=None, remarks=None) -> dict:
-	"""Customer rejects the estimate."""
-	sr = frappe.get_doc("Service Request", service_request)
-	frappe.has_permission("Service Request", doc=sr, ptype="write", throw=True)
-	sr.flags.ignore_validate_update_after_submit = True
-
-	version_number = int(version_number or sr.get("latest_estimate_version") or 0)
-
-	for ev in (sr.get("estimate_versions") or []):
-		if ev.version_number == version_number and ev.status in ("Pending", "Sent to Customer"):
-			ev.status = "Customer Rejected"
-			ev.approved_by = frappe.session.user
-			ev.approved_at = now_datetime()
-			ev.customer_remarks = remarks
-			break
-
-	sr.set("estimate_approval_pending", 0)
-	sr.save()
-
-	return {"message": _("Estimate rejected by customer.")}
+	message = _("Estimate approved. Repair may proceed.") if action == "approve" else _("Estimate rejected by customer.")
+	return {"message": message}
 
 
 def _calculate_estimate(sr):
@@ -191,11 +212,12 @@ def _calculate_estimate(sr):
 					flt(result["estimate_total"]),
 				)
 	except Exception:
-		pass
+		frappe.log_error(frappe.get_traceback(), f"Pricing-rule estimate failed for {sr.name}")
 
 	# Fallback: sum from solution lines + spare lines
+	labor_rate = get_float_setting("default_labor_rate_per_minute", 5, minimum=0)
 	labor = sum(
-		flt(r.estimated_minutes or 0) * 5  # ₹5/min default
+		flt(r.estimated_minutes or 0) * labor_rate
 		for r in (sr.get("solution_lines") or [])
 		if r.status not in ("Cancelled", "Skipped")
 	)
@@ -265,7 +287,7 @@ def _has_other_blockers(sr):
 # 2. REPAIRABILITY DECISION
 # ═══════════════════════════════════════════════════════════════════════════════
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def set_repairability(service_request, status, reason=None) -> dict:
 	"""Formal repairability decision by technician/manager.
 
@@ -275,8 +297,7 @@ def set_repairability(service_request, status, reason=None) -> dict:
 	if status not in valid:
 		frappe.throw(_("Invalid repairability status. Must be one of: {0}").format(", ".join(valid)), title=_("Validation Error"))
 
-	sr = frappe.get_doc("Service Request", service_request)
-	frappe.has_permission("Service Request", doc=sr, ptype="write", throw=True)
+	sr = assert_service_request_access(service_request, permission_type="write")
 	sr.flags.ignore_validate_update_after_submit = True
 
 	sr.set("repairability_status", status)
@@ -325,7 +346,7 @@ def set_repairability(service_request, status, reason=None) -> dict:
 # 3. LOCATION CHANGE ORCHESTRATION
 # ═══════════════════════════════════════════════════════════════════════════════
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def reassign_repair_location(service_request, new_location, location_type=None, reason=None) -> dict:
 	"""Move repair from current location to a new one.
 
@@ -335,8 +356,7 @@ def reassign_repair_location(service_request, new_location, location_type=None, 
 	  3) Update technician pool
 	  4) Pause repair until device received
 	"""
-	sr = frappe.get_doc("Service Request", service_request)
-	frappe.has_permission("Service Request", doc=sr, ptype="write", throw=True)
+	sr = assert_service_request_access(service_request, permission_type="write")
 	sr.flags.ignore_validate_update_after_submit = True
 
 	old_location = sr.get("current_processing_location") or sr.source_warehouse
@@ -373,11 +393,10 @@ def reassign_repair_location(service_request, new_location, location_type=None, 
 	}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def receive_device_at_repair_location(service_request) -> dict:
 	"""Mark device as received at the new repair location. Resumes repair."""
-	sr = frappe.get_doc("Service Request", service_request)
-	frappe.has_permission("Service Request", doc=sr, ptype="write", throw=True)
+	sr = assert_service_request_access(service_request, permission_type="write")
 	sr.flags.ignore_validate_update_after_submit = True
 
 	sr.set("transfer_status", "Received at Service Center")
@@ -393,11 +412,10 @@ def receive_device_at_repair_location(service_request) -> dict:
 	return {"message": _("Device received. Repair may proceed.")}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def return_device_to_source(service_request, reason=None) -> dict:
 	"""Return device to source store (for invoicing). Auto-transfer."""
-	sr = frappe.get_doc("Service Request", service_request)
-	frappe.has_permission("Service Request", doc=sr, ptype="write", throw=True)
+	sr = assert_service_request_access(service_request, permission_type="write")
 	sr.flags.ignore_validate_update_after_submit = True
 
 	current = sr.get("current_processing_location") or sr.get("current_location")
@@ -419,11 +437,10 @@ def return_device_to_source(service_request, reason=None) -> dict:
 	return {"message": _("Return transfer created: {0}").format(transfer_name)}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def confirm_return_at_source(service_request) -> dict:
 	"""Confirm device returned to source store. Ready for billing."""
-	sr = frappe.get_doc("Service Request", service_request)
-	frappe.has_permission("Service Request", doc=sr, ptype="write", throw=True)
+	sr = assert_service_request_access(service_request, permission_type="write")
 	sr.flags.ignore_validate_update_after_submit = True
 
 	sr.set("transfer_status", "Returned to Store")
@@ -436,38 +453,55 @@ def confirm_return_at_source(service_request) -> dict:
 
 def _auto_create_device_transfer(sr, from_location, to_location, reason=None):
 	"""Create a Stock Entry (Material Transfer) to move the device."""
-	# Only create stock transfer if there's a serialized device
+	_validate_transfer_warehouse(sr, from_location, _("source"))
+	_validate_transfer_warehouse(sr, to_location, _("destination"))
 	serial_no = sr.get("serial_no")
 	device_item = sr.device_item
 
 	if not device_item:
-		return None
+		frappe.throw(_("A device item is required before its location can be transferred."))
 
-	try:
-		se = frappe.new_doc("Stock Entry")
-		se.stock_entry_type = "Material Transfer"
-		se.company = sr.company
-		se.posting_date = nowdate()
-		se.remarks = (
-			f"GoFix device transfer for {sr.name}: "
-			f"{from_location} → {to_location}. {reason or ''}"
-		)
-		se.append("items", {
-			"item_code": device_item,
-			"qty": 1,
-			"s_warehouse": from_location,
-			"t_warehouse": to_location,
-			"serial_no": serial_no or "",
-		})
-		se.insert(ignore_permissions=True)
-		se.submit()
-		return se.name
-	except Exception:
-		frappe.log_error(
-			frappe.get_traceback(),
-			f"GoFix auto-transfer failed: {sr.name} {from_location}→{to_location}",
-		)
-		return None
+	frappe.has_permission("Stock Entry", "create", throw=True)
+	frappe.has_permission("Stock Entry", "submit", throw=True)
+	se = frappe.new_doc("Stock Entry")
+	se.stock_entry_type = "Material Transfer"
+	se.company = sr.company
+	se.posting_date = nowdate()
+	se.remarks = (
+		f"GoFix device transfer for {sr.name}: "
+		f"{from_location} → {to_location}. {reason or ''}"
+	)
+	se.append("items", {
+		"item_code": device_item,
+		"qty": 1,
+		"s_warehouse": from_location,
+		"t_warehouse": to_location,
+		"serial_no": serial_no or "",
+	})
+	se.insert()
+	se.submit()
+	return se.name
+
+
+def _validate_transfer_warehouse(sr, warehouse, label):
+	if not warehouse:
+		frappe.throw(_("The {0} warehouse is required.").format(label))
+	row = frappe.db.get_value(
+		"Warehouse",
+		warehouse,
+		["name", "company", "is_group", "disabled"],
+		as_dict=True,
+	)
+	if not row or row.is_group or row.disabled:
+		frappe.throw(_("The {0} warehouse is missing, disabled, or a group.").format(label))
+	if not sr.company or row.company != sr.company:
+		frappe.throw(_("The {0} warehouse must belong to company {1}.").format(label, sr.company))
+	warehouse_doc = frappe.get_doc("Warehouse", warehouse)
+	warehouse_doc.check_permission("read")
+	from gofix.scope_guard import assert_warehouse
+
+	assert_warehouse(warehouse=warehouse, company=sr.company)
+	return row
 
 
 def _cancel_location_assignments(sr_name, old_location):
@@ -479,9 +513,10 @@ def _cancel_location_assignments(sr_name, old_location):
 
 	for ja_name in assignments:
 		ja = frappe.get_doc("Job Assignment", ja_name)
+		ja.check_permission("write")
 		ja.assignment_status = "Cancelled"
 		ja.technician_remarks = (ja.technician_remarks or "") + f"\nAuto-cancelled: device moved from {old_location}"
-		ja.save(ignore_permissions=True)
+		ja.save()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -513,17 +548,16 @@ def _reroute_pending_spare_requests(sr_name, old_location, new_location):
 		}, update_modified=True)
 
 		# Log the reroute
-		frappe.get_doc({
-			"doctype": "Comment",
-			"comment_type": "Info",
-			"reference_doctype": "Spare Parts Usage",
-			"reference_name": spu.name,
-			"content": (
+		spu_doc = frappe.get_doc("Spare Parts Usage", spu.name)
+		spu_doc.check_permission("write")
+		spu_doc.add_comment(
+			"Info",
+			(
 				f"Spare request rerouted: {spu.spare_part_item} x{spu.qty_used} "
 				f"from {old_wh} → {new_location} "
 				f"(ticket repair location changed)"
 			),
-		}).insert(ignore_permissions=True)
+		)
 
 		rerouted += 1
 
@@ -545,7 +579,7 @@ def check_billing_readiness(service_request) -> dict:
 	  4. All chargeable items finalized
 	  5. No pending approvals
 	"""
-	sr = frappe.get_doc("Service Request", service_request)
+	sr = assert_service_request_access(service_request, permission_type="read")
 	blockers = []
 
 	# Gate 1: QC Pass
@@ -593,15 +627,19 @@ def check_billing_readiness(service_request) -> dict:
 # 6. QC ISSUE-LEVEL REWORK
 # ═══════════════════════════════════════════════════════════════════════════════
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def qc_fail_with_issues(service_request, failed_checks_json, new_issues_json=None) -> dict:
 	"""Process a QC failure with issue-level granularity.
 
 	failed_checks_json: list of {check_name, fail_reason, linked_issue_category, linked_solution}
 	new_issues_json: list of {issue_category, description} — issues discovered during QC
 	"""
-	sr = frappe.get_doc("Service Request", service_request)
-	frappe.has_permission("Service Request", doc=sr, ptype="write", throw=True)
+	require_role_setting(
+		"qc_approval_roles",
+		("QC Manager", "Store Manager"),
+		action=_("record a QC failure"),
+	)
+	sr = assert_service_request_access(service_request, permission_type="write")
 	sr.flags.ignore_validate_update_after_submit = True
 
 	failed_checks = json.loads(failed_checks_json) if isinstance(failed_checks_json, str) else failed_checks_json
@@ -624,7 +662,8 @@ def qc_fail_with_issues(service_request, failed_checks_json, new_issues_json=Non
 
 		so.qc_status = "Fail"
 		so.flags.ignore_validate_update_after_submit = True
-		so.save(ignore_permissions=True)
+		so.check_permission("write")
+		so.save()
 
 	# 2. Mark failed solution lines back to "In Progress"
 	failed_solutions = set()
@@ -719,7 +758,7 @@ def get_spare_recovery_status(service_request) -> dict:
 	  - pending_spares: list of consumed spare details
 	  - all_recovered: bool (True when every consumed spare has been dispositioned)
 	"""
-	frappe.has_permission("Service Request", doc=service_request, throw=True)
+	assert_service_request_access(service_request, permission_type="read")
 
 	pending = frappe.get_all("Spare Parts Usage",
 		filters={
@@ -765,8 +804,7 @@ def validate_spare_recovery_before_return(service_request) -> dict:
 	  - ready: bool
 	  - blockers: list of messages
 	"""
-	frappe.has_permission("Service Request", doc=service_request, throw=True)
-	sr = frappe.get_doc("Service Request", service_request)
+	sr = assert_service_request_access(service_request, permission_type="read")
 	blockers = []
 
 	# Only enforce for Not Repairable / BER / Customer Cancelled outcomes

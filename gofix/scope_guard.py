@@ -4,9 +4,8 @@ GoFix records are anchored to a Warehouse (``source_warehouse``). These
 helpers let whitelisted intake/search APIs constrain customer PII, serial,
 and service-history reads to the caller's allowed warehouses.
 
-When ch_erp15 (the scope authority) is not installed — e.g. GoFix running
-standalone in a unit-test env — ``user_scope`` reports ``bypass=True`` and the
-guards become no-ops, mirroring the resilience pattern used elsewhere.
+When ch_erp15 (the scope authority) is unavailable, only Administrator/System
+Manager bypass; every other user is denied because store scope cannot be proven.
 """
 
 from __future__ import annotations
@@ -15,13 +14,14 @@ from __future__ import annotations
 def user_scope():
     """Return ``(warehouses:set, companies:set, bypass:bool)``.
 
-    ``bypass`` is True for unrestricted users (System Manager / Administrator)
-    or when the scope module is unavailable.
+    ``bypass`` is True only for unrestricted users.
     """
     try:
         from ch_erp15.ch_erp15.scope import get_user_scope
     except ImportError:
-        return set(), set(), True
+        from gofix.config import is_privileged_user
+
+        return set(), set(), is_privileged_user()
     scope = get_user_scope()
     if scope.get("bypass"):
         return set(), set(), True
@@ -33,5 +33,14 @@ def assert_warehouse(warehouse=None, company=None, msg=None):
     try:
         from ch_erp15.ch_erp15.scope import assert_user_has_store_scope
     except ImportError:
-        return
+        import frappe
+        from frappe import _
+        from gofix.config import is_privileged_user
+
+        if is_privileged_user():
+            return
+        frappe.throw(
+            msg or _("Store scope cannot be verified because the scope authority is unavailable."),
+            frappe.PermissionError,
+        )
     assert_user_has_store_scope(warehouse=warehouse, company=company, msg=msg)

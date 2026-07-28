@@ -83,18 +83,13 @@ class ServiceHub {
 		const store = this.store_field?.get_value() || "";
 		const from_date = this.from_date_field?.get_value() || "";
 		const to_date = this.to_date_field?.get_value() || "";
-		this.$root.html(`<div class="hub-loading"><i class="fa fa-spinner fa-spin"></i> ${__("Loading Service Hub...")}</div>`);
-		frappe.xcall("gofix.gofix_services.page.service_hub.service_hub_api.get_service_hub_data",
-			{ company, store, from_date, to_date })
-			.then((data) => this._render(data))
-			.catch(() => {
-				this.$root.html(`<div class="hub-loading text-danger">${__("Failed to load data. Please try again.")}</div>`);
-			});
+		return ch_erp15.hub_refresh.run(this,
+			() => frappe.xcall("gofix.gofix_services.page.service_hub.service_hub_api.get_service_hub_data", { company, store, from_date, to_date }),
+			(data) => this._render(data), { label: "Service Hub" });
 	}
 
 	_start_auto_refresh() {
-		this._timer = setInterval(() => this.refresh(), 60000);
-		$(this.page.parent).on("remove", () => clearInterval(this._timer));
+		ch_erp15.hub_refresh.start(this, 60000);
 	}
 
 	_render(data) {

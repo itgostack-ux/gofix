@@ -279,7 +279,7 @@
 		<div class="party">
 			<div class="party-head">Service Centre</div>
 			<div><span class="label">POS Profile:</span> <span class="value">{{ doc.pos_profile or "-" }}</span></div>
-			<div><span class="label">Warehouse:</span> <span class="value">{{ doc.set_warehouse or (sr.source_warehouse if sr else "") or "-" }}</span></div>
+			<div><span class="label">Warehouse:</span> <span class="value">{{ (doc.set_warehouse or (sr.source_warehouse if sr else "")) | wh_label or "-" }}</span></div>
 			{% if sr and sr.transferred_to_store %}
 				<div><span class="label">Repair Hub:</span> <span class="value">{{ sr.transferred_to_store }}</span></div>
 			{% endif %}

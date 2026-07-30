@@ -84,7 +84,9 @@ def _get_user_service_scope(user=None):
             return {"companies": set(), "warehouses": set()}
 
     store_names = set()
-    for doctype in ("POS Executive", "CH POS User Allocation"):
+    # CH POS User Allocation retired into CH User Scope (ch_erp15 v34); it only
+    # ever added stores on top of POS Executive, which is still read here.
+    for doctype in ("POS Executive",):
         if not frappe.db.exists("DocType", doctype):
             continue
         try:

@@ -1154,17 +1154,20 @@ def get_store_users(pos_profile: str | None = None, role: str | None = None) -> 
 			{"warehouse": resolved["warehouse"], "disabled": 0},
 			"name",
 		)
-		if store_name and frappe.db.exists("DocType", "CH Store User"):
-			filters: dict[str, Any] = {"parent": store_name, "parenttype": "CH Store"}
-			if role:
-				filters["role"] = role
-			rows = frappe.db.get_all(
-				"CH Store User",
-				filters=filters,
-				fields=["user", "full_name", "role"],
-				order_by="full_name",
-				limit_page_length=get_int_setting("token_queue_limit", 200),
-			)
+		if store_name:
+			# CH Store User retired into CH User Scope (ch_erp15 patch v34).
+			from ch_erp15.ch_erp15.scope import get_store_users
+
+			rows = [
+				frappe._dict({
+					"user": _r.get("user"),
+					"full_name": _r.get("full_name"),
+					"role": _r.get("role_profile") or _r.get("scope_role"),
+				})
+				for _r in get_store_users(
+					store_name, role=role, limit=get_int_setting("token_queue_limit", 200)
+				)
+			]
 			missing_names = {row.user for row in rows if row.user and not row.full_name}
 			full_names = {
 				row.name: row.full_name or row.name

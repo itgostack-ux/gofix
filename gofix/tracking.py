@@ -200,7 +200,7 @@ def _get_by_token(token):
 		"Service Request",
 		filters={
 			TRACKING_TOKEN_FIELD: digest,
-			"status": ["not in", ["Cancelled"]],
+			"decision": ["not in", ["Cancelled"]],
 		},
 		pluck="name",
 		limit=1,
@@ -210,7 +210,7 @@ def _get_by_token(token):
 			"Service Request",
 			filters={
 				TRACKING_TOKEN_FIELD: token,
-				"status": ["not in", ["Cancelled"]],
+				"decision": ["not in", ["Cancelled"]],
 			},
 			pluck="name",
 			limit=1,
@@ -270,7 +270,7 @@ def _build_tracking_data(sr_name):
 		"Cancelled": {"label": "Cancelled", "icon": "x", "order": -1},
 	}
 
-	current = sr.decision or sr.status or "Draft"
+	current = sr.decision or "Draft"
 	current_info = stage_map.get(current, {"label": current, "order": 0})
 
 	timeline = []

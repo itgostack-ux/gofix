@@ -6,8 +6,7 @@ from frappe import _
 
 
 def resolve_gofix_links(doc, method=None):
-	"""Before insert: auto-fill GoFix link fields from Repair Intake or
-	item Sales Orders.
+	"""Before insert: auto-fill GoFix links from item Sales Orders.
 
 	Wrapped in try/except so a failure here never blocks invoice creation.
 	"""
@@ -22,19 +21,7 @@ def resolve_gofix_links(doc, method=None):
 
 def _resolve_gofix_links_inner(doc):
 	"""Inner implementation — separated for clean error isolation."""
-	# 1) From POS Repair Intake → look up the Service Request
-	if doc.get("custom_repair_intake") and not doc.get("custom_gofix_service_request"):
-		sr_name = frappe.db.get_value(
-			"POS Repair Intake", doc.custom_repair_intake, "service_request"
-		)
-		if sr_name:
-			doc.custom_gofix_service_request = sr_name
-			if not doc.get("custom_gofix_service_order"):
-				so_name = frappe.db.get_value("Service Request", sr_name, "service_order")
-				if so_name:
-					doc.custom_gofix_service_order = so_name
-
-	# 2) From item-level Sales Order (Service Order) linkage
+	# From item-level Sales Order (Service Order) linkage
 	if not doc.get("custom_gofix_service_request"):
 		for item in (doc.items or []):
 			if item.sales_order:
@@ -95,8 +82,7 @@ def _update_service_request_on_invoice_inner(doc, method):
 
 	if method == "on_submit":
 		# Invoice submitted - mark as Invoiced
-		sr.db_set("status", "Invoiced", update_modified=True)
-		sr.db_set("decision", "Invoiced", update_modified=False)
+		sr.db_set("decision", "Invoiced", update_modified=True)
 
 		frappe.msgprint(
 			_("Service Request {0} marked as Invoiced").format(so.service_request),
@@ -106,5 +92,4 @@ def _update_service_request_on_invoice_inner(doc, method):
 
 	elif method == "on_cancel":
 		# Invoice cancelled - revert to Completed
-		sr.db_set("status", "Completed", update_modified=True)
-		sr.db_set("decision", "Completed", update_modified=False)
+		sr.db_set("decision", "Completed", update_modified=True)

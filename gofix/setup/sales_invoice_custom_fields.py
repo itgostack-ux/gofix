@@ -13,7 +13,7 @@ def create_sales_invoice_custom_fields():
                 "fieldname": "gofix_service_section",
                 "label": "GoFix Service Details",
                 "fieldtype": "Section Break",
-                "insert_after": "custom_repair_intake",
+                "insert_after": "custom_guided_session",
                 "collapsible": 1,
                 "depends_on": "eval:doc.custom_gofix_service_request",
             },

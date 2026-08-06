@@ -313,7 +313,6 @@ def set_repairability(service_request, status, reason=None) -> dict:
 			return {"message": _("Marked as Repairable. Initial estimate created.")}
 	elif status in ("Not Repairable", "BER"):
 		sr.set("decision", "Rejected")
-		sr.set("status", "Rejected")
 		sr.set("rejection_reason", reason or f"Device is {status}")
 
 		# Check if there are consumed spares that need recovery
@@ -336,7 +335,6 @@ def set_repairability(service_request, status, reason=None) -> dict:
 			)
 	elif status == "Customer Declined":
 		sr.set("decision", "Cancelled")
-		sr.set("status", "Cancelled")
 
 	sr.save()
 	return {"message": _("Repairability set to {0}").format(status)}

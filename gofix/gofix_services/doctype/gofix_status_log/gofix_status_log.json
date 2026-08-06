@@ -4,6 +4,7 @@
  "doctype": "DocType",
  "engine": "InnoDB",
  "field_order": [
+  "event_type",
   "from_status",
   "to_status",
   "changed_by",
@@ -11,6 +12,15 @@
   "time_in_previous_status_hours"
  ],
  "fields": [
+  {
+   "default": "Lifecycle",
+   "fieldname": "event_type",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Event Type",
+   "options": "Lifecycle\nOperations Stage",
+   "read_only": 1
+  },
   {
    "fieldname": "from_status",
    "fieldtype": "Data",

@@ -31,10 +31,17 @@ from __future__ import annotations
 
 import frappe
 
-from ch_item_master.ch_core.doctype.ch_store.ch_store import (
-	_GOFIX_STORE_PREFIX,
-	_slugify_store_name,
-)
+from ch_item_master.ch_core.doctype.ch_store.ch_store import _slugify_store_name
+
+# Historical patch (ran 2026-07-06). ``_GOFIX_STORE_PREFIX`` was a module-level
+# constant in ch_store when this was written; the brand prefix later moved to
+# ``Company.store_code_prefix`` and the constant was deleted. Importing it at
+# module scope made this file unimportable, which meant `bench migrate` on a
+# FRESH site — where the patch has not run yet and is still listed in
+# patches.txt — died at import before executing anything. Inline the literal so
+# the patch stays runnable and reproduces exactly the behaviour it had when it
+# was authored.
+_GOFIX_STORE_PREFIX = "GF"
 
 
 def _unique_store_code(store_name: str) -> str | None:

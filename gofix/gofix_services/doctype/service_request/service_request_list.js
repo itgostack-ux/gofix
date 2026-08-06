@@ -2,11 +2,10 @@
 //
 // Adds quick-filter buttons aligned with the canonical workflow buckets so
 // staff can pivot the queue by lifecycle stage without opening the filter
-// pane. Each button stacks an `OR` filter against the standard `status`
-// field already exposed in the doctype.
+// pane. `decision` is the single canonical lifecycle field.
 
 frappe.listview_settings["Service Request"] = {
-    add_fields: ["status", "priority", "service_type", "expected_completion_date"],
+    add_fields: ["decision", "priority", "service_type", "expected_completion_date"],
 
     // Grouped status buckets shown as tabs above the list.
     status_buckets: [
@@ -19,18 +18,18 @@ frappe.listview_settings["Service Request"] = {
     // Color the standard `status` column inline.
     get_indicator(doc) {
         const map = {
-            "Draft":      [__("Draft"),      "grey",   "status,=,Draft"],
-            "Accepted":   [__("Accepted"),   "blue",   "status,=,Accepted"],
-            "In Service": [__("In Service"), "blue",   "status,=,In Service"],
-            "Completed":  [__("Completed"),  "orange", "status,=,Completed"],
-            "Invoiced":   [__("Invoiced"),   "green",  "status,=,Invoiced"],
-            "Delivered":  [__("Delivered"),  "green",  "status,=,Delivered"],
-            "Withdrawn":  [__("Withdrawn"),  "red",    "status,=,Withdrawn"],
-            "Rejected":   [__("Rejected"),   "red",    "status,=,Rejected"],
-            "Expired":    [__("Expired"),    "red",    "status,=,Expired"],
-            "Cancelled":  [__("Cancelled"),  "red",    "status,=,Cancelled"],
+            "Draft":      [__("Draft"),      "grey",   "decision,=,Draft"],
+            "Accepted":   [__("Accepted"),   "blue",   "decision,=,Accepted"],
+            "In Service": [__("In Service"), "blue",   "decision,=,In Service"],
+            "Completed":  [__("Completed"),  "orange", "decision,=,Completed"],
+            "Invoiced":   [__("Invoiced"),   "green",  "decision,=,Invoiced"],
+            "Delivered":  [__("Delivered"),  "green",  "decision,=,Delivered"],
+            "Withdrawn":  [__("Withdrawn"),  "red",    "decision,=,Withdrawn"],
+            "Rejected":   [__("Rejected"),   "red",    "decision,=,Rejected"],
+            "Expired":    [__("Expired"),    "red",    "decision,=,Expired"],
+            "Cancelled":  [__("Cancelled"),  "red",    "decision,=,Cancelled"],
         };
-        return map[doc.status] || [doc.status, "grey", `status,=,${doc.status}`];
+        return map[doc.decision] || [doc.decision, "grey", `decision,=,${doc.decision}`];
     },
 
     onload(listview) {
@@ -40,7 +39,7 @@ frappe.listview_settings["Service Request"] = {
                 listview.filter_area.clear();
                 // OR filter across the bucket's statuses.
                 listview.filter_area.add([
-                    [listview.doctype, "status", "in", bucket.statuses, false],
+                    [listview.doctype, "decision", "in", bucket.statuses, false],
                 ]);
             });
         }

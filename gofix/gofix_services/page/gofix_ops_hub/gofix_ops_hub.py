@@ -39,12 +39,12 @@ STAGE_LABELS = {
 
 def _mark_sr_in_service(sr_name):
 	"""Advance SR decision & workflow_state to 'In Service' if still Accepted."""
-	current = frappe.db.get_value("Service Request", sr_name, "decision")
-	if current in ("Draft", "Accepted"):
-		updates = {"decision": "In Service", "status": "In Service"}
+	sr = frappe.get_doc("Service Request", sr_name)
+	if sr.decision in ("Draft", "Accepted"):
+		updates = {"decision": "In Service"}
 		if frappe.db.has_column("Service Request", "workflow_state"):
 			updates["workflow_state"] = "In Service"
-		frappe.db.set_value("Service Request", sr_name, updates, update_modified=True)
+		sr.db_set(updates, update_modified=True)
 
 
 def _log_ops_stage(sr_name, from_stage, to_stage):
@@ -67,11 +67,13 @@ def _log_ops_stage(sr_name, from_stage, to_stage):
 	sr.flags.skip_completion_artifacts = True
 
 	prev_at = None
-	if sr.get("status_log"):
-		prev_at = sr.status_log[-1].changed_at
+	stage_rows = [row for row in (sr.get("status_log") or []) if row.get("event_type") == "Operations Stage"]
+	if stage_rows:
+		prev_at = stage_rows[-1].changed_at
 	elapsed = round(time_diff_in_hours(now_datetime(), prev_at), 2) if prev_at else 0
 
 	sr.append("status_log", {
+		"event_type": "Operations Stage",
 		"from_status": STAGE_LABELS.get(from_stage, from_stage),
 		"to_status": STAGE_LABELS.get(to_stage, to_stage),
 		"changed_by": frappe.session.user,
@@ -426,10 +428,10 @@ def accept_and_create_service_order(sr_name) -> dict:
 	if not sr.service_order:
 		frappe.throw(_("Acceptance completed but Service Order was not created — check estimate gates."))
 
-	updates = {"decision": "Accepted", "walkin_status": "Accepted", "status": "In Service"}
+	updates = {"decision": "Accepted", "walkin_status": "Accepted"}
 	if frappe.db.has_column("Service Request", "accepted_by"):
 		updates["accepted_by"] = frappe.session.user
-	frappe.db.set_value("Service Request", sr_name, updates, update_modified=False)
+	sr.db_set(updates, update_modified=False)
 
 	return {"ok": True, "service_order": sr.service_order, "estimate": estimate}
 
@@ -447,7 +449,7 @@ def update_spare_genealogy(sr_name, spare_row_name, removed_part_serial=None,
 	row = frappe.db.get_value(
 		"SR Spare Line",
 		{"name": spare_row_name, "parent": sr_name, "parenttype": "Service Request"},
-		["name", "status"],
+		["name", "status", "spare_usage", "spare_item", "qty", "uom", "rate"],
 		as_dict=True,
 	)
 	if not row:
@@ -459,16 +461,52 @@ def update_spare_genealogy(sr_name, spare_row_name, removed_part_serial=None,
 		updates["installed_part_serial"] = installed_part_serial.strip()
 	if removed_part_condition is not None:
 		updates["removed_part_condition"] = removed_part_condition.strip()
-	if cint(consume) and row.status in ("Reserved", "Issued", "Pending"):
+	consume_now = cint(consume) and row.status in ("Reserved", "Issued", "Pending")
+	if consume_now:
 		if not (updates.get("installed_part_serial") or "").strip():
 			frappe.throw(
 				_("Record the new part's serial/IMEI to install this spare."),
 				title=_("New Part Serial Missing"),
 			)
-		updates["status"] = "Consumed"
 	if updates:
 		frappe.db.set_value("SR Spare Line", spare_row_name, updates, update_modified=False)
-	return {"ok": True, "status": updates.get("status") or row.status}
+	if consume_now:
+		sr = frappe.get_doc("Service Request", sr_name)
+		usage = frappe.get_doc("Spare Parts Usage", row.spare_usage) if row.spare_usage else frappe.get_doc({
+			"doctype": "Spare Parts Usage",
+			"service_request": sr_name,
+			"service_request_spare_line": spare_row_name,
+			"warehouse": _effective_repair_warehouse(sr),
+			"spare_part_item": row.spare_item,
+			"qty_used": row.qty,
+			"uom": row.uom,
+			"sales_price": row.rate,
+			"part_source": "Store Stock",
+			"part_status": "Reserved",
+			"status": "Active",
+		})
+		new_installed = (installed_part_serial or "").strip()
+		new_removed = (removed_part_serial or "").strip()
+		if usage.docstatus == 1 and (
+			new_installed != (usage.installed_part_serial or "")
+			or new_removed != (usage.removed_part_serial or "")
+		):
+			frappe.throw(_("Part genealogy cannot be changed after stock consumption."))
+		usage.installed_part_serial = new_installed
+		usage.barcode_value = new_installed
+		usage.removed_part_serial = new_removed
+		if usage.is_new():
+			usage.insert()
+			frappe.db.set_value("SR Spare Line", spare_row_name, "spare_usage", usage.name, update_modified=False)
+		elif usage.docstatus == 0:
+			usage.save()
+		if usage.requires_approval and usage.approval_status != "Approved":
+			return {"ok": True, "status": "Reserved", "approval_required": True, "spare_usage": usage.name}
+		if usage.docstatus == 0:
+			usage.part_status = "Consumed"
+			usage.submit()
+		return {"ok": True, "status": "Consumed", "spare_usage": usage.name, "stock_entry": usage.stock_entry}
+	return {"ok": True, "status": row.status}
 
 
 def _assert_removed_part_details_complete(sr) -> None:
@@ -693,7 +731,7 @@ def get_ticket_detail(sr_name) -> dict:
 	return {
 		"name": sr.name,
 		"decision": sr.decision,
-		"status": sr.status or sr.decision,
+		"status": sr.decision,
 		"priority": sr.priority,
 		"customer": sr.customer,
 		"customer_name": sr.customer_name,
@@ -1977,20 +2015,26 @@ def mark_spare_damaged(sr_name, spare_row_name, remarks="") -> dict:
 
 	if not remarks or not remarks.strip():
 		frappe.throw(_("Please provide a reason for marking the spare as damaged."), title=_("Validation Error"))
-	_bound_child_row(
+	row = _bound_child_row(
 		"SR Spare Line",
 		spare_row_name,
 		sr_name,
 		"spare_lines",
-		["name", "status"],
+		["name", "status", "spare_usage"],
 	)
-
-	frappe.db.set_value(
-		"SR Spare Line",
-		spare_row_name,
-		{"status": "Damaged", "remarks": remarks.strip()},
-		update_modified=True,
-	)
+	if row.spare_usage:
+		usage = frappe.get_doc("Spare Parts Usage", row.spare_usage)
+		if usage.docstatus == 1 and usage.part_status == "Consumed":
+			usage.recover_spare("Damaged by Technician", remarks.strip())
+		else:
+			usage.mark_defective("Technician Damage", remarks.strip(), "Dispose")
+	else:
+		frappe.db.set_value(
+			"SR Spare Line",
+			spare_row_name,
+			{"status": "Damaged", "remarks": remarks.strip()},
+			update_modified=True,
+		)
 	return {"ok": True}
 
 
@@ -2014,6 +2058,8 @@ def add_spare_to_ticket(sr_name, spare_item, qty, rate=0, repair_solution=None,
 
 	item = frappe.db.get_value("Item", spare_item, ["item_name", "stock_uom", "is_stock_item"], as_dict=True)
 	rate = flt(rate)
+	if not cint(item.get("is_stock_item")):
+		frappe.throw(_("Repair spares must be stock items."), title=_("Invalid Spare"))
 
 	# Auto-fetch selling price if rate not provided
 	if not rate:
@@ -2037,13 +2083,20 @@ def add_spare_to_ticket(sr_name, spare_item, qty, rate=0, repair_solution=None,
 		)
 
 	# ── Availability check ──────────────────────────────────────────────
+	# Serialize the availability check with competing reservations.  Standard
+	# Stock Reservation Entry does not support Service Request vouchers, so the
+	# draft Spare Parts Usage is our commitment record while ERPNext Bin remains
+	# the quantity authority.
+	frappe.db.sql(
+		"SELECT name FROM `tabBin` WHERE item_code = %s AND warehouse = %s FOR UPDATE",
+		(spare_item, warehouse),
+	)
 	avail = _get_spare_availability(spare_item, warehouse)
-	is_stock = cint(item.get("is_stock_item"))
-	in_stock = (avail["available_qty"] >= qty) if is_stock else True
+	in_stock = avail["available_qty"] >= qty
 
-	# When spare is in stock it is being consumed immediately for this repair.
-	# "Awaiting Procurement" is set only when the part needs to be ordered first.
-	status = "Consumed" if in_stock else "Awaiting Procurement"
+	# The child row is the plan. Stock is consumed only by submitting the bound
+	# Spare Parts Usage execution record below.
+	status = "Reserved" if in_stock else "Awaiting Procurement"
 
 	sr.flags.ignore_validate_update_after_submit = True
 	sr.flags.ignore_mandatory = True
@@ -2065,44 +2118,46 @@ def add_spare_to_ticket(sr_name, spare_item, qty, rate=0, repair_solution=None,
 
 	sr.save()
 
-	# P1 FIX: Create Material Issue SE for consumed spare
-	if status == "Consumed":
-		_spare_dict = {
-			"item_code": spare_item,
-			"qty": qty,
+	usage_name = None
+	stock_entry = None
+	approval_required = False
+	if in_stock:
+		plan_row = sr.spare_lines[-1]
+		usage = frappe.get_doc({
+			"doctype": "Spare Parts Usage",
+			"service_request": sr.name,
+			"service_request_spare_line": plan_row.name,
 			"warehouse": warehouse,
-			"serial_no": None,
-			"doctype": "SR Spare Line",
-			"name": sr.spare_lines[-1].name if sr.spare_lines else None,
-		}
-		so_name = sr.service_order
-		try:
-			_se = frappe.new_doc("Stock Entry")
-			_se.stock_entry_type = "Material Issue"
-			_se.purpose = "Material Issue"
-			_se.company = frappe.db.get_value("Sales Order", so_name, "company") if so_name else (sr.company or frappe.defaults.get_user_default("Company"))
-			_se.posting_date = frappe.utils.today()
-			_se.custom_gofix_service_order = so_name
-			_se_item = _se.append("items", {
-				"item_code": _spare_dict.get("item_code"),
-				"qty": flt(_spare_dict.get("qty", 1)),
-				"s_warehouse": _spare_dict.get("warehouse") or (frappe.db.get_value("Sales Order", so_name, "set_warehouse") if so_name else warehouse),
-			})
-			if _spare_dict.get("serial_no"):
-				_se_item.serial_no = _spare_dict.get("serial_no")
-			frappe.has_permission("Stock Entry", "create", throw=True)
-			_se.insert()
-			_se.submit()
-			if _spare_dict.get("name"):
-				frappe.db.set_value(_spare_dict.get("doctype") or "SR Spare Line", _spare_dict.get("name"), "custom_stock_entry", _se.name)
-		except Exception:
-			frappe.log_error(frappe.get_traceback(), f"Spare SE failed for {_spare_dict.get('item_code')} on {so_name}")
-			frappe.throw(
-				_("The spare could not be issued from stock. No ticket changes were saved."),
-				title=_("Stock Issue Failed"),
-			)
+			"spare_part_item": spare_item,
+			"qty_used": qty,
+			"uom": item.stock_uom or "Nos",
+			"sales_price": rate,
+			"barcode_value": (installed_part_serial or "").strip(),
+			"installed_part_serial": (installed_part_serial or "").strip(),
+			"removed_part_serial": (removed_part_serial or "").strip(),
+			"part_source": "Store Stock",
+			"part_status": "Reserved",
+			"status": "Active",
+		})
+		usage.insert()
+		usage_name = usage.name
+		frappe.db.set_value(
+			"SR Spare Line",
+			plan_row.name,
+			{"spare_usage": usage.name, "status": "Reserved"},
+			update_modified=False,
+		)
+		approval_required = bool(usage.requires_approval and usage.approval_status != "Approved")
 
-	return {"ok": True, "status": status, "available_qty": avail["available_qty"]}
+	return {
+		"ok": True,
+		"status": status,
+		"available_qty": avail["available_qty"],
+		"spare_line": plan_row.name if in_stock else sr.spare_lines[-1].name,
+		"spare_usage": usage_name,
+		"stock_entry": stock_entry,
+		"approval_required": approval_required,
+	}
 
 
 @frappe.whitelist()
@@ -2428,7 +2483,7 @@ def _get_spare_availability(item_code, warehouse) -> dict:
 		FROM `tabSR Spare Line` sl
 		JOIN `tabService Request` sr ON sr.name = sl.parent
 		WHERE sl.spare_item = %(item)s
-		  AND sl.status IN ('Reserved', 'Consumed')
+		  AND sl.status IN ('Reserved', 'Issued')
 		  AND sl.parenttype = 'Service Request'
 		  AND (
 			CASE
@@ -2457,6 +2512,16 @@ def release_spare_reservation(sr_name, spare_row_name) -> dict:
 
 	for row in sr.spare_lines:
 		if row.name == spare_row_name and row.status in ("Reserved", "Awaiting Procurement", "Pending"):
+			usage_name = row.get("spare_usage") or frappe.db.get_value(
+				"Spare Parts Usage",
+				{"service_request_spare_line": row.name, "docstatus": ("<", 2)},
+				"name",
+			)
+			if usage_name:
+				usage = frappe.get_doc("Spare Parts Usage", usage_name)
+				if usage.docstatus != 0:
+					frappe.throw(_("Consumed spare usage {0} must be recovered, not removed.").format(usage.name))
+				usage.delete()
 			sr.remove(row)
 			sr.save()
 			return {"ok": True}
@@ -2722,8 +2787,7 @@ def complete_qc(sr_name, qc_result) -> dict:
 		# The existing hook update_service_request_on_qc should fire,
 		# but set Completed explicitly as safety net:
 		if sr.decision != "Completed":
-			frappe.db.set_value("Service Request", sr_name, "decision", "Completed", update_modified=True)
-			frappe.db.set_value("Service Request", sr_name, "status", "Completed", update_modified=False)
+			sr.db_set("decision", "Completed", update_modified=True)
 		if frappe.db.has_column("Service Request", "workflow_state"):
 			frappe.db.set_value("Service Request", sr_name, "workflow_state", "Completed", update_modified=False)
 	else:
@@ -2810,38 +2874,28 @@ def _get_company_cost(sr) -> dict:
 	parts_cost = 0.0
 	damaged_cost = 0.0
 
-	lines = sr.get("spare_lines") or []
-	for row in lines:
-		qty = flt(row.qty) or 1
-		cost_rate = _spare_cost_rate(row.spare_item, flt(row.rate))
-		if row.status == "Damaged":
-			damaged_cost += qty * cost_rate
-		elif row.status in ("Consumed", "Issued"):
-			parts_cost += qty * cost_rate
-
-	if not lines:
-		# Legacy flow records consumption in Spare Parts Usage with an
-		# explicit purchase_cost — use it directly.
-		try:
-			spu = frappe.get_all(
-				"Spare Parts Usage",
-				filters={
-					"service_request": sr.name,
-					"status": "Active",
-					"part_status": ("in", ["Consumed", "Issued"]),
-				},
-				fields=["qty_used", "purchase_cost"],
-			)
-			parts_cost = sum(flt(r.purchase_cost) * flt(r.qty_used) for r in spu)
-		except Exception:
-			frappe.log_error(
-				frappe.get_traceback(),
-				f"GoFix company-cost resolution failed for {sr.name}",
-			)
-			frappe.throw(
-				_("Company cost could not be verified. Billing is blocked until the cost ledger is available."),
-				frappe.ValidationError,
-			)
+	try:
+		spu = frappe.get_all(
+			"Spare Parts Usage",
+			filters={"service_request": sr.name, "docstatus": ("<", 2), "deleted": 0},
+			fields=["qty_used", "purchase_cost", "part_status", "docstatus"],
+		)
+		parts_cost = sum(
+			flt(r.purchase_cost) * flt(r.qty_used)
+			for r in spu
+			if r.docstatus == 1 and r.part_status == "Consumed"
+		)
+		damaged_cost = sum(
+			flt(r.purchase_cost) * flt(r.qty_used)
+			for r in spu
+			if r.part_status == "Defective"
+		)
+	except Exception:
+		frappe.log_error(frappe.get_traceback(), f"GoFix company-cost resolution failed for {sr.name}")
+		frappe.throw(
+			_("Company cost could not be verified. Billing is blocked until the cost ledger is available."),
+			frappe.ValidationError,
+		)
 
 	labour = _get_labour_cost(sr)
 	total = parts_cost + damaged_cost + labour["cost"]
@@ -3140,7 +3194,7 @@ def set_final_cost(sr_name, final_cost, reason=None) -> dict:
 			exception_status = result.get("status") or "Pending"
 			updates["below_cost_exception_request"] = exception_name
 
-	frappe.db.set_value("Service Request", sr_name, updates, update_modified=True)
+	sr.db_set(updates, update_modified=True)
 
 	return {
 		"final_cost": final_cost,
@@ -3278,6 +3332,13 @@ def create_ops_hub_invoice(sr_name, remote_otp=None) -> dict:
 		"custom_gofix_service_order": sr.service_order or "",
 	})
 
+	# Store-wise P&L — same attribution as ServiceRequest.create_service_invoice,
+	# so a repair billed through the Ops Hub lands on the same store's Cost
+	# Center as one billed from the Service Request.
+	from ch_item_master.ch_core.cost_center import apply_cost_center
+
+	apply_cost_center(inv, warehouse=sr.get("source_warehouse"))
+
 	frappe.has_permission("Sales Invoice", "create", throw=True)
 	inv.insert()
 
@@ -3301,11 +3362,11 @@ def create_ops_hub_invoice(sr_name, remote_otp=None) -> dict:
 	# Link back to SR. workflow_state/decision are workflow-provisioned
 	# columns — absent on sites without the SR workflow, so write only
 	# the columns that exist.
-	updates = {"service_invoice": inv.name, "status": "Invoiced"}
+	updates = {"service_invoice": inv.name}
 	for optional_col in ("decision", "workflow_state"):
 		if frappe.db.has_column("Service Request", optional_col):
 			updates[optional_col] = "Invoiced"
-	frappe.db.set_value("Service Request", sr_name, updates, update_modified=True)
+	sr.db_set(updates, update_modified=True)
 
 	from gofix.gofix_services.api import auto_close_service_order_after_billing
 
@@ -3483,7 +3544,6 @@ def mark_not_repairable(sr_name, status="Not Repairable", reason="") -> dict:
 	sr.set("repairability_decided_by", frappe.session.user)
 	sr.set("repairability_decided_at", frappe.utils.now_datetime())
 	sr.set("decision", "Rejected")
-	sr.set("status", "Rejected")
 	sr.set("rejection_reason", reason or f"Device is {status}")
 	sr.save()
 
@@ -3591,7 +3651,6 @@ def return_unrepaired_device(sr_name, remarks="") -> dict:
 	sr.flags.ignore_validate_update_after_submit = True
 	sr.flags.ignore_mandatory = True
 	sr.set("decision", "Delivered")
-	sr.set("status", "Delivered")
 	sr.set("delivery_remarks", remarks or _("Device returned to customer — {0}").format(
 		sr.repairability_status))
 	sr.set("actual_completion_date", frappe.utils.today())

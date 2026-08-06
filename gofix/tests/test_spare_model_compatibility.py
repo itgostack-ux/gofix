@@ -61,6 +61,29 @@ def _ensure_item(code, item_name, group, is_stock=1):
 	doc.stock_uom = "Nos"
 	doc.is_stock_item = is_stock
 	doc.is_sales_item = 1
+	doc.ch_item_mrp = 100 if is_stock else 0
+	doc.standard_rate = 100 if is_stock else 0
+	doc.gst_hsn_code = frappe.db.get_value("GST HSN Code", {}, "name") or "9987"
+	# Use a non-variant model: assigning a Variant Template model correctly
+	# routes Item creation into ERPNext's native template/variant workflow.
+	rows = frappe.db.sql(
+		"""
+		SELECT m.name AS ch_model, m.brand, sc.name AS ch_sub_category,
+		       sc.category AS ch_category
+		  FROM `tabCH Model` m
+		  JOIN `tabCH Sub Category` sc ON sc.name = m.sub_category
+		 WHERE m.disabled = 0
+		   AND sc.item_nature != 'Variant Template'
+		 ORDER BY m.name
+		 LIMIT 1
+		""",
+		as_dict=True,
+	)
+	retail_master = rows[0] if rows else {}
+	doc.ch_category = retail_master.get("ch_category")
+	doc.ch_sub_category = retail_master.get("ch_sub_category")
+	doc.ch_model = retail_master.get("ch_model")
+	doc.brand = retail_master.get("brand")
 	doc.insert(ignore_permissions=True)
 	return code
 

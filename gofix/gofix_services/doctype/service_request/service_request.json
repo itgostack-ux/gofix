@@ -98,7 +98,6 @@
   "column_break_dates",
   "received_by",
   "priority",
-  "status",
   "section_referral",
   "referral_code",
   "referral_expiry_date",
@@ -109,8 +108,6 @@
   "is_barcode_generated",
   "section_service_items",
   "service_items",
-  "section_spare_parts",
-  "spare_parts",
   "section_service_discount",
   "service_discount_percent",
   "service_discount_amount",
@@ -169,7 +166,6 @@
   "section_repair_tracking",
   "actual_completion_date",
   "service_invoice",
-  "stock_entry",
   "data_backup_disclaimer",
   "unclaimed_flag",
   "column_break_repair_track",
@@ -639,6 +635,7 @@
    "default": "Draft",
    "fieldname": "decision",
    "fieldtype": "Select",
+   "allow_on_submit": 1,
    "in_list_view": 1,
    "in_standard_filter": 1,
    "label": "Decision",
@@ -715,18 +712,6 @@
    "label": "Priority",
    "options": "Low\nMedium\nHigh\nUrgent",
    "reqd": 1
-  },
-  {
-   "default": "Draft",
-   "fieldname": "status",
-   "fieldtype": "Select",
-   "in_list_view": 1,
-   "in_standard_filter": 1,
-   "label": "Status",
-   "options": "Draft\nAccepted\nIn Service\nCompleted\nInvoiced\nDelivered\nWithdrawn\nRejected\nExpired\nCancelled",
-   "reqd": 1,
-   "description": "Overall status synced from Service Order",
-   "search_index": 1
   },
   {
    "collapsible": 1,
@@ -1068,14 +1053,6 @@
    "allow_on_submit": 1
   },
   {
-   "fieldname": "stock_entry",
-   "fieldtype": "Link",
-   "label": "Stock Entry",
-   "options": "Stock Entry",
-   "read_only": 1,
-   "allow_on_submit": 1
-  },
-  {
    "default": "0",
    "fieldname": "data_backup_disclaimer",
    "fieldtype": "Check",
@@ -1165,17 +1142,6 @@
    "fieldtype": "Table",
    "label": "Service Items",
    "options": "Service Request Service Item"
-  },
-  {
-   "fieldname": "section_spare_parts",
-   "fieldtype": "Section Break",
-   "label": "Spare Parts Required"
-  },
-  {
-   "fieldname": "spare_parts",
-   "fieldtype": "Table",
-   "label": "Spare Parts",
-   "options": "Service Request Spare Part"
   },
   {
    "fieldname": "section_service_discount",
@@ -1296,6 +1262,7 @@
   {
    "fieldname": "status_log",
    "fieldtype": "Table",
+   "allow_on_submit": 1,
    "label": "Status Log",
    "options": "GoFix Status Log",
    "read_only": 1
@@ -1496,5 +1463,5 @@
   }
  ],
  "track_changes": 1,
- "search_fields": "customer,customer_name,serial_no,item_code,status"
+ "search_fields": "customer,customer_name,serial_no,device_item,decision"
 }

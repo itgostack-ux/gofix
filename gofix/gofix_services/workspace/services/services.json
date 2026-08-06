@@ -72,7 +72,7 @@
    "format": "{} Open",
    "label": "Service Request",
    "link_to": "Service Request",
-   "stats_filter": "{\"status\": [\"=\", \"Open\"]}",
+   "stats_filter": "{\"decision\": [\"=\", \"Draft\"]}",
    "type": "DocType"
   },
   {

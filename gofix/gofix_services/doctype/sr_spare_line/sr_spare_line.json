@@ -22,7 +22,8 @@
   "section_break_status",
   "status",
   "remarks",
-  "material_request"
+  "material_request",
+  "spare_usage"
  ],
  "fields": [
   {
@@ -96,20 +97,23 @@
    "fieldname": "installed_part_serial",
    "fieldtype": "Data",
    "label": "Installed Part Serial (New)",
-   "description": "Serial of the new part fitted (KGB)"
+   "description": "Serial of the new part fitted (KGB)",
+   "read_only": 1
   },
   {
    "fieldname": "removed_part_serial",
    "fieldtype": "Data",
    "label": "Removed Part Serial (Old)",
-   "description": "Serial/IMEI of the part taken OUT of the device (KBB) \u2014 drives defective-return credit"
+   "description": "Serial/IMEI of the part taken OUT of the device (KBB) \u2014 drives defective-return credit",
+   "read_only": 1
   },
   {
    "fieldname": "removed_part_condition",
    "fieldtype": "Select",
    "label": "Removed Part Condition",
    "options": "\nGood\nFaulty\nDamaged\nScrap",
-   "description": "Condition of the part taken out \u2014 drives return-credit disposition"
+   "description": "Condition of the part taken out \u2014 drives return-credit disposition",
+   "read_only": 1
   },
   {
    "fieldname": "amount",
@@ -127,7 +131,8 @@
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "Status",
-   "options": "Pending\nReserved\nIssued\nConsumed\nReturned\nDamaged\nAwaiting Procurement"
+   "options": "Pending\nReserved\nIssued\nConsumed\nReturned\nDamaged\nAwaiting Procurement",
+   "read_only": 1
   },
   {
    "fieldname": "remarks",
@@ -140,6 +145,14 @@
    "label": "Material Request",
    "options": "Material Request",
    "read_only": 1
+  },
+  {
+   "fieldname": "spare_usage",
+   "fieldtype": "Link",
+   "label": "Spare Parts Usage",
+   "options": "Spare Parts Usage",
+   "read_only": 1,
+   "unique": 1
   }
  ],
  "index_web_pages_for_search": 0,

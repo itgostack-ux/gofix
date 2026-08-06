@@ -54,7 +54,7 @@ def get_data(filters):
 
 	query = f"""
 		SELECT
-			COALESCE(sr.decision, sr.status, 'Unknown') as status,
+			COALESCE(sr.decision, 'Unknown') as status,
 			COUNT(*) as count,
 			AVG(DATEDIFF(COALESCE(sr.modified, NOW()), sr.service_date)) as avg_days,
 			SUM(CASE WHEN sr.warranty_status = 'Under Warranty' THEN 1 ELSE 0 END) as under_warranty,
@@ -64,7 +64,7 @@ def get_data(filters):
 		FROM `tabService Request` sr
 		WHERE sr.docstatus < 2
 		{conditions}
-		GROUP BY COALESCE(sr.decision, sr.status, 'Unknown')
+		GROUP BY COALESCE(sr.decision, 'Unknown')
 		ORDER BY count DESC
 	"""
 

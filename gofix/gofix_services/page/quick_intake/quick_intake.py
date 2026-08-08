@@ -110,13 +110,15 @@ def search_serial(serial_no) -> dict:
 	allowed_wh, _co, bypass = user_scope()
 	sr_filters = {
 		"serial_no": serial_no,
-		"status": ["not in", ["Completed", "Delivered", "Cancelled", "Invoiced"]],
+		"decision": ["not in", ["Completed", "Delivered", "Cancelled", "Invoiced"]],
 		"docstatus": ["<", 2],
 	}
 	if not bypass:
 		sr_filters["source_warehouse"] = ["in", list(allowed_wh) or ["__none__"]]
 	open_srs = frappe.get_all("Service Request", filters=sr_filters,
-		fields=["name", "status", "service_date", "issue_category"], limit=5)
+		fields=["name", "decision", "service_date", "issue_category"], limit=5)
+	for row in open_srs:
+		row["status"] = row.decision
 
 	return {
 		"found": True,

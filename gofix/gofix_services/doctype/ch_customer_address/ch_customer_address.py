@@ -1,7 +1,10 @@
-# Copyright (c) 2026, GoFix and contributors
-# For license information, please see license.txt
+"""Compatibility controller used only while the retirement patch migrates old rows.
 
-import frappe
+There is intentionally no DocType JSON in source and no runtime hook.  Existing
+production databases still need this import to load Customer documents before
+``retire_ch_customer_address`` removes the legacy Table field and DocType.
+"""
+
 from frappe.model.document import Document
 
 

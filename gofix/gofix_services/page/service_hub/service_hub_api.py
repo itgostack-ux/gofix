@@ -192,7 +192,7 @@ def get_service_hub_data(company=None, store=None, from_date=None, to_date=None)
     pending_intake = frappe.db.sql(
         f"""SELECT sr.name, sr.customer_name, sr.customer, sr.device_item,
                    sr.device_item_name,
-                   sr.issue_category, sr.priority, sr.creation, sr.decision, sr.status
+                   sr.issue_category, sr.priority, sr.creation, sr.decision, sr.decision AS status
             FROM `tabService Request` sr
             WHERE sr.decision = 'Draft' {co} {wh} {dc('sr.creation')}
             ORDER BY sr.creation DESC LIMIT 50""", prm, as_dict=True
@@ -201,7 +201,7 @@ def get_service_hub_data(company=None, store=None, from_date=None, to_date=None)
     in_service = frappe.db.sql(
         f"""SELECT sr.name, sr.customer_name, sr.customer, sr.device_item,
                    sr.device_item_name,
-                   sr.brand, sr.decision, sr.status,
+                   sr.brand, sr.decision, sr.decision AS status,
                    DATEDIFF(%(today)s, sr.creation) AS days_in_service,
                    (SELECT COALESCE(e.employee_name, ja.service_engineer)
                     FROM `tabJob Assignment` ja
@@ -224,7 +224,7 @@ def get_service_hub_data(company=None, store=None, from_date=None, to_date=None)
     overdue = frappe.db.sql(
         f"""SELECT sr.name, sr.customer_name, sr.customer, sr.device_item,
                    sr.device_item_name,
-                   sr.expected_completion_date, sr.decision, sr.status,
+                   sr.expected_completion_date, sr.decision, sr.decision AS status,
                    DATEDIFF(%(today)s, sr.expected_completion_date) AS days_overdue
             FROM `tabService Request` sr
             WHERE sr.expected_completion_date < %(today)s

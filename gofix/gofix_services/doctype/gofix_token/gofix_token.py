@@ -147,6 +147,7 @@ class GoFixToken(Document):
 		self._resolve_store_fields()
 		self.customer_phone = normalize_phone(self.customer_phone)
 		self._validate_company_scope()
+		self._validate_service_request_link()
 		self._validate_repair_fields()
 		self._validate_issue_rules()
 		self._validate_status_transition()
@@ -190,6 +191,30 @@ class GoFixToken(Document):
 					self.company
 				)
 			)
+
+	def _validate_service_request_link(self) -> None:
+		"""A token may precede a repair, but can link to only one matching SR."""
+		if not self.service_request:
+			return
+		sr = frappe.db.get_value(
+			"Service Request",
+			self.service_request,
+			["company", "source_warehouse", "docstatus"],
+			as_dict=True,
+		)
+		if not sr or sr.docstatus == 2:
+			frappe.throw(_("Service Request must exist and must not be cancelled."))
+		if sr.company != self.company or sr.source_warehouse != self.store:
+			frappe.throw(_("Service Request company and store must match the token."))
+		other = frappe.db.get_value(
+			"GoFix Token",
+			{"service_request": self.service_request, "name": ("!=", self.name or "")},
+			"name",
+		)
+		if other:
+			frappe.throw(_("Service Request is already linked to token {0}.").format(other))
+		if self.status not in (STATUS_JOB_CARD, STATUS_COMPLETED):
+			frappe.throw(_("A linked Service Request requires Job Card Created or Completed status."))
 
 	def _validate_issue_rules(self) -> None:
 		rows = list(self.selected_issues or [])

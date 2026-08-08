@@ -63,10 +63,10 @@ def get_data(filters):
 		conditions.append("sr.service_date <= %(to_date)s")
 		values["to_date"] = filters.to_date
 	if filters.get("status"):
-		conditions.append("sr.status = %(status)s")
+		conditions.append("sr.decision = %(status)s")
 		values["status"] = filters.status
 	if not filters.get("include_closed"):
-		conditions.append("sr.status NOT IN ('Cancelled', 'Rejected')")
+		conditions.append("sr.decision NOT IN ('Cancelled', 'Rejected')")
 
 	rows = frappe.db.sql(
 		f"""
@@ -74,7 +74,7 @@ def get_data(filters):
 			sr.name, sr.source_warehouse AS location, sr.service_date,
 			sr.customer_name, sr.customer,
 			COALESCE(NULLIF(sr.device_item_name, ''), sr.device_item) AS device,
-			sr.issue_category, sr.priority, sr.status, sr.decision,
+			sr.issue_category, sr.priority, sr.decision AS status, sr.decision,
 			sr.transfer_status, sr.current_location, sr.transferred_to_store,
 			sr.estimated_cost, sr.service_invoice, sr.service_order,
 			sr.actual_completion_date,

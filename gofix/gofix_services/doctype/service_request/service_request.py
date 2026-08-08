@@ -112,7 +112,7 @@ class ServiceRequest(Document):
 		self.validate_mandatory_fields()
 		self.validate_issue_solution_cascade()
 		self._validate_customer_estimate_decision()
-		self.sync_decision_to_status()
+		self.sync_decision_to_workflow_state()
 		self._validate_serial_substitution()
 		self._validate_service_discount()
 		self._validate_warranty_claim_cap()
@@ -138,25 +138,27 @@ class ServiceRequest(Document):
 		# Fetch warehouse state details if missing
 		if self.source_warehouse and (not self.state_name or not self.state_code):
 			self.fetch_warehouse_details()
-		# Sync walk-in status with decision
+		# Sync walk-in status with the canonical repair lifecycle.
 		self.sync_walkin_status()
 		# Log status transitions
 		self._log_status_transition()
 
 	def _log_status_transition(self):
-		"""Append a GoFix Status Log row whenever decision/status changes."""
+		"""Append a GoFix Status Log row whenever the canonical decision changes."""
 		old_decision = (self.get_doc_before_save() or {}).get("decision") if self.get_doc_before_save() else None
 		new_decision = self.decision
 		if not old_decision or old_decision == new_decision:
 			return
 		from frappe.utils import now_datetime, time_diff_in_hours
 		prev_at = None
-		if self.status_log:
-			prev_at = self.status_log[-1].changed_at
+		lifecycle_rows = [row for row in self.status_log if (row.get("event_type") or "Lifecycle") == "Lifecycle"]
+		if lifecycle_rows:
+			prev_at = lifecycle_rows[-1].changed_at
 		elapsed = 0
 		if prev_at:
 			elapsed = round(time_diff_in_hours(now_datetime(), prev_at), 2)
 		self.append("status_log", {
+			"event_type": "Lifecycle",
 			"from_status": old_decision,
 			"to_status": new_decision,
 			"changed_by": frappe.session.user,
@@ -166,6 +168,43 @@ class ServiceRequest(Document):
 
 		# GF-11 fix: Notify customer on key status changes
 		self._notify_customer_on_status_change(old_decision, new_decision)
+
+	def on_change(self):
+		"""Persist lifecycle audit rows even when controlled actions use db_set."""
+		old = self.get_doc_before_save()
+		old_decision = old.get("decision") if old else None
+		new_decision = self.get("decision")
+		if not old_decision or old_decision == new_decision:
+			return
+		latest = frappe.get_all(
+			"GoFix Status Log",
+			filters={
+				"parent": self.name,
+				"parenttype": "Service Request",
+				"parentfield": "status_log",
+				"event_type": "Lifecycle",
+			},
+			fields=["from_status", "to_status", "changed_at", "idx"],
+			order_by="idx desc",
+			limit_page_length=1,
+		)
+		if latest and latest[0].from_status == old_decision and latest[0].to_status == new_decision:
+			return
+		from frappe.utils import now_datetime, time_diff_in_hours
+		changed_at = now_datetime()
+		elapsed = round(time_diff_in_hours(changed_at, latest[0].changed_at), 2) if latest and latest[0].changed_at else 0
+		row = frappe.new_doc("GoFix Status Log")
+		row.parent = self.name
+		row.parenttype = "Service Request"
+		row.parentfield = "status_log"
+		row.idx = (latest[0].idx if latest else 0) + 1
+		row.event_type = "Lifecycle"
+		row.from_status = old_decision
+		row.to_status = new_decision
+		row.changed_by = frappe.session.user
+		row.changed_at = changed_at
+		row.time_in_previous_status_hours = elapsed
+		row.db_insert()
 	
 	def set_received_by(self):
 		"""Set received_by to current user if not set"""
@@ -289,10 +328,10 @@ class ServiceRequest(Document):
 			open_requests = frappe.get_all("Service Request",
 				filters={
 					"customer": self.customer,
-					"status": ["in", ["Open", "In Progress", "On Hold"]],
+					"decision": ["in", ["Draft", "Accepted", "In Service"]],
 					"walkin_status": "Accepted"
 				},
-				fields=["name", "service_date", "device_item_name", "status"])
+				fields=["name", "service_date", "device_item_name", "decision"])
 			
 			self.open_requests_count = len(open_requests)
 			
@@ -334,7 +373,7 @@ class ServiceRequest(Document):
 
 	def _fetch_billing_address_from_customer(self, customer=None):
 		"""Populate billing_address_display, billing_gstin, billing_state_name,
-		billing_state_code from the customer's active CH Customer Address row.
+		billing_state_code from the customer's primary standard Address.
 		Only overwrites if the field is empty (preserves manual edits).
 		"""
 		if not self.meta.has_field("billing_address_display"):
@@ -536,9 +575,9 @@ class ServiceRequest(Document):
 			if not self.withdrawal_reason:
 				frappe.throw(_("Withdrawal Reason is mandatory when Walk-in Status is Withdrawn"), title=_("Service Request Error"))
 			
-			# Auto-cancel if withdrawn
-			if self.status not in ["Cancelled"]:
-				self.status = "Cancelled"
+			# Auto-cancel if withdrawn.
+			if self.decision != "Cancelled":
+				self.decision = "Cancelled"
 	
 	def sync_walkin_status(self):
 		"""Auto-sync walk-in status based on decision"""
@@ -553,10 +592,9 @@ class ServiceRequest(Document):
 		elif self.decision in ["Rejected", "Cancelled"] and self.walkin_status == "Accepted":
 			self.walkin_status = None
 	
-	def sync_decision_to_status(self):
-		"""Sync decision field to status for consistency"""
+	def sync_decision_to_workflow_state(self):
+		"""Keep Frappe Workflow state aligned with the canonical lifecycle."""
 		if self.decision:
-			self.status = self.decision
 			if self.meta.has_field("workflow_state"):
 				self.workflow_state = self.decision
 	
@@ -574,7 +612,7 @@ class ServiceRequest(Document):
 			self._update_serial_lifecycle_on_completion()
 
 	def is_completed_status(self):
-		return self.status == "Completed" or self.decision == "Completed"
+		return self.decision == "Completed"
 
 	def ensure_completion_artifacts(self):
 		"""Create the billing and stock artifacts expected at repair completion."""
@@ -611,8 +649,7 @@ class ServiceRequest(Document):
 					).format(loc["device_at"] or _("in transit"), loc["home_store"]),
 				)
 
-		if self.spare_parts and not self.get("stock_entry"):
-			self.create_stock_entry()
+		# Inventory is posted only by submitted Spare Parts Usage documents.
 
 	def _sync_warranty_claim_completion(self):
 		"""INT-1: When Service Request is completed, mark the linked Warranty Claim as repair-complete."""
@@ -845,9 +882,9 @@ class ServiceRequest(Document):
 			if item.estimated_cost:
 				total_estimated += flt(item.estimated_cost)
 		
-		# Calculate from spare parts
-		for part in self.spare_parts:
-			if part.rate and part.qty:
+		# Planned spares are child rows of the Service Request aggregate.
+		for part in self.get("spare_lines") or []:
+			if part.rate and part.qty and part.status not in ("Returned", "Damaged"):
 				part.amount = flt(part.rate) * flt(part.qty)
 				total_estimated += flt(part.amount)
 		
@@ -872,11 +909,19 @@ class ServiceRequest(Document):
 			if invoice.docstatus == 1:
 				frappe.throw(_("Please cancel Sales Invoice {0} first").format(self.service_invoice), title=_("Service Request Error"))
 
-		# Cancel stock entry if exists
-		if self.stock_entry:
-			stock_entry = frappe.get_doc("Stock Entry", self.stock_entry)
-			if stock_entry.docstatus == 1:
-				frappe.throw(_("Please cancel Stock Entry {0} first").format(self.stock_entry), title=_("Service Request Error"))
+		# Spare Parts Usage owns each standard Stock Entry. The aggregate cannot
+		# be cancelled while any submitted inventory voucher remains live.
+		stock_entries = frappe.get_all(
+			"Spare Parts Usage",
+			filters={"service_request": self.name, "docstatus": 1, "stock_entry": ("is", "set")},
+			pluck="stock_entry",
+		)
+		for stock_entry_name in stock_entries:
+			if frappe.db.get_value("Stock Entry", stock_entry_name, "docstatus") == 1:
+				frappe.throw(
+					_("Please cancel Stock Entry {0} first").format(stock_entry_name),
+					title=_("Service Request Error"),
+				)
 
 		# Cancellation audit trail: log to CH VAS Ledger only when this SR
 		# had previously consumed a coverage entitlement. We deliberately do
@@ -994,6 +1039,14 @@ class ServiceRequest(Document):
 			"remarks": f"Service Invoice for Service Request {self.name}"
 		})
 		
+		# Store-wise P&L: attribute service revenue and spare-part COGS to the
+		# servicing store's Cost Center. Without this the invoice inherits
+		# Company.cost_center ("Main - BM") and every store's service margin
+		# collapses into one bucket.
+		from ch_item_master.ch_core.cost_center import apply_cost_center
+
+		apply_cost_center(invoice, warehouse=self.get("source_warehouse"))
+
 		# Apply advance if exists
 		if self.advance_amount:
 			invoice.is_pos = 0
@@ -1009,8 +1062,7 @@ class ServiceRequest(Document):
 		invoice.submit()
 		
 		self._set_optional_field("service_invoice", invoice.name)
-		self.db_set("status", "Invoiced", update_modified=True)
-		self.db_set("decision", "Invoiced", update_modified=False)
+		self.db_set("decision", "Invoiced", update_modified=True)
 
 		from gofix.gofix_services.api import auto_close_service_order_after_billing
 
@@ -1018,28 +1070,70 @@ class ServiceRequest(Document):
 
 		frappe.msgprint(_("Service Invoice {0} created successfully").format(invoice.name))
 
+	def _service_income_account(self, label: str) -> str | None:
+		"""Resolve a service income account for this request's company.
+
+		Returns None when the account does not exist, in which case the line is
+		left without an override and ERPNext falls back to the Item Default /
+		Company default income account. Never throws — a missing account must
+		not block billing a completed repair.
+		"""
+		abbr = frappe.db.get_value("Company", self.company, "abbr")
+		if not abbr:
+			return None
+		name = f"{label} - {abbr}"
+		return name if frappe.db.exists("Account", name) else None
+
 	def get_service_invoice_items(self):
+		# Route repair revenue to the service P&L rather than letting it fall
+		# through to the company default income account. Without this, service
+		# revenue posts to the retail "Sales" account and is indistinguishable
+		# from a phone sale, leaving the purpose-built service accounts unused.
+		warranty = (self.warranty_status or "").strip()
+		labour_account = self._service_income_account(
+			"Service Revenue — In Warranty" if warranty == "Under Warranty"
+			else "Service Revenue — Out of Warranty"
+		)
+		spares_account = self._service_income_account("Spare Parts Revenue")
+
 		items = []
 
 		for service_item in self.service_items:
-			items.append({
+			row = {
 				"item_code": service_item.service_item,
 				"item_name": service_item.item_name,
 				"description": service_item.description or service_item.item_name,
 				"qty": 1,
 				"rate": service_item.actual_cost or service_item.estimated_cost or 0,
 				"uom": "Nos"
-			})
+			}
+			if labour_account:
+				row["income_account"] = labour_account
+			items.append(row)
 
-		for spare_part in self.spare_parts:
-			items.append({
+		spare_usages = frappe.get_all(
+			"Spare Parts Usage",
+			filters={
+				"service_request": self.name,
+				"docstatus": 1,
+				"status": "Active",
+				"part_status": ("in", ("Consumed", "Issued")),
+				"deleted": 0,
+			},
+			fields=["spare_part_item", "item_name", "qty_used", "sales_price", "uom"],
+		)
+		for spare_part in spare_usages:
+			row = {
 				"item_code": spare_part.spare_part_item,
 				"item_name": spare_part.item_name,
-				"description": spare_part.description or spare_part.item_name,
-				"qty": spare_part.qty,
-				"rate": spare_part.rate,
+				"description": spare_part.item_name,
+				"qty": spare_part.qty_used,
+				"rate": spare_part.sales_price,
 				"uom": spare_part.uom
-			})
+			}
+			if spares_account:
+				row["income_account"] = spares_account
+			items.append(row)
 
 		if items:
 			return items
@@ -1061,57 +1155,6 @@ class ServiceRequest(Document):
 				items.append(item_row)
 
 		return items
-
-	def create_stock_entry(self):
-		"""Create Stock Entry to consume spare parts"""
-		if self.get("stock_entry"):
-			return
-		
-		if not self.spare_parts:
-			return
-		
-		items = []
-		for spare_part in self.spare_parts:
-			# Get default warehouse
-			item = frappe.get_doc("Item", spare_part.spare_part_item)
-			if item.is_stock_item:
-				source_warehouse = self.source_warehouse or frappe.db.get_value(
-					"Item Default",
-					{"parent": spare_part.spare_part_item, "company": self.company},
-					"default_warehouse",
-				) or item.default_warehouse
-				if not source_warehouse:
-					frappe.throw(
-						_("Warehouse is required to issue spare part {0}").format(spare_part.spare_part_item)
-					)
-				items.append({
-					"item_code": spare_part.spare_part_item,
-					"qty": spare_part.qty,
-					"uom": spare_part.uom,
-					"basic_rate": spare_part.rate,
-					"s_warehouse": source_warehouse,
-				})
-		
-		if not items:
-			return
-		
-		# Create material issue stock entry
-		stock_entry = frappe.get_doc({
-			"doctype": "Stock Entry",
-			"stock_entry_type": "Material Issue",
-			"company": self.company,
-			"posting_date": self.get("actual_completion_date") or today(),
-			"items": items,
-			"remarks": f"Spare parts consumed for Service Request {self.name}"
-		})
-		
-		frappe.has_permission("Stock Entry", "create", throw=True)
-		stock_entry.insert()
-		stock_entry.submit()
-		
-		self._set_optional_field("stock_entry", stock_entry.name)
-		
-		frappe.msgprint(_("Stock Entry {0} created successfully").format(stock_entry.name))
 
 	def _set_optional_field(self, fieldname, value):
 		self.set(fieldname, value)
@@ -1165,7 +1208,7 @@ class ServiceRequest(Document):
 			return
 
 		# Skip mandatory checks for withdrawn/cancelled SRs — customer took device back
-		if self.walkin_status == "Withdrawn" or self.status == "Cancelled":
+		if self.walkin_status == "Withdrawn" or self.decision == "Cancelled":
 			return
 		
 		# Product condition description is mandatory for submission
@@ -1655,7 +1698,7 @@ def _get_scoped_open_requests(service_request) -> list:
 	return frappe.get_list(
 		"Service Request",
 		filters=filters,
-		fields=["name", "service_date", "device_item_name", "status", "advance_amount"],
+		fields=["name", "service_date", "device_item_name", "decision", "advance_amount"],
 		order_by="service_date desc, name desc",
 		limit_page_length=row_limit,
 	)
@@ -1761,8 +1804,8 @@ def accept_service_request(service_request) -> dict:
 	doc.reload()
 	doc.create_service_order()
 	
-	# Update status
-	doc.db_set("status", "In Service", update_modified=False)
+	# Acceptance immediately enters the operational In Service state.
+	doc.db_set("decision", "In Service", update_modified=False)
 	_safe_set_sr_workflow_state(doc, "In Service")
 	
 	# Log intake → analysis transition for ops timeline
@@ -1791,7 +1834,6 @@ def reject_service_request(service_request, rejection_reason) -> bool:
 	# Update decision using db_set to work with submitted docs
 	doc.db_set("decision", "Rejected", update_modified=True)
 	doc.db_set("rejection_reason", rejection_reason, update_modified=False)
-	doc.db_set("status", "Rejected", update_modified=False)
 	doc.db_set("walkin_status", None, update_modified=False)  # Clear walk-in status
 	_safe_set_sr_workflow_state(doc, "Rejected")
 	
@@ -1868,17 +1910,14 @@ def complete_service_request(service_request, completion_date=None):
 	doc.check_permission("write")
 	updates = {}
 
-	if doc.status != "Completed":
-		updates["status"] = "Completed"
-
-	if doc.meta.has_field("decision") and doc.decision != "Completed":
+	if doc.decision != "Completed":
 		updates["decision"] = "Completed"
 
 	if completion_date and doc.meta.has_field("actual_completion_date") and not doc.get("actual_completion_date"):
 		updates["actual_completion_date"] = completion_date
 
 	if updates:
-		frappe.db.set_value("Service Request", doc.name, updates, update_modified=True)
+		doc.db_set(updates, update_modified=True)
 		doc.reload()
 
 	doc.ensure_completion_artifacts()
@@ -2160,10 +2199,10 @@ def complete_item_replacement(service_request, replacement_serial_no=None, compl
 	updates = {}
 	if doc.meta.has_field("serial_no"):
 		updates["serial_no"] = doc.replacement_serial_no
-	if doc.meta.has_field("status") and doc.status in ("Draft", "Open"):
-		updates["status"] = "In Progress"
+	if doc.decision == "Draft":
+		updates["decision"] = "In Service"
 	if updates:
-		frappe.db.set_value("Service Request", doc.name, updates, update_modified=True)
+		doc.db_set(updates, update_modified=True)
 
 	doc.add_comment(
 		"Info",
@@ -2245,20 +2284,51 @@ def get_warehouse_state(warehouse) -> dict:
 
 
 def _get_active_address(customer_doc, address_type="Billing"):
-	"""Return the first active CH Customer Address row for the given type.
+	"""Return the customer's authoritative ERPNext ``Address`` projection."""
+	customer = customer_doc.name if hasattr(customer_doc, "name") else str(customer_doc)
+	linked = frappe.get_all(
+		"Dynamic Link",
+		filters={
+			"parenttype": "Address",
+			"link_doctype": "Customer",
+			"link_name": customer,
+		},
+		pluck="parent",
+		limit_page_length=200,
+	)
+	if not linked:
+		return None
 
-	address_type = "Billing" or "Shipping".
-	A row with type "Both" satisfies either query.
-	Returns None if no active address is found or the custom field doesn't exist.
-	"""
-	billing_addresses = customer_doc.get("billing_addresses") or []
-	for addr in billing_addresses:
-		if not addr.get("is_active"):
-			continue
-		row_type = addr.get("address_type") or "Billing"
-		if row_type == "Both" or row_type == address_type:
-			return addr
-	return None
+	fields = [
+		"name", "address_line1", "address_line2", "city", "state", "pincode",
+		"country", "address_type", "is_primary_address", "is_shipping_address",
+	]
+	for optional in ("gstin", "gst_state_number"):
+		if frappe.get_meta("Address").has_field(optional):
+			fields.append(optional)
+	rows = frappe.get_all(
+		"Address",
+		filters={"name": ("in", linked), "disabled": 0},
+		fields=fields,
+		limit_page_length=200,
+	)
+	if not rows:
+		return None
+
+	primary = customer_doc.get("customer_primary_address") if hasattr(customer_doc, "get") else None
+	wants_shipping = address_type == "Shipping"
+	def rank(row):
+		return (
+			0 if (wants_shipping and row.is_shipping_address) else 1,
+			0 if (not wants_shipping and row.name == primary) else 1,
+			0 if (not wants_shipping and row.is_primary_address) else 1,
+			0 if row.address_type == address_type else 1,
+			row.name,
+		)
+	address = sorted(rows, key=rank)[0]
+	address.city_name = address.city or ""
+	address.state_code = address.get("gst_state_number") or ""
+	return address
 
 
 @frappe.whitelist()
@@ -2268,7 +2338,7 @@ def get_customer_billing_address(
 	company=None,
 	warehouse=None,
 ):
-	"""Return the active Billing CH Customer Address for *customer*.
+	"""Return the primary standard ERPNext Address for *customer*.
 
 	Called from the SR form JS after customer is selected.
 	Returns a plain dict with address fields, or None if not set.
@@ -2396,27 +2466,10 @@ def auto_expire_stale_requests(days_threshold=None):
 	)
 	stale = rows[:batch_limit]
 	if stale:
-		now = frappe.utils.now_datetime()
-		frappe.db.sql(
-			"""
-				UPDATE `tabService Request`
-				SET `decision` = 'Expired',
-				    `status` = 'Expired',
-				    `modified` = %(modified)s,
-				    `modified_by` = %(actor)s
-				WHERE `name` IN %(names)s
-				  AND `decision` = 'Draft'
-				  AND `docstatus` < 2
-				  AND (`service_order` IS NULL OR `service_order` = '')
-				  AND `creation` <= %(cutoff)s
-			""",
-			{
-				"names": tuple(stale),
-				"cutoff": cutoff,
-				"modified": now,
-				"actor": frappe.session.user,
-			},
-		)
+		for name in stale:
+			doc = frappe.get_doc("Service Request", name)
+			if doc.decision == "Draft" and doc.docstatus < 2 and not doc.service_order:
+				doc.db_set("decision", "Expired", update_modified=True)
 		frappe.logger("gofix").info(
 			f"Auto-expired {len(stale)} stale Draft SRs older than {days_threshold} days"
 		)

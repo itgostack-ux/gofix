@@ -137,21 +137,6 @@ frappe.ui.form.on('Service Request', {
 			}
 		);
 
-		// Spare parts: any stock item (Variant / Simple). The legacy item_group
-		// filter is replaced by the nature filter so spare-parts can live in any
-		// stock-tracked sub-category.
-		frm.fields_dict.spare_parts && (
-			frm.fields_dict.spare_parts.grid.get_field('spare_part_item').get_query = function() {
-				return {
-					query: 'ch_item_master.ch_item_master.api.items_by_subcategory_nature',
-					filters: {
-						natures: ['Variant Template', 'Simple Auto-Named', 'Simple Custom-Named'],
-						is_stock_item: 1
-					}
-				};
-			}
-		);
-
 		// Serial No / IMEI is a free-text Data field — no link filter needed.
 		// Users can enter any IMEI (including new devices not yet in the system).
 
@@ -269,7 +254,7 @@ frappe.ui.form.on('Service Request', {
 	walkin_status: function(frm) {
 		// Handle withdrawal - auto-set status to Cancelled
 		if (frm.doc.walkin_status === 'Withdrawn') {
-			frm.set_value('status', 'Cancelled');
+			frm.set_value('decision', 'Cancelled');
 		}
 	},
 	
@@ -355,50 +340,6 @@ frappe.ui.form.on('Service Request Service Item', {
 	}
 });
 
-// Spare Parts child table handlers
-frappe.ui.form.on('Service Request Spare Part', {
-	spare_part_item: function(frm, cdt, cdn) {
-		let row = locals[cdt][cdn];
-		if (row.spare_part_item) {
-			// Fetch item details
-			frappe.call({
-				method: 'frappe.client.get',
-				args: {
-					doctype: 'Item',
-					name: row.spare_part_item
-				},
-				callback: function(r) {
-					if (r.message) {
-						frappe.model.set_value(cdt, cdn, 'item_name', r.message.item_name);
-						frappe.model.set_value(cdt, cdn, 'description', r.message.description);
-						frappe.model.set_value(cdt, cdn, 'uom', r.message.stock_uom);
-						frappe.model.set_value(cdt, cdn, 'rate', r.message.standard_rate || 0);
-					}
-				}
-			});
-		}
-	},
-	
-	qty: function(frm, cdt, cdn) {
-		calculate_spare_part_amount(frm, cdt, cdn);
-	},
-	
-	rate: function(frm, cdt, cdn) {
-		calculate_spare_part_amount(frm, cdt, cdn);
-	},
-	
-	spare_parts_remove: function(frm) {
-		calculate_total_estimated_cost(frm);
-	}
-});
-
-function calculate_spare_part_amount(frm, cdt, cdn) {
-	let row = locals[cdt][cdn];
-	let amount = flt(row.qty) * flt(row.rate);
-	frappe.model.set_value(cdt, cdn, 'amount', amount);
-	calculate_total_estimated_cost(frm);
-}
-
 function calculate_total_estimated_cost(frm) {
 	let total = 0;
 	
@@ -406,13 +347,6 @@ function calculate_total_estimated_cost(frm) {
 	if (frm.doc.service_items) {
 		frm.doc.service_items.forEach(function(item) {
 			total += flt(item.estimated_cost);
-		});
-	}
-	
-	// Add spare parts cost
-	if (frm.doc.spare_parts) {
-		frm.doc.spare_parts.forEach(function(part) {
-			total += flt(part.amount);
 		});
 	}
 	
@@ -429,8 +363,8 @@ function set_status_indicator(frm) {
 		'Cancelled': 'red'
 	};
 	
-	if (frm.doc.status) {
-		frm.page.set_indicator(__(frm.doc.status), color_map[frm.doc.status] || 'gray');
+	if (frm.doc.decision) {
+		frm.page.set_indicator(__(frm.doc.decision), color_map[frm.doc.decision] || 'gray');
 	}
 	
 	// ── Customer type badge (B2B / B2C — tax classification) ─────────────

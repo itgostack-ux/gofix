@@ -7,6 +7,7 @@ from frappe.utils import add_days, add_to_date, cint, flt, getdate, get_datetime
 import json
 import secrets
 
+from ch_item_master.ch_core.cost_center import apply_cost_center
 from gofix.config import get_int_setting, require_role_setting
 from gofix.security import assert_service_request_access
 
@@ -319,8 +320,7 @@ def complete_delivery(service_order, remarks=None) -> dict:
 
 	# Update SR status
 	if so.service_request:
-		frappe.db.set_value("Service Request", so.service_request, {
-			"status": "Delivered",
+		frappe.get_doc("Service Request", so.service_request).db_set({
 			"decision": "Delivered",
 		}, update_modified=True)
 
@@ -967,6 +967,7 @@ def process_advance_refund(service_request, amount=None, reason=None) -> dict:
 	pe.reference_no = reference_no
 	pe.reference_date = today()
 	pe.remarks = f"Advance refund for Service Request {sr.name}. Reason: {reason or 'Not Repairable'}"
+	apply_cost_center(pe, warehouse=sr.source_warehouse)
 
 	frappe.has_permission("Payment Entry", "create", throw=True)
 	frappe.has_permission("Payment Entry", "read", throw=True)
@@ -1201,7 +1202,6 @@ def confirm_return_delivery(service_request) -> dict:
 		frappe.throw(_("Return must be dispatched before delivery can be confirmed."), title=_("Dispatch Pending"))
 
 	sr.db_set("return_delivered_date", today(), update_modified=True)
-	sr.db_set("status", "Delivered", update_modified=False)
 	sr.db_set("decision", "Delivered", update_modified=False)
 	_audit_service_update(
 		sr,
@@ -1390,7 +1390,7 @@ def get_store_service_board(warehouse, tab=None, search=None) -> dict:
 
 	filters = {"source_warehouse": warehouse}
 	if tab and tab in _SERVICE_BOARD_TABS:
-		filters["status"] = ["in", _SERVICE_BOARD_TABS[tab]]
+		filters["decision"] = ["in", _SERVICE_BOARD_TABS[tab]]
 	if tab == "ready":
 		# "Ready to Bill" means billable — a Completed SR that already
 		# carries an invoice (legacy status drift) is not billable again.
@@ -1413,7 +1413,7 @@ def get_store_service_board(warehouse, tab=None, search=None) -> dict:
 		filters=filters,
 		or_filters=or_filters,
 		fields=[
-			"name", "status", "decision", "customer", "customer_name",
+			"name", "decision", "customer", "customer_name",
 			"contact_number", "serial_no", "actual_imei", "device_item_name",
 			"issue_category", "service_date", "estimated_cost", "final_cost",
 			"service_invoice", "transfer_status", "current_location",
@@ -1434,21 +1434,23 @@ def get_store_service_board(warehouse, tab=None, search=None) -> dict:
 		r["device_at"] = device_at
 		r["at_home_store"] = bool(device_at == warehouse)
 
-	status_counts = {
-		row.status: cint(row.count)
+	decision_counts = {
+		row.decision: cint(row.count)
 		for row in frappe.get_list(
 			"Service Request",
 			filters={"source_warehouse": warehouse},
-			fields=["status", "count(name) as count"],
-			group_by="status",
+			fields=["decision", {"COUNT": "name", "as": "count"}],
+			group_by="decision",
 			limit_page_length=len(_SERVICE_BOARD_TABS) + 10,
 		)
 	}
+	for row in rows:
+		row["status"] = row.decision
 	counts = {
-		key: sum(cint(status_counts.get(s, 0)) for s in statuses)
+		key: sum(cint(decision_counts.get(s, 0)) for s in statuses)
 		for key, statuses in _SERVICE_BOARD_TABS.items()
 	}
-	counts["all"] = sum(cint(v) for v in status_counts.values())
+	counts["all"] = sum(cint(v) for v in decision_counts.values())
 
 	return {"rows": rows, "counts": counts}
 

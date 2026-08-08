@@ -25,3 +25,7 @@ gofix.patches.backfill_job_assignment_actual_hours #2026-07-18 - recover active 
 gofix.patches.seed_gofix_service_masters #2026-07-18 v6 — OEM-style QC packs for all categories, universal (company-blank) templates
 gofix.patches.seed_below_cost_exception_type #2026-07-19 - CH Exception Type for Ops Hub below-cost billing gate
 gofix.patches.hash_service_request_tracking_tokens
+gofix.patches.retire_ch_customer_address # 2026-08-06 - migrate to standard Address and drop duplicate child DocType
+gofix.patches.consolidate_repair_data_model # 2026-08-06 - Service Request aggregate; single spare execution/stock path
+gofix.patches.classify_repair_status_log_events # 2026-08-06 - separate lifecycle history from Ops Hub stage history
+gofix.patches.configure_repair_quarantine_warehouses # 2026-08-06 - segregate supplier-return and damaged repair stock

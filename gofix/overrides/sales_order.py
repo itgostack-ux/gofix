@@ -305,7 +305,7 @@ class CustomSalesOrder(SalesOrder):
 			# the Service Order AFTER billing must not knock the SR back to
 			# Completed (QC-Pass branch below) nor fast-forward it to
 			# Delivered before the device is handed over.
-			if sr.service_invoice and sr.status in ("Invoiced", "Delivered"):
+			if sr.service_invoice and sr.decision in ("Invoiced", "Delivered"):
 				return
 
 			# Map SO status to SR status
@@ -323,12 +323,11 @@ class CustomSalesOrder(SalesOrder):
 			if hasattr(self, 'qc_status') and self.qc_status == "Pass":
 				new_status = "Completed"
 			else:
-				new_status = status_mapping.get(self.status, sr.status)
+				new_status = status_mapping.get(self.status, sr.decision)
 			
 			# Only update if status changed
-			if sr.status != new_status:
-				sr.db_set("status", new_status, update_modified=True)
-				sr.db_set("decision", new_status, update_modified=False)
+			if sr.decision != new_status:
+				sr.db_set("decision", new_status, update_modified=True)
 				
 				frappe.msgprint(
 					_("Service Request {0} updated to {1}").format(self.service_request, new_status),
@@ -346,8 +345,7 @@ class CustomSalesOrder(SalesOrder):
 		
 		try:
 			sr = frappe.get_doc("Service Request", self.service_request)
-			sr.db_set("status", status, update_modified=True)
-			sr.db_set("decision", status, update_modified=False)
+			sr.db_set("decision", status, update_modified=True)
 		except Exception as e:
 			frappe.log_error(f"Failed to update SR status: {str(e)}")
 

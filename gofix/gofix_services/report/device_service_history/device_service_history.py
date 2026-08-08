@@ -86,7 +86,7 @@ def get_data(filters):
 			sr.name as sr_name,
 			sr.service_date,
 			sr.decision,
-			sr.status,
+			sr.decision AS status,
 			sr.issue_category,
 			sr.estimated_cost,
 			sr.warranty_status,
@@ -105,24 +105,13 @@ def get_data(filters):
 	if not sr_data:
 		return []
 
-	# Get spare parts count per SR
+	# Submitted Spare Parts Usage is the sole executed-spare projection.
 	sr_names = list({r.sr_name for r in sr_data})
-	spare_counts = {}
-	if sr_names:
-		spare_data = frappe.db.sql("""
-			SELECT parent, COUNT(*) as cnt
-			FROM `tabService Request Spare Part`
-			WHERE parent IN %(names)s
-			GROUP BY parent
-		""", {"names": sr_names}, as_dict=True)
-		spare_counts = {r.parent: r.cnt for r in spare_data}
-
-	# Also get Spare Parts Usage counts
 	spu_counts = {}
 	spu_data = frappe.db.sql("""
 		SELECT service_request, COUNT(*) as cnt
 		FROM `tabSpare Parts Usage`
-		WHERE service_request IN %(names)s AND deleted = 0
+		WHERE service_request IN %(names)s AND deleted = 0 AND docstatus = 1
 		GROUP BY service_request
 	""", {"names": sr_names}, as_dict=True)
 	spu_counts = {r.service_request: r.cnt for r in spu_data}
@@ -148,10 +137,7 @@ def get_data(filters):
 	for sn, info in serial_map.items():
 		repairs = info["repairs"]
 		total_cost = sum(flt(r.estimated_cost) for r in repairs)
-		total_spares = sum(
-			spare_counts.get(r.sr_name, 0) + spu_counts.get(r.sr_name, 0)
-			for r in repairs
-		)
+		total_spares = sum(spu_counts.get(r.sr_name, 0) for r in repairs)
 		repeat_issues = sum(1 for r in repairs if r.is_repeat_complaint)
 
 		# Repair history summary

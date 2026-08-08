@@ -39,6 +39,7 @@ def create_warehouse_structure(company, stores=None):
 	
 	# Set as company's master hub warehouse
 	frappe.db.set_value("Company", company, "master_hub_warehouse", master_hub)
+	warehouses.extend(ensure_quarantine_warehouses(company, parent_warehouse=parent_warehouse))
 	
 	for store in frappe.parse_json(stores) if stores else []:
 		store_name = (store.get("name") or "").strip()
@@ -59,6 +60,51 @@ def create_warehouse_structure(company, stores=None):
 	)
 	
 	return warehouses
+
+
+def ensure_quarantine_warehouses(company, parent_warehouse=None):
+	"""Ensure non-saleable holding warehouses used by repair stock controls.
+
+	Supplier-return and damaged units must not remain in a store's saleable Bin.
+	The linked ERPNext Warehouses are only locations; all movement continues to
+	be posted by standard Stock Entry, SLE and GL records.
+	"""
+	if not company or not frappe.db.exists("Company", company):
+		frappe.throw(_("A valid Company is required."))
+	if not parent_warehouse:
+		master_hub = frappe.db.get_value("Company", company, "master_hub_warehouse")
+		if master_hub:
+			parent_warehouse = frappe.db.get_value("Warehouse", master_hub, "parent_warehouse")
+	if not parent_warehouse:
+		parent_warehouse = frappe.db.get_value(
+			"Warehouse",
+			{"company": company, "is_group": 1, "parent_warehouse": ("is", "not set")},
+			"name",
+		)
+	if not parent_warehouse:
+		frappe.throw(_("No root Warehouse group exists for company {0}.").format(company))
+
+	created = []
+	for fieldname, warehouse_name in (
+		("supplier_return_warehouse", "Supplier Returns"),
+		("damaged_stock_warehouse", "Damaged Stock"),
+	):
+		configured = frappe.db.get_value("Company", company, fieldname)
+		if configured:
+			warehouse = frappe.db.get_value(
+				"Warehouse", configured, ["company", "is_group"], as_dict=True
+			)
+			if warehouse and warehouse.company == company and not warehouse.is_group:
+				continue
+		warehouse = create_warehouse(
+			warehouse_name=warehouse_name,
+			company=company,
+			parent_warehouse=parent_warehouse,
+			is_group=0,
+		)
+		frappe.db.set_value("Company", company, fieldname, warehouse, update_modified=False)
+		created.append(warehouse)
+	return created
 
 
 def create_warehouse(warehouse_name, company, parent_warehouse=None, is_group=0):

@@ -653,7 +653,7 @@
    "format": "{} Open",
    "label": "Service Request",
    "link_to": "Service Request",
-   "stats_filter": "{\"status\": [\"=\", \"Open\"]}",
+   "stats_filter": "{\"decision\": [\"in\", [\"Draft\", \"Accepted\", \"In Service\"]]}",
    "type": "DocType"
   },
   {
@@ -662,7 +662,7 @@
    "format": "{} Active",
    "label": "Job Assignment",
    "link_to": "Job Assignment",
-   "stats_filter": "{\"assignment_status\": [\"=\", \"Assigned\"]}",
+   "stats_filter": "{\"assignment_status\": [\"in\", [\"Open\", \"In Progress\"]]}",
    "type": "DocType"
   },
   {

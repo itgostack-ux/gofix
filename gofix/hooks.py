@@ -89,6 +89,9 @@ after_migrate = [
     "gofix.setup.material_request_custom_fields.create_material_request_custom_fields",
     "gofix.setup.company_custom_fields.create_company_custom_fields",
     "gofix.setup.item_custom_fields.create_item_custom_fields",
+    # Last: force-imports workspace JSON fixtures whose content changed, so it
+    # must run after any other hook that wires links into those workspaces.
+    "gofix.setup.workspace_sync.sync_workspaces",
 ]
 
 permission_query_conditions = {

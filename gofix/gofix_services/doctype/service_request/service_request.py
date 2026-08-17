@@ -4,7 +4,7 @@
 import frappe
 from frappe import _
 from frappe.model.document import Document
-from frappe.utils import add_days, cint, flt, getdate, nowdate, today
+from frappe.utils import add_days, cint, flt, getdate, now_datetime, nowdate, today
 
 from gofix.config import get_int_setting, get_setting, is_privileged_user, require_role_setting
 from gofix.security import assert_service_request_access
@@ -2466,10 +2466,24 @@ def auto_expire_stale_requests(days_threshold=None):
 	)
 	stale = rows[:batch_limit]
 	if stale:
-		for name in stale:
-			doc = frappe.get_doc("Service Request", name)
-			if doc.decision == "Draft" and doc.docstatus < 2 and not doc.service_order:
-				doc.db_set("decision", "Expired", update_modified=True)
+		# Keep the eligibility predicates in the UPDATE as a concurrency guard:
+		# a request accepted between the bounded read and this write must not expire.
+		frappe.db.sql(
+			"""
+			UPDATE `tabService Request`
+			   SET decision = 'Expired', modified = %(modified)s,
+			       modified_by = %(modified_by)s
+			 WHERE name IN %(names)s
+			   AND decision = 'Draft'
+			   AND docstatus < 2
+			   AND COALESCE(service_order, '') = ''
+			""",
+			{
+				"names": tuple(stale),
+				"modified": now_datetime(),
+				"modified_by": frappe.session.user,
+			},
+		)
 		frappe.logger("gofix").info(
 			f"Auto-expired {len(stale)} stale Draft SRs older than {days_threshold} days"
 		)

@@ -14,6 +14,9 @@
  "report_type": "Script Report",
  "roles": [
   {"role": "System Manager"},
-  {"role": "Service Manager"}
+  {"role": "Service Manager"},
+  {"role": "Service Engineer"},
+  {"role": "Technician"},
+  {"role": "CEO"}
  ]
 }

@@ -1,7 +1,7 @@
 """Rollback-safe live-site proof for the consolidated repair spare flow."""
 
 import frappe
-from frappe.utils import flt, now_datetime
+from frappe.utils import add_days, flt, now_datetime, today
 
 
 def run():
@@ -32,6 +32,7 @@ def run():
 		intake = create_service_intake_from_pos(
 			{
 				"customer": seed_sr.customer,
+				"contact_number": seed_sr.contact_number or "9876543210",
 				"device_item": seed_sr.device_item,
 				"issue_category": seed_sr.issue_category or "Battery",
 				"issue_description": "Rollback-safe POS repair intake architecture proof",
@@ -294,6 +295,12 @@ def run():
 
 		from gofix.gofix_services.doctype.service_request.service_request import (
 			auto_expire_stale_requests,
+		)
+		frappe.db.set_value(
+			"Service Request",
+			seed_sr.name,
+			{"decision": "Draft", "service_order": None, "creation": add_days(today(), -2)},
+			update_modified=False,
 		)
 		expiry = auto_expire_stale_requests(days_threshold=1)
 		seed_decision = frappe.db.get_value("Service Request", seed_sr.name, "decision")

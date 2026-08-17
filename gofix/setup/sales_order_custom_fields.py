@@ -39,7 +39,7 @@ def create_sales_order_custom_fields():
 				"fieldname": "service_request_status",
 				"label": "Service Request Status",
 				"fieldtype": "Data",
-				"fetch_from": "service_request.status",
+				"fetch_from": "service_request.decision",
 				"insert_after": "service_request",
 				"read_only": 1
 			},

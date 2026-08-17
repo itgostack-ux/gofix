@@ -191,7 +191,18 @@ def _issue_category_exists(name):
 def seed_sla_rules():
     created = 0
     skipped = 0
-    for rule in _SLA_RULES:
+    # A company-specific rule prevents one legal entity's TAT policy from
+    # silently governing another. Only operational companies with active
+    # stores are provisioned; test/shell companies are deliberately ignored.
+    companies = frappe.get_all(
+        "CH Store",
+        filters={"disabled": 0},
+        distinct=True,
+        pluck="company",
+    )
+    for company in sorted(set(companies)):
+      for template in _SLA_RULES:
+        rule = {**template, "company": company}
         # Skip if the category referenced doesn't exist in this site
         ic = rule.get("issue_category")
         if ic and not _issue_category_exists(ic):
@@ -199,7 +210,10 @@ def seed_sla_rules():
             skipped += 1
             continue
 
-        if frappe.db.exists("GoFix SLA Rule", {"rule_name": rule["rule_name"]}):
+        if frappe.db.exists(
+            "GoFix SLA Rule",
+            {"rule_name": rule["rule_name"], "company": company},
+        ):
             skipped += 1
             continue
 
@@ -207,7 +221,7 @@ def seed_sla_rules():
         doc.update(rule)
         doc.insert(ignore_permissions=True)
         created += 1
-        print(f"  ✅ SLA Rule: {rule['rule_name']}")
+        print(f"  ✅ SLA Rule: {rule['rule_name']} — {company}")
 
     frappe.db.commit()
     print(f"\n  SLA Rules  — created: {created}, skipped: {skipped}")

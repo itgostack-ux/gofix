@@ -43,7 +43,13 @@ def _get_or_create_customer():
 
 
 def _get_or_create_item(company, stock=False):
-    filters = {"disabled": 0}
+    filters = {"disabled": 0, "has_variants": 0}
+    lifecycle_field = None
+    for candidate in ("ch_lifecycle_status", "ch_item_lifecycle_status"):
+        if frappe.db.has_column("Item", candidate):
+            lifecycle_field = candidate
+            filters[candidate] = "Active"
+            break
     if stock:
         filters["is_stock_item"] = 1
     else:
@@ -58,6 +64,8 @@ def _get_or_create_item(company, stock=False):
     i.item_group = frappe.db.get_value("Item Group", {}, "name") or "All Item Groups"
     i.stock_uom = "Nos"
     i.is_stock_item = 1 if stock else 0
+    if lifecycle_field:
+        i.set(lifecycle_field, "Active")
     i.insert(ignore_permissions=True)
     frappe.db.commit()
     return i.name
@@ -263,7 +271,6 @@ def test_gofix_delivery_receipt():
         sr.state_code = "27"
         sr.walkin_status = "Accepted"
         sr.decision = "Completed"
-        sr.status = "Completed"
         sr.priority = "Medium"
         sr.serial_no = "IMEI-PF-TEST"
         sr.insert(ignore_permissions=True)

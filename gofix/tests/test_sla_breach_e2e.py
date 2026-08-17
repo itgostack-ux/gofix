@@ -70,8 +70,13 @@ def _get_or_create_device_item(company):
 
 def _ensure_issue_category():
     category_name = "Screen Damage"
-    if frappe.db.exists("Issue Category", category_name):
-        return category_name
+    existing = frappe.db.get_value(
+        "Issue Category",
+        {"category_name": category_name},
+        "name",
+    )
+    if existing:
+        return existing
     category = frappe.get_doc({
         "doctype": "Issue Category",
         "category_name": category_name,
@@ -95,7 +100,7 @@ def test_create_sla_rule():
     try:
         sla = frappe.new_doc("GoFix SLA Rule")
         sla.rule_name = "SLA-E2E-Screen-High"
-        sla.issue_category = "Screen Damage"
+        sla.issue_category = _ensure_issue_category()
         sla.priority = "High"
         sla.target_hours = 4
         sla.warning_pct = 75
@@ -208,11 +213,10 @@ def test_sla_breach_service_request():
         sr.contact_number = "9876543210"
         sr.state_name = "Maharashtra"
         sr.state_code = "27"
-        sr.issue_category = "Screen Damage"
+        sr.issue_category = _ensure_issue_category()
         sr.priority = "High"
         sr.walkin_status = "Accepted"
-        sr.decision = "Accepted"
-        sr.status = "In Service"
+        sr.decision = "In Service"
         sr.serial_no = "IMEI-SLABREACH-TEST"
         sr.received_datetime = six_hours_ago
         sr.insert(ignore_permissions=True)
@@ -319,24 +323,16 @@ def test_escalation_workflow():
         _fail(flow, "Pre-condition: Breach SR not available")
         return
 
-    # 5a. Verify GoFix Status Log creation (status transitions log)
+    # 5a. SLA escalation is a notification concern and must not invent a
+    # lifecycle state outside the canonical Service Request decision registry.
     try:
-        # Trigger a status change to simulate escalation response
-        frappe.db.set_value("Service Request", breach_sr, {
-            "decision": "Escalated",
-            "status": "Escalated",
-        }, update_modified=True)
-        _ok(flow, "SR status updated to Escalated")
+        decision = frappe.db.get_value("Service Request", breach_sr, "decision")
+        if decision == "In Service":
+            _ok(flow, "SLA escalation preserves canonical In Service lifecycle")
+        else:
+            _fail(flow, "SLA escalation changed lifecycle unexpectedly", str(decision))
     except Exception as e:
-        # Escalated may not be a valid option — use On Hold
-        try:
-            frappe.db.set_value("Service Request", breach_sr, {
-                "decision": "On Hold",
-                "status": "On Hold",
-            }, update_modified=True)
-            _ok(flow, "SR status updated to On Hold (Escalated not valid in this env)")
-        except Exception as e2:
-            _fail(flow, "Updating SR to escalated/on-hold status", str(e2))
+        _fail(flow, "Reading SR lifecycle after escalation", str(e))
 
     # 5b. Verify GoFix Status Log entries
     try:

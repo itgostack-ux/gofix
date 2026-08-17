@@ -13,6 +13,7 @@
   {"role": "System Manager"},
   {"role": "Service Manager"},
   {"role": "Technician"},
+  {"role": "Service Engineer"},
   {"role": "Customer Service"}
  ],
  "standard": "Yes",

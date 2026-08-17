@@ -99,7 +99,7 @@ class TestTrackingTokens(unittest.TestCase):
 				"tracking_token": tracking.tracking_token_digest(
 					"8fbcf413-3db5-4961-acd1-99c84386f2cf"
 				),
-				"status": ["not in", ["Cancelled"]],
+				"decision": ["not in", ["Cancelled"]],
 			},
 		)
 		self.assertEqual(service_call.kwargs["pluck"], "name")

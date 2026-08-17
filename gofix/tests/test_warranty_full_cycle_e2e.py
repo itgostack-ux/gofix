@@ -236,8 +236,9 @@ def test_technician_assignment():
             ja = frappe.new_doc("Job Assignment")
             ja.service_request = sr_name
             ja.service_engineer = emp
+            ja.assigned_by = "Administrator"
             ja.assignment_status = "Open"
-            ja.assignment_type = "Standard"
+            ja.assignment_type = "Technician Assignment"
             ja.insert(ignore_permissions=True)
             frappe.db.commit()
             _ok(flow, "Job Assignment created", ja.name)
@@ -263,7 +264,6 @@ def test_repair_job_card_and_parts():
     try:
         frappe.db.set_value("Service Request", sr_name, {
             "decision": "In Service",
-            "status": "In Service",
         }, update_modified=True)
         _ok(flow, "SR status set to In Service")
     except Exception as e:
@@ -273,19 +273,18 @@ def test_repair_job_card_and_parts():
     # 3b. Create a Spare Parts Usage record (simulates parts consumption)
     company = _company()
     warehouse = _get_or_create_warehouse(company)
-    spare_item = frappe.db.get_value("Item", {"is_stock_item": 1, "disabled": 0}, "name")
+    spare_item = frappe.db.get_value(
+        "Item",
+        {"is_stock_item": 1, "disabled": 0, "gofix_universal_spare": 1},
+        "name",
+    )
     if spare_item:
         try:
-            spu = frappe.new_doc("Spare Parts Usage")
-            spu.service_request = sr_name
-            spu.spare_part_item = spare_item
-            spu.qty_used = 1
-            spu.transaction_date = frappe.utils.nowdate()
-            spu.added_by_user = frappe.session.user  # avoid Link validation on default "user"
-            spu.flags.ignore_links = True
-            spu.insert(ignore_permissions=True)
+            from gofix.gofix_services.page.gofix_ops_hub.gofix_ops_hub import add_spare_to_ticket
+            reservation = add_spare_to_ticket(sr_name, spare_item, 1, rate=1)
+            spu = frappe.get_doc("Spare Parts Usage", reservation["spare_usage"])
             frappe.db.commit()
-            _ok(flow, "Spare Parts Usage created", spu.name)
+            _ok(flow, "Planned Spare Parts Usage created", spu.name)
             _FLOW["spu_name"] = spu.name
         except Exception as e:
             _fail(flow, "Spare Parts Usage creation", str(e))
@@ -404,7 +403,6 @@ def test_device_delivery_and_invoice():
     try:
         frappe.db.set_value("Service Request", sr_name, {
             "decision": "Completed",
-            "status": "Completed",
             "actual_completion_date": nowdate(),
         }, update_modified=True)
         _ok(flow, "SR marked as Completed")
@@ -573,7 +571,7 @@ def test_refund_flow_irreparable():
         sr.state_code = "27"
         sr.walkin_status = "Accepted"
         sr.decision = "In Service"
-        sr.status = "In Service"
+        sr.decision = "In Service"
         sr.priority = "Medium"
         sr.serial_no = "IMEI-REFUND-TEST"
         # Set advance amount for refund test
@@ -652,7 +650,11 @@ def test_estimate_approval_flow():
     # 9b. Approve the estimate
     try:
         from gofix.gofix_services.orchestration import customer_approve_estimate as orch_approve
-        result = orch_approve(sr_name, version_number=1)
+        result = orch_approve(
+            sr_name,
+            version_number=1,
+            remarks="Customer approved estimate during warranty E2E",
+        )
         if result and "message" in result:
             _ok(flow, "customer_approve_estimate (orchestration)", result["message"])
         else:
@@ -683,7 +685,6 @@ def test_estimate_approval_flow():
         sr2.state_code = "27"
         sr2.walkin_status = "Accepted"
         sr2.decision = "In Service"
-        sr2.status = "In Service"
         sr2.priority = "Low"
         sr2.serial_no = "IMEI-REJECT-TEST"
         sr2.insert(ignore_permissions=True)

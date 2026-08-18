@@ -57,10 +57,10 @@ def _get_or_create_customer(name_hint="GF-Walk-In-Cust"):
 def _get_or_create_device_item(company):
     """Return a non-stock service item in Active lifecycle (or create one)."""
     # Prefer items already in Active lifecycle to avoid ch_item_master lifecycle blocks
-    if frappe.db.has_column("Item", "ch_item_lifecycle_status"):
+    if frappe.db.has_column("Item", "ch_lifecycle_status"):
         active_item = frappe.db.get_value(
             "Item",
-            {"is_stock_item": 0, "disabled": 0, "ch_item_lifecycle_status": "Active"},
+            {"is_stock_item": 0, "disabled": 0, "ch_lifecycle_status": "Active"},
             "name",
         )
         if active_item:
@@ -69,10 +69,10 @@ def _get_or_create_device_item(company):
     any_item = frappe.db.get_value("Item", {"is_stock_item": 0, "disabled": 0}, "name")
     if any_item:
         # Activate it if lifecycle field exists
-        if frappe.db.has_column("Item", "ch_item_lifecycle_status"):
-            status = frappe.db.get_value("Item", any_item, "ch_item_lifecycle_status")
+        if frappe.db.has_column("Item", "ch_lifecycle_status"):
+            status = frappe.db.get_value("Item", any_item, "ch_lifecycle_status")
             if status and status != "Active":
-                frappe.db.set_value("Item", any_item, "ch_item_lifecycle_status", "Active",
+                frappe.db.set_value("Item", any_item, "ch_lifecycle_status", "Active",
                                     update_modified=False)
                 frappe.db.commit()
         return any_item
@@ -84,8 +84,8 @@ def _get_or_create_device_item(company):
     i.is_stock_item = 0
     i.flags.ignore_mandatory = True
     i.insert(ignore_permissions=True)
-    if frappe.db.has_column("Item", "ch_item_lifecycle_status"):
-        frappe.db.set_value("Item", i.name, "ch_item_lifecycle_status", "Active",
+    if frappe.db.has_column("Item", "ch_lifecycle_status"):
+        frappe.db.set_value("Item", i.name, "ch_lifecycle_status", "Active",
                             update_modified=False)
     frappe.db.commit()
     return i.name

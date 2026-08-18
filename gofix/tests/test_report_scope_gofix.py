@@ -79,7 +79,6 @@ def _get_or_create_ch_store(name: str, warehouse: str, company: str) -> None:
     if frappe.db.exists("CH Store", name):
         return
     doc = frappe.new_doc("CH Store")
-    doc.store_id = name
     doc.store_code = name
     doc.store_name = name
     doc.company = company
@@ -95,8 +94,31 @@ def _get_or_create_ch_store(name: str, warehouse: str, company: str) -> None:
         doc.city = reference[0].city
         doc.zone = reference[0].zone
     else:
-        doc.disabled = 1
-        doc.store_status = "Planned"
+        # Do NOT fall back to a disabled/Planned store: scope resolution skips
+        # inactive stores, so the assertions below would pass vacuously. Mint the
+        # geography instead so the fixture is a genuinely Active store.
+        zone = frappe.db.get_value("CH Store Zone", {"company": company}, "name")
+        if not zone:
+            z = frappe.new_doc("CH Store Zone")
+            z.zone_name = f"{name} Zone"
+            z.company = company
+            z.city = frappe.db.get_value("CH City", {"disabled": 0}, "name")
+            # NOT the store's own warehouse: location_hierarchy rejects a store
+            # whose warehouse is any zone's source hub ("configured as a zone hub").
+            z.source_warehouse = (
+                frappe.db.get_value(
+                    "Warehouse",
+                    {"company": company, "is_group": 1, "name": ("!=", warehouse)},
+                    "name",
+                )
+                or frappe.db.get_value(
+                    "Warehouse", {"company": company, "name": ("!=", warehouse)}, "name"
+                )
+            )
+            z.flags.ignore_permissions = True
+            z.insert(ignore_permissions=True)
+            zone = z.name
+        doc.zone = zone
     doc.flags.ignore_permissions = True
     doc.flags.ignore_mandatory = True
     doc.insert(ignore_permissions=True)

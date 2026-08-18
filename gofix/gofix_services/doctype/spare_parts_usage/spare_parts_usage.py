@@ -662,7 +662,7 @@ class SparePartsUsage(Document):
 			"Item Default",
 			{"parent": self.spare_part_item, "company": company},
 			"default_warehouse",
-		) or frappe.db.get_value("Item", self.spare_part_item, "default_warehouse")
+		) or frappe.db.get_single_value("Stock Settings", "default_warehouse")
 
 		if not target_warehouse:
 			frappe.throw(_("Warehouse is required to return spare part {0}").format(self.spare_part_item), title=_("Spare Parts Usage Error"))
@@ -768,7 +768,7 @@ class SparePartsUsage(Document):
 		"""Material Receipt — good condition spare back to original warehouse."""
 		target_wh = source_wh or frappe.db.get_value(
 			"Item Default", {"parent": self.spare_part_item, "company": company}, "default_warehouse"
-		) or frappe.db.get_value("Item", self.spare_part_item, "default_warehouse")
+		) or frappe.db.get_single_value("Stock Settings", "default_warehouse")
 		if not target_wh:
 			frappe.throw(_("No warehouse found to return spare {0}").format(self.spare_part_item))
 

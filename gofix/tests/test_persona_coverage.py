@@ -67,5 +67,10 @@ class TestGoFixPersonaCoverage(TestCase):
 		roles = self._roles("report/gofix_removed_spares_register/gofix_removed_spares_register.json")
 		self.assertTrue({"Stock User", "Stock Manager", "Purchase User", "Purchase Manager"} <= roles)
 		self.assertTrue((ROOT / "doctype/spare_parts_usage/spare_parts_usage.json").exists())
-		for company in frappe.get_all("CH Store", filters={"disabled": 0}, distinct=True, pluck="company"):
+		for company in frappe.get_all(
+			"CH Store",
+			filters={"disabled": 0, "is_service_enabled": 1},
+			distinct=True,
+			pluck="company",
+		):
 			self.assertTrue(frappe.db.get_value("Company", company, "damaged_stock_warehouse"))

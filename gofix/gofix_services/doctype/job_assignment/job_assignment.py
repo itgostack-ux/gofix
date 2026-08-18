@@ -473,11 +473,18 @@ class JobAssignment(Document):
 			self.service_order,
 		)
 
-		# Get Service Order
-		so = frappe.get_doc("Sales Order", self.service_order)
+		# Read only the locked parent row. Loading the full document here also
+		# locks/reads Sales Order Item children after the parent lock, which can
+		# deadlock against invoice/QC paths that touch children first.
+		so = frappe.db.get_value(
+			"Sales Order",
+			self.service_order,
+			["is_service_order", "service_request"],
+			as_dict=True,
+		)
 		
 		# Only update if it's a Service Order
-		if not hasattr(so, 'is_service_order') or not so.is_service_order:
+		if not so or not so.is_service_order:
 			return
 		
 		# Check if all job sheets for this SO are completed
@@ -493,13 +500,16 @@ class JobAssignment(Document):
 			non_repairable_outcomes = ("Not Repairable", "Beyond Repair", "Customer Cancelled")
 			if hasattr(self, 'repair_outcome') and self.repair_outcome in non_repairable_outcomes:
 				# Allow closing without QC
-				so.db_set("repair_outcome", self.repair_outcome, update_modified=False)
+				frappe.db.set_value(
+					"Sales Order", self.service_order, "repair_outcome", self.repair_outcome,
+					update_modified=False,
+				)
 
 				# Set workflow state based on outcome
 				if self.repair_outcome in ("Not Repairable", "Beyond Repair"):
-					so.db_set("workflow_state", "Not Repairable", update_modified=False)
+					frappe.db.set_value("Sales Order", self.service_order, "workflow_state", "Not Repairable", update_modified=False)
 				elif self.repair_outcome == "Customer Cancelled":
-					so.db_set("workflow_state", "Customer Cancelled", update_modified=False)
+					frappe.db.set_value("Sales Order", self.service_order, "workflow_state", "Customer Cancelled", update_modified=False)
 
 				frappe.msgprint(
 					_("Service Order {0} marked as {1}. Can be closed without QC.").format(
@@ -541,7 +551,7 @@ class JobAssignment(Document):
 
 					gaps = get_unresolved_issue_gaps(self.service_request)
 				if gaps and not gaps["ready_for_qc"]:
-					so.db_set("workflow_state", "Work in Progress", update_modified=False)
+					frappe.db.set_value("Sales Order", self.service_order, "workflow_state", "Work in Progress", update_modified=False)
 					frappe.msgprint(
 						_("Job done, but QC is blocked — unresolved: {0}. Assign and complete "
 						  "solutions for every identified issue first.").format(
@@ -552,8 +562,12 @@ class JobAssignment(Document):
 					)
 				else:
 					# Set to QC Awaiting for repairable items
-					so.db_set("qc_status", "Awaiting", update_modified=False)
-					so.db_set("workflow_state", "QC Awaiting", update_modified=False)
+					frappe.db.set_value(
+						"Sales Order",
+						self.service_order,
+						{"qc_status": "Awaiting", "workflow_state": "QC Awaiting"},
+						update_modified=False,
+					)
 
 					frappe.msgprint(
 						_("Service Order {0} is now awaiting QC").format(self.service_order),

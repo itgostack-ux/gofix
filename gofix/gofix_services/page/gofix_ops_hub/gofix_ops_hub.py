@@ -555,9 +555,14 @@ def get_ticket_detail(sr_name) -> dict:
 
 	customer_info = {}
 	if sr.customer:
+		# link_doctype / link_name are on the Dynamic Link child table, not on
+		# Contact itself — filtering them on the parent raised 1054.
 		contacts = frappe.get_all(
 			"Contact",
-			filters={"link_doctype": "Customer", "link_name": sr.customer},
+			filters=[
+				["Dynamic Link", "link_doctype", "=", "Customer"],
+				["Dynamic Link", "link_name", "=", sr.customer],
+			],
 			fields=["email_id", "mobile_no"],
 			limit=1,
 		)

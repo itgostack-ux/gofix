@@ -10,6 +10,7 @@ are flagged so ops can chase them (the close-gate blocks those tickets
 anyway)."""
 
 import frappe
+from ch_erp15.ch_erp15.report_scope import scope_where_clause
 from frappe import _
 
 
@@ -61,6 +62,16 @@ def get_data(filters):
 		conditions.append(
 			"(IFNULL(sl.removed_part_serial, '') = '' OR IFNULL(sl.removed_part_condition, '') = '')"
 		)
+
+	# Row-level scope. The device may sit at its origin store, its current
+	# location, or the store it was transferred to — any one being in scope
+	# makes the row visible, matching _effective_warehouse() above.
+	scope = scope_where_clause(
+		warehouse_field="sr.source_warehouse",
+		extra_warehouse_fields=["sr.current_location", "sr.transferred_to_store"],
+	)
+	if scope:
+		conditions.append(scope)
 
 	rows = frappe.db.sql(
 		f"""

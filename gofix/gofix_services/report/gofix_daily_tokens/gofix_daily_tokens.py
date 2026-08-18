@@ -19,6 +19,7 @@ from __future__ import annotations
 from typing import Any
 
 import frappe
+from ch_erp15.ch_erp15.report_scope import scope_where_clause
 from frappe import _
 from frappe.utils import add_days, cint, flt, get_datetime, nowdate
 
@@ -83,6 +84,11 @@ def _fetch(filters: dict) -> list[dict]:
 	if filters.get("store"):
 		conds.append("store = %(store)s")
 		params["store"] = filters["store"]
+
+	# Row-level scope: only tokens for stores the user is scoped to.
+	scope = scope_where_clause(warehouse_field="store")
+	if scope:
+		conds.append(scope)
 
 	where = " AND ".join(conds)
 	rows = frappe.db.sql(

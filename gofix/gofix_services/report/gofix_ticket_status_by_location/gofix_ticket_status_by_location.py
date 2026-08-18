@@ -10,6 +10,7 @@ ticket, location wise" in a single screen.
 """
 
 import frappe
+from ch_erp15.ch_erp15.report_scope import scope_where_clause
 from frappe import _
 from frappe.utils import date_diff, flt, today
 
@@ -67,6 +68,11 @@ def get_data(filters):
 		values["status"] = filters.status
 	if not filters.get("include_closed"):
 		conditions.append("sr.decision NOT IN ('Cancelled', 'Rejected')")
+
+	# Row-level scope: tickets raised at a store within the user's scope.
+	scope = scope_where_clause(warehouse_field="sr.source_warehouse")
+	if scope:
+		conditions.append(scope)
 
 	rows = frappe.db.sql(
 		f"""

@@ -6,12 +6,82 @@ from frappe import _
 from frappe.utils import today, add_days, nowdate
 
 
+TEST_CUSTOMER_NAME = "Test Customer"
+
+
+def _cancel_and_delete(doctype, name):
+	if not name or not frappe.db.exists(doctype, name):
+		return
+	doc = frappe.get_doc(doctype, name)
+	if doctype == "Sales Order" and doc.docstatus == 1:
+		# Prevent the QC on-update hook from recreating the invoice while this
+		# exact test order is reopened/cancelled for teardown.
+		frappe.db.set_value(doctype, name, "qc_status", None, update_modified=False)
+		doc.reload()
+		if doc.status == "Closed":
+			doc.update_status("Draft")
+			doc.reload()
+	if doc.docstatus == 1:
+		doc.cancel()
+	frappe.delete_doc(doctype, name, force=True, ignore_permissions=True)
+
+
+def cleanup_test_data():
+	"""Remove only fixtures created by this direct-document E2E."""
+	customer = frappe.db.get_value("Customer", {"customer_name": TEST_CUSTOMER_NAME}, "name")
+	if not customer:
+		return
+	sr_names = frappe.get_all(
+		"Service Request",
+		filters={"customer": customer, "issue_description": "Screen not working"},
+		pluck="name",
+	)
+	so_names = frappe.get_all(
+		"Sales Order", filters={"service_request": ["in", sr_names]}, pluck="name"
+	) if sr_names else []
+	invoice_names = frappe.get_all(
+		"Sales Invoice",
+		filters={"customer": customer, "remarks": ["like", "%Service Request SR-260818-%"]},
+		pluck="name",
+	)
+	# Completion artifacts are intentionally linked back to the submitted SR;
+	# clear only these test links before cancelling the linked documents.
+	for name in sr_names:
+		frappe.db.set_value(
+			"Service Request",
+			name,
+			{"service_invoice": None, "service_order": None},
+			update_modified=False,
+		)
+	for name in invoice_names:
+		_cancel_and_delete("Sales Invoice", name)
+	for name in frappe.get_all(
+		"Job Assignment", filters={"service_request": ["in", sr_names]}, pluck="name"
+	) if sr_names else []:
+		_cancel_and_delete("Job Assignment", name)
+	for name in so_names:
+		_cancel_and_delete("Sales Order", name)
+	for name in sr_names:
+		_cancel_and_delete("Service Request", name)
+
+	for employee in frappe.get_all(
+		"Employee", filters={"employee_name": "Test Technician"}, pluck="name"
+	):
+		frappe.delete_doc("Employee", employee, force=True, ignore_permissions=True)
+	frappe.delete_doc("Customer", customer, force=True, ignore_permissions=True)
+	frappe.db.commit()
+
+
 def setup_test_data():
 	"""Setup sample data for testing"""
 	print("\n========== SETTING UP TEST DATA ==========\n")
 	
 	# 1. Ensure company has address
-	company = frappe.defaults.get_global_default("company") or "Congruence Holdings"
+	company = (
+		frappe.db.get_value("Company", {"gofix_enabled": 1}, "name")
+		or frappe.defaults.get_global_default("company")
+		or "Congruence Holdings"
+	)
 	
 	# Check if company address exists
 	company_address = frappe.db.get_value("Dynamic Link",
@@ -49,7 +119,13 @@ def setup_test_data():
 		print(f"✅ Company address exists: {company_address}")
 	
 	# 2. Ensure warehouse exists
-	warehouse = frappe.db.get_value("Warehouse", {"company": company, "is_group": 0}, "name")
+	warehouse = frappe.db.get_value(
+		"CH Store",
+		{"company": company, "disabled": 0, "store_status": "Active", "is_service_enabled": 1},
+		"warehouse",
+	)
+	if not warehouse:
+		warehouse = frappe.db.get_value("Warehouse", {"company": company, "is_group": 0}, "name")
 	if not warehouse:
 		print(f"⚠️  Creating warehouse for {company}...")
 		wh = frappe.new_doc("Warehouse")
@@ -94,11 +170,11 @@ def setup_test_data():
 		print(f"✅ Warehouse address exists: {wh_address}")
 	
 	# 4. Ensure customer exists
-	customer = frappe.db.get_value("Customer", {"customer_name": "Test Customer"}, "name")
+	customer = frappe.db.get_value("Customer", {"customer_name": TEST_CUSTOMER_NAME}, "name")
 	if not customer:
 		print(f"⚠️  Creating test customer...")
 		cust = frappe.new_doc("Customer")
-		cust.customer_name = "Test Customer"
+		cust.customer_name = TEST_CUSTOMER_NAME
 		cust.customer_type = "Individual"
 		cust.customer_group = "Individual"
 		cust.territory = "India"
@@ -112,18 +188,22 @@ def setup_test_data():
 	# 5. Reuse a valid stock item from the customized item master
 	device_item = frappe.db.get_value(
 		"Item",
-		"PH000001",
+		{"disabled": 0, "is_stock_item": 1, "item_group": "Mobiles", "brand": ["is", "set"]},
 		["name", "item_name", "brand"],
 		as_dict=True,
 	)
 	if not device_item:
-		frappe.throw("Required test item PH000001 was not found", title=_("Validation Error"))
+		frappe.throw("No enabled branded mobile item is available for the service E2E", title=_("Validation Error"))
 	print(f"✅ Device item exists: {device_item.name}")
 	
 	# 6. Reuse an existing repair service item
-	service_item = frappe.db.get_value("Item", "SVC-SCREEN-REPAIR", "name")
+	service_item = frappe.db.get_value("Company", company, "gofix_default_service_item")
 	if not service_item:
-		frappe.throw("Required test item SVC-SCREEN-REPAIR was not found", title=_("Validation Error"))
+		service_item = frappe.db.get_value(
+			"Item", {"disabled": 0, "is_stock_item": 0, "item_group": "Services"}, "name"
+		)
+	if not service_item:
+		frappe.throw("No enabled service item is available for the service E2E", title=_("Validation Error"))
 	print(f"✅ Service item exists: {service_item}")
 	
 	print(f"\n✅ Test data setup complete!")
@@ -161,6 +241,10 @@ def test_service_request_workflow():
 	sr.backup_info = "Customer confirmed backup completed"
 	sr.source_warehouse = data["warehouse"]
 	sr.current_location = data["warehouse"]
+	sr.append("service_items", {
+		"service_item": data["service_item"],
+		"estimated_cost": 5000.00,
+	})
 	sr.estimated_cost = 5000.00
 	sr.expected_completion_date = add_days(today(), 3)
 	sr.priority = "Medium"
@@ -168,7 +252,7 @@ def test_service_request_workflow():
 	sr.submit()
 	frappe.db.commit()
 	print(f"✅ Service Request created: {sr.name}")
-	print(f"   Status: {sr.status}, Decision: {sr.decision}")
+	print(f"   Walk-in Status: {sr.walkin_status}, Decision: {sr.decision}")
 
 	# Simulate diagnosis completion (ops hub fields)
 	frappe.db.set_value("Service Request", sr.name, {
@@ -189,7 +273,7 @@ def test_service_request_workflow():
 		print(f"✅ Service Request accepted!")
 		print(f"   Decision: {sr.decision}")
 		print(f"   Walk-in Status: {sr.walkin_status}")
-		print(f"   Status: {sr.status}")
+		print(f"   Walk-in Status: {sr.walkin_status}")
 		print(f"   Service Order: {sr.service_order}")
 		
 		# Verify Service Order
@@ -209,7 +293,9 @@ def test_service_request_workflow():
 		print("\n4️⃣  Creating Job Sheet...")
 		from gofix.gofix_services.doctype.job_assignment.job_assignment import create_job_sheet_from_service_order
 		
-		technician = frappe.db.get_value("Employee", {"status": "Active"}, "name")
+		technician = frappe.db.get_value(
+			"Employee", {"status": "Active", "company": data["company"]}, "name"
+		)
 		if not technician:
 			emp = frappe.new_doc("Employee")
 			emp.first_name = "Test"
@@ -217,6 +303,9 @@ def test_service_request_workflow():
 			emp.employee_name = "Test Technician"
 			emp.company = data["company"]
 			emp.status = "Active"
+			emp.gender = "Male"
+			emp.date_of_birth = "1990-01-01"
+			emp.date_of_joining = nowdate()
 			emp.insert(ignore_permissions=True)
 			frappe.db.commit()
 			technician = emp.name
@@ -283,7 +372,7 @@ def test_service_request_workflow():
 		if not invoice_names:
 			raise AssertionError("Repair completion did not create a Sales Invoice")
 
-		print(f"✅ Service Request status after QC: {sr.status}")
+		print(f"✅ Service Request walk-in status after QC: {sr.walkin_status}")
 		print(f"✅ Repair invoice(s): {', '.join(invoice_names)}")
 		
 		frappe.db.commit()
@@ -311,12 +400,11 @@ if __name__ == "__main__":
 	test_service_request_workflow()
 
 def run_all():
+    passed = False
     try:
-        test_service_request_workflow()
-    except frappe.ValidationError as e:
-        print(f"\n  SKIP GoFix Service Workflow: {e}")
-    except Exception as e:
-        if "not found" in str(e).lower() or "no customers" in str(e).lower():
-            print(f"\n  SKIP GoFix Service Workflow: {e}")
-        else:
-            raise
+        passed = test_service_request_workflow()
+    finally:
+        frappe.db.rollback()
+        cleanup_test_data()
+    if not passed:
+        raise AssertionError("GoFix Service Workflow E2E failed")

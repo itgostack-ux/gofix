@@ -12,6 +12,7 @@ timeline is one row. Bottleneck flags the slowest leg per ticket; the
 chart shows average hours per leg across the filtered set."""
 
 import frappe
+from ch_erp15.ch_erp15.report_scope import get_scoped_warehouses_or_none
 from frappe import _
 from frappe.utils import flt, now_datetime, time_diff_in_hours
 
@@ -93,6 +94,21 @@ def get_data(filters):
 			sr_filters["service_date"] = ("<=", filters.to_date)
 		if filters.get("open_only"):
 			sr_filters["decision"] = ("not in", ["Closed", "Cancelled", "Rejected", "Expired"])
+
+	# Row-level scope. This report reads through frappe.get_all rather than raw
+	# SQL, so the scope is applied by narrowing the filter dict. Fail closed:
+	# an in-scope-but-empty set, or an explicitly requested out-of-scope store,
+	# both yield no rows rather than the unscoped whole.
+	scoped = get_scoped_warehouses_or_none()
+	if scoped is not None:
+		requested = sr_filters.get("source_warehouse")
+		if requested:
+			if requested not in scoped:
+				return []
+		elif scoped:
+			sr_filters["source_warehouse"] = ("in", sorted(scoped))
+		else:
+			return []
 
 	tickets = frappe.get_all(
 		"Service Request",

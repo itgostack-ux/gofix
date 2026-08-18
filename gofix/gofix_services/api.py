@@ -275,11 +275,17 @@ def validate_delivery_readiness(service_order) -> dict:
 		blockers.append(_("QC not passed (current: {0})").format(so.qc_status or "Pending"))
 
 	# Gate 2: Payment verified
-	has_unpaid = frappe.db.exists("Sales Invoice", {
-		"sales_order": service_order,
-		"outstanding_amount": [">", 0],
-		"docstatus": 1,
-	})
+	# sales_order is a Sales Invoice Item field, not an invoice header field.
+	has_unpaid = frappe.get_all(
+		"Sales Invoice",
+		filters=[
+			["Sales Invoice Item", "sales_order", "=", service_order],
+			["outstanding_amount", ">", 0],
+			["docstatus", "=", 1],
+		],
+		pluck="name",
+		limit=1,
+	)
 	if has_unpaid:
 		blockers.append(_("Outstanding payment exists"))
 

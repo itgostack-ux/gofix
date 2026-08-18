@@ -618,6 +618,12 @@ def get_ticket_detail(sr_name) -> dict:
 		for row in sr.get("spare_lines", [])
 	]
 
+	# Same cap the rest of the hub applies to related rows. This was only ever
+	# defined as a local of _log_ops_stage(), so every reference here raised
+	# NameError — get_ticket_detail simply could not run. It went unnoticed while
+	# the queue was empty, because with no tickets there was nothing to click.
+	related_limit = min(get_int_setting("ops_hub_related_row_limit", 500), 5000)
+
 	assignments = frappe.get_all(
 		"Job Assignment",
 		filters={

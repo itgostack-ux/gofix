@@ -135,11 +135,6 @@ def _apply_customer_estimate_action(sr, version_number, action, remarks=None, *,
 		audit_label = _("Authenticated customer tracking token")
 	elif authorization == "staff_override":
 		sr.check_permission("write")
-		require_role_setting(
-			"estimate_decision_override_roles",
-			("Service Manager",),
-			action=_("override a customer estimate decision"),
-		)
 		if not (remarks or "").strip():
 			frappe.throw(_("Override remarks are required."), frappe.ValidationError)
 		sr.flags.estimate_decision_override = True
@@ -632,11 +627,6 @@ def qc_fail_with_issues(service_request, failed_checks_json, new_issues_json=Non
 	failed_checks_json: list of {check_name, fail_reason, linked_issue_category, linked_solution}
 	new_issues_json: list of {issue_category, description} — issues discovered during QC
 	"""
-	require_role_setting(
-		"qc_approval_roles",
-		("QC Manager", "Store Manager"),
-		action=_("record a QC failure"),
-	)
 	sr = assert_service_request_access(service_request, permission_type="write")
 	sr.flags.ignore_validate_update_after_submit = True
 

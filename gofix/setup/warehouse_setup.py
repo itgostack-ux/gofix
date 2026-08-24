@@ -129,11 +129,7 @@ def create_warehouse(warehouse_name, company, parent_warehouse=None, is_group=0)
 @frappe.whitelist(methods=["POST"])
 def setup_warehouses_for_company(company, stores=None) -> dict:
 	"""Public API to setup warehouses"""
-	require_role_setting(
-		"warehouse_setup_roles",
-		("System Manager",),
-		action=_("set up service warehouses"),
-	)
+	frappe.has_permission("Warehouse", ptype="create", throw=True)
 	return create_warehouse_structure(company, stores)
 
 
@@ -159,11 +155,7 @@ def link_address_to_warehouse(warehouse, address):
 def create_store_address(warehouse, address_line1, city, state, pincode, country="India") -> dict:
 	"""Create and link address for a store warehouse"""
 	
-	require_role_setting(
-		"warehouse_setup_roles",
-		("System Manager",),
-		action=_("create a store address"),
-	)
+	frappe.has_permission("Address", ptype="create", throw=True)
 	
 	if not frappe.db.exists("Warehouse", warehouse):
 		frappe.throw(_("Warehouse {0} does not exist").format(warehouse), title=_("Validation Error"))
@@ -205,11 +197,7 @@ def create_store_address(warehouse, address_line1, city, state, pincode, country
 def set_user_default_warehouse(user, warehouse) -> None:
 	"""Set default warehouse for a user"""
 	
-	require_role_setting(
-		"warehouse_setup_roles",
-		("System Manager",),
-		action=_("set a user's default warehouse"),
-	)
+	frappe.has_permission("User", ptype="write", throw=True)
 	
 	if not frappe.db.exists("User", user):
 		frappe.throw(_("User {0} does not exist").format(user), title=_("Validation Error"))

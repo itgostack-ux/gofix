@@ -22,39 +22,22 @@ def _get_scoped_service_order(service_order, permission_type="read"):
 
 
 def _require_sales_operation_role() -> None:
-	require_role_setting(
-		"sales_operation_roles",
-		("Sales Manager", "System Manager", "Service Manager", "Sales User"),
-		action=_("manage service operations"),
-	)
+	frappe.has_permission("Service Request", ptype="write", throw=True)
 
 
 def _require_billing_role() -> None:
-	require_role_setting(
-		"billing_roles",
-		("Sales Manager", "System Manager", "Service Manager", "Sales User", "Store Manager", "Store Executive"),
-		action=_("manage service billing"),
-	)
+	frappe.has_permission("Sales Invoice", ptype="create", throw=True)
 
 
 def _require_store_operation_role() -> None:
-	require_role_setting(
-		"store_operation_roles",
-		("Sales Manager", "System Manager", "Service Manager", "Store Manager"),
-		action=_("manage store service operations"),
-	)
+	frappe.has_permission("Service Request", ptype="write", throw=True)
 
 
 def _require_service_manager_role() -> None:
-	require_role_setting(
-		"service_manager_roles",
-		("Service Manager", "System Manager"),
-		action=_("approve service decisions"),
-	)
+	frappe.has_permission("Service Request", ptype="submit", throw=True)
 
 
 def _require_reference_read(action, doctypes, role_field="service_access_roles") -> None:
-	require_role_setting(role_field, action=action)
 	for doctype in doctypes:
 		frappe.has_permission(doctype, "read", throw=True)
 
@@ -636,11 +619,7 @@ def send_estimate_to_customer(service_order, send_via="Email") -> dict:
 @frappe.whitelist(methods=["POST"])
 def customer_approve_estimate(service_order, remarks=None) -> dict:
 	"""Record an audited staff override of the customer estimate decision."""
-	require_role_setting(
-		"estimate_decision_override_roles",
-		("Service Manager",),
-		action=_("override a customer estimate decision"),
-	)
+	require_role_setting('estimate_decision_override_roles', action=_('override a customer estimate decision'))
 	if not (remarks or "").strip():
 		frappe.throw(_("Override remarks are required."), frappe.ValidationError)
 	so = _get_scoped_service_order(service_order, "write")
@@ -670,11 +649,7 @@ def customer_approve_estimate(service_order, remarks=None) -> dict:
 @frappe.whitelist(methods=["POST"])
 def customer_reject_estimate(service_order, remarks=None) -> dict:
 	"""Record an audited staff override of the customer estimate decision."""
-	require_role_setting(
-		"estimate_decision_override_roles",
-		("Service Manager",),
-		action=_("override a customer estimate decision"),
-	)
+	require_role_setting('estimate_decision_override_roles', action=_('override a customer estimate decision'))
 	if not (remarks or "").strip():
 		frappe.throw(_("Override remarks are required."), frappe.ValidationError)
 	so = _get_scoped_service_order(service_order, "write")

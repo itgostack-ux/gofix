@@ -143,7 +143,6 @@ def get_ops_context(company=None) -> dict:
 @frappe.whitelist()
 def get_ticket_queue(warehouse=None, search=None, date_from=None, date_to=None, stage_filter="active", company=None) -> list:
 	"""Return annotated SR list for the sidebar ticket queue."""
-	require_role_setting("service_access_roles", action=_("view the Ops Hub ticket queue"))
 	frappe.has_permission("Service Request", "read", throw=True)
 	company = _active_company(company)
 	queue_limit = min(get_int_setting("ops_hub_ticket_queue_limit", 150), 2000)
@@ -1095,11 +1094,7 @@ def get_solutions_for_issue(issue_category) -> dict:
 @frappe.whitelist(methods=["POST"])
 def quick_create_solution(solution_name, issue_category, estimated_minutes=30, requires_spare=0, description="") -> dict:
 	"""Quick-create a Repair Solution from the Ops Hub solutions step."""
-	require_role_setting(
-		"service_manager_roles",
-		("Service Manager", "System Manager", "GoFix Floor Manager"),
-		action=_("create a repair solution"),
-	)
+	frappe.has_permission("Repair Solution", ptype="create", throw=True)
 
 	solution_name = (solution_name or "").strip()
 	if not solution_name:
@@ -2640,11 +2635,6 @@ def submit_for_qc(sr_name) -> dict:
 	This calls the existing workflow: sets qc_status=Awaiting on the SO and
 	populates the QC checklist template.
 	"""
-	require_role_setting(
-		"engineer_operation_roles",
-		("Sales Manager", "System Manager", "Service Manager", "Service Engineer"),
-		action=_("submit a repair for QC"),
-	)
 	_assert_sr_permission(sr_name, "write")
 
 	sr = frappe.get_doc("Service Request", sr_name)
@@ -2726,11 +2716,7 @@ def submit_for_qc(sr_name) -> dict:
 @frappe.whitelist(methods=["POST"])
 def save_qc_results(sr_name, checklist_json) -> dict:
 	"""Save QC checklist results on the linked Sales Order."""
-	require_role_setting(
-		"qc_approval_roles",
-		("QC Manager", "Store Manager", "System Manager"),
-		action=_("save QC results"),
-	)
+	frappe.has_permission("Service Request", ptype="submit", throw=True)
 	_assert_sr_permission(sr_name, "write")
 
 	sr = frappe.get_doc("Service Request", sr_name)
@@ -2757,11 +2743,7 @@ def complete_qc(sr_name, qc_result) -> dict:
 	Pass: triggers SR → Completed, sends to invoice.
 	Fail: sets qc_status=Fail, ops stage becomes 'rework'.
 	"""
-	require_role_setting(
-		"qc_approval_roles",
-		("QC Manager", "Store Manager", "System Manager"),
-		action=_("complete QC"),
-	)
+	frappe.has_permission("Service Request", ptype="submit", throw=True)
 	_assert_sr_permission(sr_name, "write")
 
 	if qc_result not in ("Pass", "Fail"):
@@ -3159,11 +3141,7 @@ def set_final_cost(sr_name, final_cost, reason=None) -> dict:
 	Counter staff may RAISE (the exception + its SoD-guarded approval is the
 	control, same doctrine as POS free-sale) — hence the broad role list.
 	"""
-	require_role_setting(
-		"billing_roles",
-		("Sales Manager", "System Manager", "Service Manager", "Store Manager", "Store Executive"),
-		action=_("set a final service cost"),
-	)
+	frappe.has_permission("Sales Invoice", ptype="create", throw=True)
 	_assert_sr_permission(sr_name, "write")
 
 	sr = frappe.get_doc("Service Request", sr_name)
@@ -3222,11 +3200,6 @@ def create_ops_hub_invoice(sr_name, remote_otp=None) -> dict:
 
 	Falls back to Sales Order items when SR has no service_items / spare_parts.
 	"""
-	require_role_setting(
-		"billing_roles",
-		("Sales Manager", "System Manager", "Service Manager", "Store Manager", "Store Executive"),
-		action=_("create a service invoice"),
-	)
 	_assert_sr_permission(sr_name, "write")
 
 	sr = frappe.get_doc("Service Request", sr_name)
@@ -3392,11 +3365,6 @@ def reassign_after_qc_fail(sr_name, technician, job_type="Repair", manager_notes
 
 	Only failed QC items are sent for rework — passed solutions stay intact.
 	"""
-	require_role_setting(
-		"service_manager_roles",
-		("Service Manager", "System Manager", "GoFix Floor Manager"),
-		action=_("reassign failed QC work"),
-	)
 	_assert_sr_permission(sr_name, "write")
 
 	sr = frappe.get_doc("Service Request", sr_name)

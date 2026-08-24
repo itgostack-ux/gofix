@@ -18,7 +18,6 @@ def get_context(context):
 @frappe.whitelist()
 def get_board_data(warehouse=None, date_from=None, date_to=None, search=None, company=None) -> dict:
 	"""Return all active Service Requests grouped by decision for the Kanban board."""
-	require_role_setting("service_access_roles", action=_("view the service job board"))
 	frappe.has_permission("Service Request", "read", throw=True)
 	company = active_company(company)
 	assert_warehouse(warehouse=warehouse, company=company)
@@ -113,7 +112,6 @@ def get_board_data(warehouse=None, date_from=None, date_to=None, search=None, co
 @frappe.whitelist()
 def get_sr_detail(sr_name) -> dict:
 	"""Return full details of a single Service Request for the side panel."""
-	require_role_setting("service_access_roles", action=_("view service request details"))
 	sr = assert_service_request_access(sr_name, permission_type="read")
 
 	# Customer info

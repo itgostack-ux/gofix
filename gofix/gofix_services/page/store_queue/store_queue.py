@@ -47,7 +47,6 @@ def get_queue(warehouse=None, search=None, date_from=None, date_to=None, stage_f
 	Unlike Ops Hub (which requires a Service Order), this shows ALL requests
 	including new intakes that haven't been accepted yet.
 	"""
-	require_role_setting("service_access_roles", action=_("view the store service queue"))
 	frappe.has_permission("Service Request", "read", throw=True)
 	company = active_company(company)
 

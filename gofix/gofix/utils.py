@@ -6,4 +6,4 @@ def has_app_permission(user=None):
     from gofix.config import has_role_setting
 
     user = user or frappe.session.user
-    return has_role_setting("app_access_roles", defaults=(), user=user)
+    return has_role_setting("app_access_roles", user=user)

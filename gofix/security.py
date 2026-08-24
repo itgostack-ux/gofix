@@ -17,13 +17,11 @@ except (ImportError, ModuleNotFoundError):
                 companies.update(filter(None, frappe.get_all(
                     "POS Executive",
                     filters={"user": user, "is_active": 1},
-                    pluck="company",
-                )))
+                    pluck="company")))
             except Exception:
                 frappe.log_error(
                     frappe.get_traceback(),
-                    "GoFix fallback company-scope resolution failed",
-                )
+                    "GoFix fallback company-scope resolution failed")
                 return []
         return sorted(companies)
 
@@ -79,27 +77,24 @@ def _get_user_service_scope(user=None):
         except Exception:
             frappe.log_error(
                 frappe.get_traceback(),
-                "GoFix authoritative user-scope resolution failed",
-            )
+                "GoFix authoritative user-scope resolution failed")
             return {"companies": set(), "warehouses": set()}
 
     store_names = set()
     # CH POS User Allocation retired into CH User Scope (ch_erp15 v34); it only
     # ever added stores on top of POS Executive, which is still read here.
-    for doctype in ("POS Executive",):
+    for doctype in ("POS Executive"):
         if not frappe.db.exists("DocType", doctype):
             continue
         try:
             rows = frappe.get_all(
                 doctype,
                 filters={"user": user, "is_active": 1},
-                fields=["company", "store"],
-            )
+                fields=["company", "store"])
         except Exception:
             frappe.log_error(
                 frappe.get_traceback(),
-                f"GoFix {doctype} scope resolution failed",
-            )
+                f"GoFix {doctype} scope resolution failed")
             return {"companies": set(), "warehouses": set()}
         companies.update(row.company for row in rows if row.company)
         store_names.update(row.store for row in rows if row.store)
@@ -108,8 +103,7 @@ def _get_user_service_scope(user=None):
         warehouses.update(filter(None, frappe.get_all(
             "CH Store",
             filters={"name": ("in", list(store_names)), "disabled": 0},
-            pluck="warehouse",
-        )))
+            pluck="warehouse")))
 
     mapped_companies = get_user_allowed_companies(user)
     if mapped_companies is None:
@@ -134,8 +128,7 @@ def _service_request_anchors(doc) -> set[str]:
             doc.get("source_warehouse"),
             doc.get("current_location"),
             doc.get("current_processing_location"),
-            doc.get("transferred_to_store"),
-        ) if value
+            doc.get("transferred_to_store")) if value
     }
 
 
@@ -261,14 +254,12 @@ def has_service_request_permission(doc=None, user=None, permission_type=None):
         return False
     if frappe.db.exists(
         "SR Solution Line",
-        {"parent": sr_name, "parenttype": "Service Request", "technician": employee},
-    ):
+        {"parent": sr_name, "parenttype": "Service Request", "technician": employee}):
         return True
     return bool(
         frappe.db.exists(
             "Job Assignment",
-            {"service_request": sr_name, "service_engineer": employee, "docstatus": ("<", 2)},
-        )
+            {"service_request": sr_name, "service_engineer": employee, "docstatus": ("<", 2)})
     )
 
 
@@ -276,15 +267,13 @@ def has_service_request_permission(doc=None, user=None, permission_type=None):
 # GoFix Token permissions
 # ──────────────────────────────────────────────────────────────────────────────
 
-_TOKEN_ROLES = ("System Manager", "Service Manager", "Store Manager", "Store Executive")
-
 
 def _can_access_tokens(user=None):
     user = user or frappe.session.user
     return bool(
         user
         and user != "Guest"
-        and has_role_setting("token_transition_roles", _TOKEN_ROLES, user=user)
+        and has_role_setting("token_transition_roles", user=user)
     )
 
 

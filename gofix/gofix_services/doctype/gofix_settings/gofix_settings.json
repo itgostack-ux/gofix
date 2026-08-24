@@ -206,61 +206,74 @@
   },
   {
    "default": "Service Manager\nService Engineer\nService Viewer\nService User\nStore Manager\nStore Executive\nGoFix Floor Manager",
-   "description": "Non-privileged roles allowed to open the GoFix app. Administrator and System Manager are always allowed.",
+   "description": "Non-privileged roles allowed to open the GoFix app. Administrator and System Manager are always allowed. Pick roles from the list.",
    "fieldname": "app_access_roles",
-   "fieldtype": "Small Text",
-   "label": "App Access Roles"
+   "fieldtype": "Table MultiSelect",
+   "label": "App Access Roles",
+   "options": "CH Role Link"
   },
   {
    "default": "Service Manager\nService Viewer\nGoFix Floor Manager",
-   "description": "Roles allowed to view Service Hub metrics within their assigned company and warehouse scope. Administrator and System Manager always retain access.",
+   "description": "Retired. This gate is now enforced by Role Permission Manager (document permissions).",
    "fieldname": "service_dashboard_roles",
    "fieldtype": "Small Text",
-   "label": "Service Dashboard Roles"
+   "label": "Service Dashboard Roles",
+   "hidden": 1
   },
   {
    "default": "System Manager\nService Manager\nStore Manager\nStore Executive",
-   "description": "Roles allowed to change token status. Enter one role per line.",
+   "description": "Roles allowed to change token status. Pick roles from the list.",
    "fieldname": "token_transition_roles",
-   "fieldtype": "Small Text",
-   "label": "Token Transition Roles"
+   "fieldtype": "Table MultiSelect",
+   "label": "Token Transition Roles",
+   "options": "CH Role Link"
   },
   {
-   "description": "Roles allowed to override the token transition matrix. Leave empty to restrict overrides to Administrator and System Manager.",
+   "description": "Roles allowed to override the token transition matrix. Leave empty to restrict overrides to Administrator and System Manager. Pick roles from the list.",
    "fieldname": "token_transition_override_roles",
-   "fieldtype": "Small Text",
-   "label": "Token Transition Override Roles"
+   "fieldtype": "Table MultiSelect",
+   "label": "Token Transition Override Roles",
+   "options": "CH Role Link"
   },
   {
    "default": "Sales Manager\nSystem Manager\nService Manager\nSales User",
    "fieldname": "sales_operation_roles",
    "fieldtype": "Small Text",
-   "label": "Sales Operation Roles"
+   "label": "Sales Operation Roles",
+   "hidden": 1,
+   "description": "Retired. This gate is now enforced by Role Permission Manager (document permissions)."
   },
   {
    "default": "Service Manager",
-   "description": "Staff roles allowed to record an audited customer estimate decision override. Customer self-service requires the stored high-entropy tracking token.",
+   "description": "Staff roles allowed to record an audited customer estimate decision override. Customer self-service requires the stored high-entropy tracking token. Pick roles from the list.",
    "fieldname": "estimate_decision_override_roles",
-   "fieldtype": "Small Text",
-   "label": "Estimate Decision Override Roles"
+   "fieldtype": "Table MultiSelect",
+   "label": "Estimate Decision Override Roles",
+   "options": "CH Role Link"
   },
   {
    "default": "Sales Manager\nSystem Manager\nService Manager\nSales User\nStore Manager\nStore Executive",
    "fieldname": "billing_roles",
    "fieldtype": "Small Text",
-   "label": "Billing Roles"
+   "label": "Billing Roles",
+   "hidden": 1,
+   "description": "Retired. This gate is now enforced by Role Permission Manager (document permissions)."
   },
   {
    "default": "System Manager\nService Manager\nService Engineer\nService Viewer\nService User",
    "fieldname": "service_access_roles",
-   "fieldtype": "Small Text",
-   "label": "Service Access Roles"
+   "fieldtype": "Table MultiSelect",
+   "label": "Service Access Roles",
+   "options": "CH Role Link",
+   "description": "Pick roles from the list."
   },
   {
    "default": "Service Manager\nSystem Manager\nGoFix Floor Manager",
    "fieldname": "service_manager_roles",
-   "fieldtype": "Small Text",
-   "label": "Service Manager Roles"
+   "fieldtype": "Table MultiSelect",
+   "label": "Service Manager Roles",
+   "options": "CH Role Link",
+   "description": "Pick roles from the list."
   },
   {
    "default": "25",
@@ -288,10 +301,11 @@
   },
   {
    "default": "Service Manager\nService Engineer\nGoFix Floor Manager",
-   "description": "Roles allowed to view technician workloads within their employee, company and warehouse scope.",
+   "description": "Retired. This gate is now enforced by Role Permission Manager (document permissions).",
    "fieldname": "technician_workload_roles",
    "fieldtype": "Small Text",
-   "label": "Technician Workload Roles"
+   "label": "Technician Workload Roles",
+   "hidden": 1
   },
   {
    "default": "200",
@@ -337,43 +351,57 @@
    "default": "Sales Manager\nSystem Manager\nService Manager\nStore Manager",
    "fieldname": "store_operation_roles",
    "fieldtype": "Small Text",
-   "label": "Store Operation Roles"
+   "label": "Store Operation Roles",
+   "hidden": 1,
+   "description": "Retired. This gate is now enforced by Role Permission Manager (document permissions)."
   },
   {
    "default": "Sales Manager\nSystem Manager\nService Manager\nService Engineer",
    "fieldname": "engineer_operation_roles",
    "fieldtype": "Small Text",
-   "label": "Engineer Operation Roles"
+   "label": "Engineer Operation Roles",
+   "hidden": 1,
+   "description": "Retired. This gate is now enforced by Role Permission Manager (document permissions)."
   },
   {
    "default": "Service Manager\nService Engineer\nGoFix Floor Manager",
    "fieldname": "job_assignment_creation_roles",
    "fieldtype": "Small Text",
-   "label": "Job Assignment Creation Roles"
+   "label": "Job Assignment Creation Roles",
+   "hidden": 1,
+   "description": "Retired. This gate is now enforced by Role Permission Manager (document permissions)."
   },
   {
    "default": "Service Manager\nGoFix Floor Manager",
    "fieldname": "job_assignment_manager_roles",
-   "fieldtype": "Small Text",
-   "label": "Job Assignment Manager Roles"
+   "fieldtype": "Table MultiSelect",
+   "label": "Job Assignment Manager Roles",
+   "options": "CH Role Link",
+   "description": "Pick roles from the list."
   },
   {
    "default": "System Manager",
    "fieldname": "warehouse_setup_roles",
    "fieldtype": "Small Text",
-   "label": "Warehouse Setup Roles"
+   "label": "Warehouse Setup Roles",
+   "hidden": 1,
+   "description": "Retired. This gate is now enforced by Role Permission Manager (document permissions)."
   },
   {
    "default": "QC Manager\nStore Manager\nSystem Manager",
    "fieldname": "qc_approval_roles",
-   "fieldtype": "Small Text",
-   "label": "QC Approval Roles"
+   "fieldtype": "Table MultiSelect",
+   "label": "QC Approval Roles",
+   "options": "CH Role Link",
+   "description": "Pick roles from the list."
   },
   {
    "default": "Service Manager",
    "fieldname": "service_notification_roles",
-   "fieldtype": "Small Text",
-   "label": "Service Notification Roles"
+   "fieldtype": "Table MultiSelect",
+   "label": "Service Notification Roles",
+   "options": "CH Role Link",
+   "description": "Pick roles from the list."
   },
   {
    "default": "100",

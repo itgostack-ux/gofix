@@ -36,7 +36,7 @@ def _configured_roles(fieldname: str, fallback: tuple[str, ...] = ()) -> set[str
     """Resolve the live role list for a settings field, minus privileged roles."""
     from gofix.config import get_role_setting
 
-    roles = get_role_setting(fieldname, _settings_default_roles(fieldname) or fallback)
+    roles = get_role_setting(fieldname)
     return {role for role in roles if role not in _EXCLUDED_ROLES}
 
 
@@ -79,8 +79,7 @@ def _grant_missing_permission_types(specs: dict[str, dict[str, set[str]]]) -> in
             name = frappe.db.get_value(
                 "Custom DocPerm",
                 {"parent": doctype, "role": role, "permlevel": 0, "if_owner": 0},
-                "name",
-            )
+                "name")
             if not name:
                 continue
             row = frappe.get_doc("Custom DocPerm", name)

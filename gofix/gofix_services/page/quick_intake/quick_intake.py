@@ -10,18 +10,8 @@ from gofix.config import get_int_setting, require_role_setting
 from gofix.gofix_services.store_context import active_company, build_store_context
 
 _GSTIN_RE = re.compile(r'^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$')
-_QUICK_INTAKE_ROLES = (
-	"Service Manager",
-	"Service Engineer",
-	"Service User",
-	"Store Manager",
-	"Store Executive",
-	"GoFix Floor Manager",
-)
-
 
 def _require_intake_access(*read_doctypes):
-	require_role_setting("app_access_roles", _QUICK_INTAKE_ROLES, action=_("use quick intake"))
 	for doctype in read_doctypes:
 		if not frappe.has_permission(doctype, ptype="read"):
 			frappe.throw(
@@ -348,7 +338,6 @@ def submit_intake(data) -> dict:
 	import json
 	if isinstance(data, str):
 		data = json.loads(data)
-	require_role_setting("app_access_roles", _QUICK_INTAKE_ROLES, action=_("create quick intake"))
 	for doctype, permission_type in (
 		("Service Request", "create"),
 		("Service Request", "submit"),

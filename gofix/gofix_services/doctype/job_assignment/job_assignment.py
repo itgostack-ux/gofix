@@ -15,16 +15,14 @@ from gofix.security import assert_service_request_access
 def _bounded_rows(doctype, *, batch_limit=None, **kwargs):
 	batch_limit = min(
 		max(int(batch_limit or get_int_setting("scheduler_batch_limit", 500)), 1),
-		5000,
-	)
+		5000)
 	start = 0
 	while True:
 		rows = frappe.get_all(
 			doctype,
 			start=start,
 			limit_page_length=batch_limit,
-			**kwargs,
-		)
+			**kwargs)
 		if not rows:
 			break
 		yield from rows
@@ -43,8 +41,7 @@ def _job_assignment_status_transitions(job_assignment):
 			"docname": job_assignment,
 		},
 		fields=["creation", "data"],
-		order_by="creation asc",
-	):
+		order_by="creation asc"):
 		try:
 			data = json.loads(row.data or "{}")
 		except (TypeError, ValueError):
@@ -102,8 +99,7 @@ def _insert_custody_period(assignment, started_at, ended_at, note):
 	service_request = assignment.service_request or frappe.db.get_value(
 		"Sales Order",
 		assignment.service_order,
-		"service_request",
-	)
+		"service_request")
 	frappe.get_doc({
 		"doctype": "GoFix Custody Log",
 		"service_request": service_request,
@@ -141,15 +137,13 @@ def reconcile_job_assignment_actual_hours(job_assignments=None, commit=False, ba
 		job_assignments = [job_assignments]
 	batch_limit = min(
 		max(int(batch_limit or get_int_setting("scheduler_batch_limit", 500)), 1),
-		5000,
-	)
+		5000)
 	if job_assignments:
 		job_assignments = list(dict.fromkeys(job_assignments))
 		if len(job_assignments) > batch_limit:
 			frappe.throw(
 				_("A maximum of {0} Job Assignments can be reconciled in one targeted run.").format(batch_limit),
-				frappe.ValidationError,
-			)
+				frappe.ValidationError)
 
 	filters = {
 		"docstatus": 1,
@@ -166,8 +160,7 @@ def reconcile_job_assignment_actual_hours(job_assignments=None, commit=False, ba
 			"start_datetime", "end_datetime", "actual_hours",
 		],
 		order_by="creation asc",
-		batch_limit=batch_limit,
-	)
+		batch_limit=batch_limit)
 	summary = {
 		"examined": 0,
 		"repaired": 0,
@@ -183,8 +176,7 @@ def reconcile_job_assignment_actual_hours(job_assignments=None, commit=False, ba
 		transitions = _job_assignment_status_transitions(row.name)
 		periods, _open_start = _reconstruct_in_progress_periods(
 			transitions,
-			terminal_end=row.end_datetime,
-		)
+			terminal_end=row.end_datetime)
 
 		# Older manually-maintained assignments may have timestamps but no
 		# status Version rows. Keep that established calculation as fallback.
@@ -213,8 +205,7 @@ def reconcile_job_assignment_actual_hours(job_assignments=None, commit=False, ba
 			"GoFix Custody Log",
 			filters={"job_assignment": row.name},
 			fields=["taken_at", "released_at"],
-			batch_limit=batch_limit,
-		))
+			batch_limit=batch_limit))
 		for started_at, ended_at in periods:
 			if _custody_period_exists(existing_periods, started_at, ended_at):
 				continue
@@ -222,8 +213,7 @@ def reconcile_job_assignment_actual_hours(job_assignments=None, commit=False, ba
 				row,
 				started_at,
 				ended_at,
-				"Backfilled from Job Assignment status history.",
-			)
+				"Backfilled from Job Assignment status history.")
 			summary["custody_logs_created"] += 1
 
 		updates = {"actual_hours": round(total_hours, 2)}
@@ -235,8 +225,7 @@ def reconcile_job_assignment_actual_hours(job_assignments=None, commit=False, ba
 			"Job Assignment",
 			row.name,
 			updates,
-			update_modified=False,
-		)
+			update_modified=False)
 		summary["repaired"] += 1
 		result = {
 			"job_assignment": row.name,
@@ -251,8 +240,7 @@ def reconcile_job_assignment_actual_hours(job_assignments=None, commit=False, ba
 		frappe.db.commit()
 	summary["results_truncated"] = max(
 		summary["examined"] - len(summary["results"]),
-		0,
-	)
+		0)
 	return summary
 
 
@@ -310,8 +298,7 @@ class JobAssignment(Document):
 		if event == "take":
 			if not frappe.db.exists(
 				"GoFix Custody Log",
-				{"job_assignment": self.name, "released_at": ("is", "not set")},
-			):
+				{"job_assignment": self.name, "released_at": ("is", "not set")}):
 				frappe.get_doc({
 					"doctype": "GoFix Custody Log",
 					"service_request": sr,
@@ -331,8 +318,7 @@ class JobAssignment(Document):
 				"GoFix Custody Log",
 				{"job_assignment": self.name, "released_at": ("is", "not set")},
 				["name", "taken_at"],
-				as_dict=True,
-			)
+				as_dict=True)
 			if open_row:
 				hours = max(flt(time_diff_in_hours(now, open_row.taken_at)), 0)
 				frappe.db.set_value("GoFix Custody Log", open_row.name, {
@@ -342,8 +328,7 @@ class JobAssignment(Document):
 				self.db_set(
 					"actual_hours",
 					round(flt(self.actual_hours) + hours, 2),
-					update_modified=False,
-				)
+					update_modified=False)
 			else:
 				# The custody DocType was introduced after some assignments
 				# were already In Progress. Recover that last active interval
@@ -352,21 +337,18 @@ class JobAssignment(Document):
 				_periods, open_start = _reconstruct_in_progress_periods(_transitions)
 				if open_start and not frappe.db.exists(
 					"GoFix Custody Log",
-					{"job_assignment": self.name, "taken_at": open_start},
-				):
+					{"job_assignment": self.name, "taken_at": open_start}):
 					hours = _insert_custody_period(
 						self,
 						open_start,
 						now,
-						"Recovered from Job Assignment status history.",
-					)
+						"Recovered from Job Assignment status history.")
 					if not self.start_datetime:
 						self.db_set("start_datetime", open_start, update_modified=False)
 					self.db_set(
 						"actual_hours",
 						round(flt(self.actual_hours) + hours, 2),
-						update_modified=False,
-					)
+						update_modified=False)
 
 	def validate_single_active_technician(self):
 		"""Device custody rule: a ticket may be split across technicians
@@ -384,8 +366,7 @@ class JobAssignment(Document):
 				"docstatus": ("<", 2),
 			},
 			["name", "service_engineer"],
-			as_dict=True,
-		)
+			as_dict=True)
 		if active:
 			engineer = (
 				frappe.db.get_value("Employee", active.service_engineer, "employee_name")
@@ -396,8 +377,7 @@ class JobAssignment(Document):
 					"Device is currently with {0} ({1}). Complete or put that job On Hold "
 					"before starting this one — one technician holds the device at a time."
 				).format(engineer, active.name),
-				title=_("Device With Another Technician"),
-			)
+				title=_("Device With Another Technician"))
 	
 	def validate_service_order(self):
 		"""Validate that service order exists"""
@@ -470,8 +450,7 @@ class JobAssignment(Document):
 		# from racing past the all_completed check simultaneously
 		frappe.db.sql(
 			"SELECT name FROM `tabSales Order` WHERE name=%s FOR UPDATE",
-			self.service_order,
-		)
+			self.service_order)
 
 		# Read only the locked parent row. Loading the full document here also
 		# locks/reads Sales Order Item children after the parent lock, which can
@@ -480,8 +459,7 @@ class JobAssignment(Document):
 			"Sales Order",
 			self.service_order,
 			["is_service_order", "service_request"],
-			as_dict=True,
-		)
+			as_dict=True)
 		
 		# Only update if it's a Service Order
 		if not so or not so.is_service_order:
@@ -502,8 +480,7 @@ class JobAssignment(Document):
 				# Allow closing without QC
 				frappe.db.set_value(
 					"Sales Order", self.service_order, "repair_outcome", self.repair_outcome,
-					update_modified=False,
-				)
+					update_modified=False)
 
 				# Set workflow state based on outcome
 				if self.repair_outcome in ("Not Repairable", "Beyond Repair"):
@@ -516,8 +493,7 @@ class JobAssignment(Document):
 						self.service_order, self.repair_outcome
 					),
 					indicator="orange",
-					alert=True,
-				)
+					alert=True)
 
 				# Alert about consumed spares that need recovery
 				sr_name = so.get("service_request") or frappe.db.get_value(
@@ -538,16 +514,14 @@ class JobAssignment(Document):
 							  "removed and dispositioned before returning device to customer.<br>"
 							  "Pending: {1}").format(len(pending), items_str),
 							title=_("Spare Recovery"),
-							indicator="red",
-						)
+							indicator="red")
 			else:
 				# QC gate: every identified issue must have a completed
 				# solution — including issues added mid-repair.
 				gaps = None
 				if self.service_request:
 					from gofix.gofix_services.doctype.service_request.service_request import (
-						get_unresolved_issue_gaps,
-					)
+						get_unresolved_issue_gaps)
 
 					gaps = get_unresolved_issue_gaps(self.service_request)
 				if gaps and not gaps["ready_for_qc"]:
@@ -558,22 +532,19 @@ class JobAssignment(Document):
 							", ".join(gaps["uncovered_issues"] + gaps["open_solutions"])
 						),
 						title=_("All Issues Must Be Solved Before QC"),
-						indicator="orange",
-					)
+						indicator="orange")
 				else:
 					# Set to QC Awaiting for repairable items
 					frappe.db.set_value(
 						"Sales Order",
 						self.service_order,
 						{"qc_status": "Awaiting", "workflow_state": "QC Awaiting"},
-						update_modified=False,
-					)
+						update_modified=False)
 
 					frappe.msgprint(
 						_("Service Order {0} is now awaiting QC").format(self.service_order),
 						indicator="green",
-						alert=True,
-					)
+						alert=True)
 	
 	def update_service_request(self):
 		"""Update service request with latest assignment (uses db_set to avoid re-triggering validate)"""
@@ -643,11 +614,6 @@ def get_technician_workload(engineer) -> dict:
 	"""Get count of open/in-progress jobs for a technician.
 	Returns dict with open_count and list of active job names.
 	"""
-	require_role_setting(
-		"technician_workload_roles",
-		("Service Manager", "Service Engineer", "GoFix Floor Manager"),
-		action=_("view technician workload"),
-	)
 	frappe.has_permission("Job Assignment", "read", throw=True)
 	if not frappe.db.exists("Employee", engineer):
 		frappe.throw(_("Technician {0} does not exist.").format(engineer))
@@ -674,8 +640,7 @@ def get_technician_workload(engineer) -> dict:
 		},
 		fields=["name", "service_request", "service_order", "job_type", "assignment_date"],
 		order_by="assignment_date desc",
-		limit=row_limit,
-	)
+		limit=row_limit)
 	active_jobs = []
 	for row in candidates:
 		service_request = row.service_request or frappe.db.get_value(
@@ -694,11 +659,6 @@ def get_technician_workload(engineer) -> dict:
 
 def authorize_job_assignment_creation(service_request, service_engineer=None):
 	"""Authorize a named, scoped service ticket before creating an assignment."""
-	require_role_setting(
-		"job_assignment_creation_roles",
-		("Service Manager", "Service Engineer", "GoFix Floor Manager"),
-		action=_("create a Job Assignment"),
-	)
 	frappe.has_permission("Job Assignment", ptype="create", throw=True)
 	sr = assert_service_request_access(service_request, permission_type="write")
 
@@ -716,9 +676,7 @@ def authorize_job_assignment_creation(service_request, service_engineer=None):
 		frappe.throw(_("The engineer belongs to a different company."), frappe.PermissionError)
 
 	can_assign_others = has_role_setting(
-		"job_assignment_manager_roles",
-		("Service Manager", "GoFix Floor Manager"),
-	)
+		"job_assignment_manager_roles")
 	if not can_assign_others and employee.user_id != frappe.session.user:
 		frappe.throw(_("You may only create an assignment for yourself."), frappe.PermissionError)
 	return sr
@@ -748,8 +706,7 @@ def create_job_sheet_from_service_order(service_order, service_engineer=None, jo
 	authorize_job_assignment_creation(service_request, service_engineer)
 	frappe.db.sql(
 		"SELECT name FROM `tabSales Order` WHERE name = %s FOR UPDATE",
-		(service_order,),
-	)
+		(service_order))
 	allowed_job_types = {
 		value.strip()
 		for value in (
@@ -792,8 +749,7 @@ def create_job_sheet_from_service_order(service_order, service_engineer=None, jo
 					service_engineer, workload["open_count"]
 				),
 				indicator="orange",
-				alert=True,
-			)
+				alert=True)
 	else:
 		job_sheet.assignment_type = "User Assignment"
 		job_sheet.user = frappe.session.user
@@ -805,8 +761,7 @@ def create_job_sheet_from_service_order(service_order, service_engineer=None, jo
 			"service_engineer": service_engineer,
 			"assignment_status": ("in", ("Open", "In Progress")),
 			"docstatus": ("<", 2),
-		},
-	) if service_engineer else None
+		}) if service_engineer else None
 	if duplicate:
 		frappe.throw(_("Active Job Assignment {0} already exists.").format(duplicate))
 

@@ -6,7 +6,7 @@ app_email = "contact@gostack.in"
 app_license = "custom"
 
 boot_session = "gofix.boot.boot_session"
-required_apps = ["frappe/erpnext"]
+required_apps = ["frappe/erpnext", "ch_erp15"]
 
 # Jinja helpers available to print formats (Repair Charge Sheet timeline)
 jinja = {

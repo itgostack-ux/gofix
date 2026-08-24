@@ -864,11 +864,7 @@ def _get_locked_spare_usage(name):
 @frappe.whitelist(methods=["POST"])
 def move_to_main_stock(name, reason) -> dict:
 	"""Whitelisted method to move spare part to main stock"""
-	require_role_setting(
-		"sales_operation_roles",
-		("Sales Manager", "System Manager", "Service Manager", "Sales User"),
-		action=_("return a spare to main stock"),
-	)
+	frappe.has_permission("Spare Parts Usage", ptype="write", throw=True)
 	doc = _get_locked_spare_usage(name)
 	doc.move_to_main_stock(reason)
 	return {"message": "Moved to Main Stock"}
@@ -877,11 +873,7 @@ def move_to_main_stock(name, reason) -> dict:
 @frappe.whitelist(methods=["POST"])
 def move_to_dispose_stock(name, reason) -> dict:
 	"""Whitelisted method to move spare part to dispose stock"""
-	require_role_setting(
-		"service_manager_roles",
-		("Service Manager", "System Manager"),
-		action=_("dispose a spare"),
-	)
+	frappe.has_permission("Spare Parts Usage", ptype="submit", throw=True)
 	doc = _get_locked_spare_usage(name)
 	doc.move_to_dispose_stock(reason)
 	return {"message": "Moved to Dispose Stock"}
@@ -890,11 +882,7 @@ def move_to_dispose_stock(name, reason) -> dict:
 @frappe.whitelist(methods=["POST"])
 def mark_defective(name, defect_type, description=None, action=None) -> dict:
 	"""Mark a spare part as defective."""
-	require_role_setting(
-		"engineer_operation_roles",
-		("Sales Manager", "System Manager", "Service Manager", "Service Engineer"),
-		action=_("mark a spare defective"),
-	)
+	frappe.has_permission("Spare Parts Usage", ptype="write", throw=True)
 	doc = _get_locked_spare_usage(name)
 	doc.mark_defective(defect_type, description or "", action or "")
 	return {"message": f"Marked as defective: {defect_type}"}
@@ -903,11 +891,7 @@ def mark_defective(name, defect_type, description=None, action=None) -> dict:
 @frappe.whitelist(methods=["POST"])
 def change_part_status(name, new_status) -> dict:
 	"""Transition part status through lifecycle."""
-	require_role_setting(
-		"engineer_operation_roles",
-		("Sales Manager", "System Manager", "Service Manager", "Service Engineer"),
-		action=_("change spare status"),
-	)
+	frappe.has_permission("Spare Parts Usage", ptype="write", throw=True)
 	doc = _get_locked_spare_usage(name)
 	if doc.docstatus != 0:
 		frappe.throw(_("Submitted spare usage is immutable. Use the recovery action for a consumed part."))
@@ -948,11 +932,7 @@ def change_part_status(name, new_status) -> dict:
 @frappe.whitelist(methods=["POST"])
 def approve_spare_part(name, remarks=None) -> dict:
 	"""Approve a spare part that requires approval."""
-	require_role_setting(
-		"qc_approval_roles",
-		("QC Manager", "Store Manager", "System Manager"),
-		action=_("approve a spare"),
-	)
+	frappe.has_permission("Spare Parts Usage", ptype="submit", throw=True)
 	doc = _get_locked_spare_usage(name)
 	if not doc.requires_approval:
 		frappe.throw(_("This spare part does not require approval"), title=_("Spare Parts Usage Error"))
@@ -982,11 +962,7 @@ def recover_spare(name, disposition, remarks=None) -> dict:
 
 	disposition: "Good - Back to Stock" | "Faulty - Supplier Return" | "Damaged by Technician"
 	"""
-	require_role_setting(
-		"engineer_operation_roles",
-		("Sales Manager", "System Manager", "Service Manager", "Service Engineer"),
-		action=_("recover a spare"),
-	)
+	frappe.has_permission("Spare Parts Usage", ptype="write", throw=True)
 	doc = _get_locked_spare_usage(name)
 	doc.recover_spare(disposition, remarks)
 	return {"message": f"Spare recovered: {disposition}"}
@@ -1017,11 +993,6 @@ def bulk_recover_spares(service_request, dispositions_json) -> dict:
 	dispositions_json: JSON list of {"spu_name": "...", "disposition": "...", "remarks": "..."}
 	"""
 	import json as _json
-	require_role_setting(
-		"engineer_operation_roles",
-		("Sales Manager", "System Manager", "Service Manager", "Service Engineer"),
-		action=_("recover spares"),
-	)
 	dispositions = _json.loads(dispositions_json) if isinstance(dispositions_json, str) else dispositions_json
 	if not isinstance(dispositions, list):
 		frappe.throw(_("Dispositions must be a JSON list."), frappe.ValidationError)

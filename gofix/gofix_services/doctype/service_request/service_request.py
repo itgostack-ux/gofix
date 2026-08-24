@@ -1634,7 +1634,6 @@ class ServiceRequest(Document):
 
 # API Methods
 def _require_service_lookup_access(action):
-	require_role_setting("service_access_roles", action=action)
 	frappe.has_permission("Service Request", ptype="read", throw=True)
 
 
@@ -1779,11 +1778,6 @@ def accept_service_request(service_request) -> dict:
 	
 	This method handles accepting submitted Service Requests
 	"""
-	require_role_setting(
-		"sales_operation_roles",
-		("Sales Manager", "System Manager", "Service Manager", "Sales User"),
-		action=_("accept a service request"),
-	)
 	doc = frappe.get_doc("Service Request", service_request)
 	doc.check_permission("write")
 	
@@ -1823,11 +1817,6 @@ def reject_service_request(service_request, rejection_reason) -> bool:
 	
 	This method handles rejecting submitted Service Requests
 	"""
-	require_role_setting(
-		"sales_operation_roles",
-		("Sales Manager", "System Manager", "Service Manager", "Sales User"),
-		action=_("reject a service request"),
-	)
 	doc = frappe.get_doc("Service Request", service_request)
 	doc.check_permission("write")
 	
@@ -2007,11 +1996,7 @@ def approve_service_discount(
 	otp_code=None,
 	otp_mobile=None,
 ):
-	require_role_setting(
-		"service_manager_roles",
-		("Service Manager", "System Manager"),
-		action=_("approve a service discount"),
-	)
+	frappe.has_permission("Service Request", ptype="submit", throw=True)
 	doc = _get_locked_service_request(service_request)
 	actor = frappe.session.user
 	if approver_user and approver_user != actor:
@@ -2116,11 +2101,7 @@ def request_item_replacement(service_request, original_serial_no, replacement_se
 @frappe.whitelist(methods=["POST"])
 def approve_item_replacement(service_request, approver_user=None, remarks=None):
 	"""Approve a pending item replacement request."""
-	require_role_setting(
-		"service_manager_roles",
-		("Service Manager", "System Manager"),
-		action=_("approve an item replacement"),
-	)
+	frappe.has_permission("Service Request", ptype="submit", throw=True)
 	doc = _get_locked_service_request(service_request)
 
 	actor = frappe.session.user
@@ -2167,11 +2148,7 @@ def approve_item_replacement(service_request, approver_user=None, remarks=None):
 @frappe.whitelist(methods=["POST"])
 def complete_item_replacement(service_request, replacement_serial_no=None, completed_by=None):
 	"""Finalize the approved serial substitution on the Service Request."""
-	require_role_setting(
-		"service_manager_roles",
-		("Service Manager", "System Manager"),
-		action=_("complete an item replacement"),
-	)
+	frappe.has_permission("Service Request", ptype="write", throw=True)
 	doc = _get_locked_service_request(service_request)
 	actor = frappe.session.user
 	if completed_by and completed_by != actor:

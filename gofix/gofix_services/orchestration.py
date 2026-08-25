@@ -199,6 +199,9 @@ def _calculate_estimate(sr):
 				warranty_status=sr.warranty_status,
 				company=sr.company,
 				warranty_plan=sr.get("warranty_plan"),
+				# without the device the engine cannot tell which of the
+				# hundreds of model-specific spares this repair actually needs
+				device_item=sr.get("device_item"),
 			)
 			if result.get("estimate_total"):
 				return (

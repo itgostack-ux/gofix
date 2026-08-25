@@ -614,6 +614,34 @@ class ServiceRequest(Document):
 	def is_completed_status(self):
 		return self.decision == "Completed"
 
+	def resolve_repair_warranty_days(self) -> int:
+		"""Warranty the customer actually gets on this repair.
+
+		Market convention: the cover is the SHORTEST of the workmanship warranty
+		on the repairs performed and the warranty on the parts fitted, so an
+		aftermarket screen shortens the cover even when the labour is guaranteed
+		for longer. Falls back to the site default when nothing is configured.
+		"""
+		terms = []
+
+		for row in self.get("solution_lines") or []:
+			if row.status in ("Cancelled", "Skipped") or not row.repair_solution:
+				continue
+			days = frappe.db.get_value("Repair Solution", row.repair_solution, "warranty_days")
+			if days:
+				terms.append(int(days))
+
+		for row in self.get("spare_lines") or []:
+			if row.status in ("Returned", "Damaged") or not row.spare_item:
+				continue
+			days = frappe.db.get_value("Item", row.spare_item, "gofix_part_warranty_days")
+			if days:
+				terms.append(int(days))
+
+		if terms:
+			return min(terms)
+		return get_int_setting("default_repair_warranty_days", 30)
+
 	def ensure_completion_artifacts(self):
 		"""Create the billing and stock artifacts expected at repair completion."""
 		completion_date = self.get("actual_completion_date") or today()
@@ -623,7 +651,7 @@ class ServiceRequest(Document):
 			self.set("actual_completion_date", completion_date)
 
 		if self.meta.has_field("repair_warranty_expiry") and not self.repair_warranty_expiry:
-			warranty_days = self.repair_warranty_days or get_int_setting("default_repair_warranty_days", 30)
+			warranty_days = self.repair_warranty_days or self.resolve_repair_warranty_days()
 			self.db_set(
 				"repair_warranty_expiry",
 				add_days(completion_date, warranty_days),

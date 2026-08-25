@@ -53,6 +53,29 @@ def create_item_custom_fields():
 				),
 			},
 			{
+				"fieldname": "gofix_spare_grade",
+				"label": "Spare Grade",
+				"fieldtype": "Select",
+				"options": "\nOEM\nOEM Equivalent\nAftermarket\nRefurbished",
+				"insert_after": "gofix_repair_solutions",
+				"description": (
+					"Part tier. The same repair is normally offered at 2-3 price points "
+					"by stocking one Item per grade -- an OEM screen and an aftermarket "
+					"screen are separate SKUs, both mapped to the same repair."
+				),
+			},
+			{
+				"fieldname": "gofix_part_warranty_days",
+				"label": "Part Warranty (Days)",
+				"fieldtype": "Int",
+				"insert_after": "gofix_spare_grade",
+				"description": (
+					"Warranty this part carries. The repair's warranty is the SHORTEST "
+					"of the parts fitted and the workmanship warranty on the repair, "
+					"which is how an aftermarket part shortens the customer's cover."
+				),
+			},
+			{
 				"fieldname": "gofix_universal_spare",
 				"label": "Universal Spare / Consumable",
 				"fieldtype": "Check",

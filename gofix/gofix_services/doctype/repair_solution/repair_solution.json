@@ -17,6 +17,7 @@
   "description",
   "column_break_2",
   "estimated_minutes",
+  "warranty_days",
   "requires_spare",
   "section_break_skill",
   "minimum_grade",
@@ -140,6 +141,13 @@
    "label": "Billable",
    "default": "1",
    "description": "Untick for internal/diagnostic steps that never reach an invoice."
+  },
+  {
+   "fieldname": "warranty_days",
+   "fieldtype": "Int",
+   "label": "Workmanship Warranty (Days)",
+   "insert_after": "estimated_minutes",
+   "description": "Warranty on the labour for this repair. The customer's cover is the shorter of this and the warranty on the parts fitted."
   }
  ],
  "index_web_pages_for_search": 0,

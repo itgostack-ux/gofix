@@ -32,7 +32,7 @@ def _settings_default_roles(fieldname: str) -> tuple[str, ...]:
     return tuple(role.strip() for role in default.split("\n") if role.strip())
 
 
-def _configured_roles(fieldname: str, fallback: tuple[str, ...] = ()) -> set[str]:
+def _configured_roles(fieldname: str) -> set[str]:
     """Resolve the live role list for a settings field, minus privileged roles."""
     from gofix.config import get_role_setting
 
@@ -43,10 +43,10 @@ def _configured_roles(fieldname: str, fallback: tuple[str, ...] = ()) -> set[str
 def _operational_docperm_specs() -> dict[str, dict[str, set[str]]]:
     """Build DocType -> role -> ptypes from the same role registry the gates use."""
     manager_roles = _configured_roles(
-        "job_assignment_manager_roles", ("Service Manager", "GoFix Floor Manager")
+        "job_assignment_manager_roles"
     )
     intake_roles = _configured_roles(
-        "token_transition_roles", ("Store Manager", "Store Executive")
+        "token_transition_roles"
     ) - manager_roles
 
     specs: dict[str, dict[str, set[str]]] = {}

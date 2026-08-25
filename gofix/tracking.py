@@ -123,7 +123,7 @@ def derive_tracking_token(sr_name: str, salt: str | None) -> str:
 
 def rotate_tracking_token(sr_name: str) -> str:
 	"""Mint a new salt for a Service Request, revoking all previously issued links."""
-	for _ in range(10):
+	for _attempt in range(10):
 		salt = make_tracking_salt()
 		token = derive_tracking_token(sr_name, salt)
 		digest = tracking_token_digest(token)

@@ -29,3 +29,4 @@ gofix.patches.retire_ch_customer_address # 2026-08-06 - migrate to standard Addr
 gofix.patches.consolidate_repair_data_model # 2026-08-06 - Service Request aggregate; single spare execution/stock path
 gofix.patches.classify_repair_status_log_events # 2026-08-06 - separate lifecycle history from Ops Hub stage history
 gofix.patches.configure_repair_quarantine_warehouses # 2026-08-06 - segregate supplier-return and damaged repair stock
+gofix.patches.v01_link_service_catalogue_to_items

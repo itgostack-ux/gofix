@@ -20,7 +20,12 @@
   "requires_spare",
   "section_break_skill",
   "minimum_grade",
-  "skill_level"
+  "skill_level",
+  "section_break_billing",
+  "service_item",
+  "service_item_name",
+  "column_break_billing",
+  "is_billable"
  ],
  "fields": [
   {
@@ -105,6 +110,36 @@
    "fieldtype": "Select",
    "label": "Skill Level",
    "options": "Basic\nIntermediate\nAdvanced\nExpert"
+  },
+  {
+   "fieldname": "section_break_billing",
+   "fieldtype": "Section Break",
+   "label": "Billing"
+  },
+  {
+   "fieldname": "service_item",
+   "fieldtype": "Link",
+   "label": "Service Item",
+   "options": "Item",
+   "description": "Non-stock Item this repair is invoiced as. Created automatically under the repair-labour sub-category if left blank."
+  },
+  {
+   "fieldname": "service_item_name",
+   "fieldtype": "Data",
+   "label": "Service Item Name",
+   "fetch_from": "service_item.item_name",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_billing",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "is_billable",
+   "fieldtype": "Check",
+   "label": "Billable",
+   "default": "1",
+   "description": "Untick for internal/diagnostic steps that never reach an invoice."
   }
  ],
  "index_web_pages_for_search": 0,

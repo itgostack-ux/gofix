@@ -13,7 +13,9 @@ def create_item_custom_fields():
 	spare Item. An empty list means the spare is treated as universal (fits any
 	device); a non-empty list restricts the spare to the listed device models.
 	"""
-	if not frappe.db.exists("DocType", "GoFix Spare Compatible Model"):
+	if not frappe.db.exists("DocType", "GoFix Spare Compatible Model") or not frappe.db.exists(
+		"DocType", "GoFix Item Repair Solution"
+	):
 		frappe.logger("gofix").info(
 			"Skipping Item spare-compatibility fields: child DocType not yet available"
 		)
@@ -37,6 +39,18 @@ def create_item_custom_fields():
 				"options": "GoFix Spare Compatible Model",
 				"insert_after": "gofix_spare_compatibility_section",
 				"description": "Exact device models this spare fits (most specific tier — overrides brand/category matching). Same spare may list many models.",
+			},
+			{
+				"fieldname": "gofix_repair_solutions",
+				"label": "Serves Repair Solutions",
+				"fieldtype": "Table MultiSelect",
+				"options": "GoFix Item Repair Solution",
+				"insert_after": "gofix_compatible_models",
+				"description": (
+					"Which GoFix repairs consume this spare. The Item is the master: "
+					"these rows are mirrored into Solution Spare Mapping, so a spare "
+					"added here shows up in the repair flow immediately."
+				),
 			},
 			{
 				"fieldname": "gofix_universal_spare",

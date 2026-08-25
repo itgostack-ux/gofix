@@ -113,6 +113,18 @@ override_doctype_class = {
 }
 
 doc_events = {
+	# Item is the master of the service catalogue; these mirror it into GoFix.
+	"Item": {
+		"on_update": "gofix.catalogue_sync.sync_spare_mappings_from_item",
+		"after_rename": "gofix.catalogue_sync.repoint_spare_mappings_on_rename",
+	},
+	"Repair Solution": {
+		"validate": "gofix.catalogue_sync.validate_repair_solution",
+		"on_update": "gofix.catalogue_sync.on_repair_solution_update",
+	},
+	"Solution Spare Mapping": {
+		"validate": "gofix.catalogue_sync.validate_solution_spare_mapping",
+	},
 	"Sales Order": {
 		"validate": "gofix.overrides.sales_order.validate_service_order_before_submit",
 		"on_update": "gofix.overrides.sales_order.update_service_request_on_qc",

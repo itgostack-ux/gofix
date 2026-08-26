@@ -27,8 +27,8 @@ frappe.pages["gofix-ops-hub"].on_page_load = function (wrapper) {
 /* ═══════════════════════════════════════════════════════════════════════════ */
 const STAGES = [
 	{ key: "analysis",  label: "Analysis",  icon: "fa-search",         color: "#3b82f6" },
-	{ key: "confirm",   label: "Confirm",   icon: "fa-check-circle",   color: "#8b5cf6" },
 	{ key: "solutions", label: "Solutions",  icon: "fa-bolt",          color: "#f59e0b" },
+	{ key: "confirm",   label: "Confirm",   icon: "fa-check-circle",   color: "#8b5cf6" },
 	{ key: "assign",    label: "Assign",     icon: "fa-user-plus",     color: "#10b981" },
 	{ key: "repair",    label: "Repair",     icon: "fa-wrench",        color: "#ef4444" },
 	{ key: "qc",        label: "QC",         icon: "fa-check-square-o", color: "#6366f1" },
@@ -37,8 +37,8 @@ const STAGES = [
 
 const STAGE_BADGE = {
 	analysis:  { label: "Analysis",  cls: "badge-blue" },
-	confirm:   { label: "Confirm",   cls: "badge-purple" },
 	solutions: { label: "Solutions", cls: "badge-yellow" },
+	confirm:   { label: "Confirm",   cls: "badge-purple" },
 	assign:    { label: "Assign",    cls: "badge-green" },
 	repair:    { label: "Repair",    cls: "badge-red" },
 	qc:        { label: "QC",        cls: "badge-indigo" },
@@ -810,11 +810,16 @@ class GoFixOpsHub {
 					${issueList || `<p class="text-muted">${__("No issues logged")}</p>`}
 				</div>
 
+				<div id="goh-est-breakdown" class="goh-est-breakdown">
+					<span class="text-muted">${__("Pricing the chosen repairs…")}</span>
+				</div>
+
 				<div class="goh-confirm-cost" style="display:flex;align-items:center;gap:10px">
 					<span class="goh-kv-label">${__("Estimated Cost")}</span>
 					<span style="font-size:18px;font-weight:600">₹</span>
 					<input type="number" class="form-control" id="goh-est-cost" value="${flt(d.estimated_cost)}" min="0" step="100" style="max-width:180px;font-size:18px;font-weight:700">
 					<button class="btn btn-xs btn-default" id="goh-save-est-cost" style="white-space:nowrap"><i class="fa fa-save"></i> ${__("Save")}</button>
+					<button class="btn btn-xs btn-primary" id="goh-use-calc" style="white-space:nowrap;display:none"><i class="fa fa-calculator"></i> ${__("Use calculated")}</button>
 				</div>
 
 				${sentAt ? `<div class="goh-sent-indicator"><i class="fa fa-whatsapp text-success"></i> ${__("WhatsApp sent")} ${sentAt}</div>` : ""}
@@ -1532,6 +1537,40 @@ class GoFixOpsHub {
 
 		/* ── Confirm ─────────────────────────────────────────────────── */
 		if (activeStage === "confirm") {
+			// Price the ticket from the chosen repairs rather than leaving the
+			// operator to guess. The typed field stays authoritative so a
+			// negotiated price can still override the rate card.
+			frappe.xcall(`${API}.get_estimate_breakdown`, { sr_name: d.name }).then(est => {
+				const box = content.find("#goh-est-breakdown");
+				if (!box.length) return;
+				if (!est.priced) {
+					box.html(`<span class="text-muted"><i class="fa fa-info-circle"></i> ${frappe.utils.escape_html(est.reason || "")}</span>`);
+					return;
+				}
+				const rows = (est.lines || []).map(l => `
+					<tr>
+						<td>${frappe.utils.escape_html(l.repair_solution || "")}</td>
+						<td class="text-right">₹${format_number(l.labor || 0)}</td>
+						<td class="text-right">${l.spare_item ? `₹${format_number(l.spare || 0)}` : "—"}</td>
+						<td class="text-muted small">${l.spare_item ? frappe.utils.escape_html(`${l.spare_item} · ${l.spare_grade || ""}`) : ""}</td>
+					</tr>`).join("");
+				box.html(`
+					<table class="goh-est-table">
+						<thead><tr><th>${__("Repair")}</th><th class="text-right">${__("Labour")}</th><th class="text-right">${__("Part")}</th><th></th></tr></thead>
+						<tbody>${rows}</tbody>
+						<tfoot><tr>
+							<th>${__("Calculated total")}</th>
+							<th class="text-right">₹${format_number(est.labour)}</th>
+							<th class="text-right">₹${format_number(est.parts)}</th>
+							<th class="text-right">₹${format_number(est.total)}</th>
+						</tr></tfoot>
+					</table>`);
+				const input = content.find("#goh-est-cost");
+				if (!flt(input.val())) input.val(est.total);
+				else if (flt(input.val()) !== flt(est.total)) content.find("#goh-use-calc").show();
+				content.find("#goh-use-calc").off("click").on("click", () => input.val(est.total).trigger("change"));
+			});
+
 			content.find("#goh-send-wa").on("click", () => {
 				frappe.xcall(`${API}.send_confirmation_whatsapp`, { sr_name: d.name })
 					.then(r => {

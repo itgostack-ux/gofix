@@ -361,10 +361,13 @@ def _derive_stage(sr):
 	# Accepted or In Service — normal progression
 	if not cint(sr.get("analysis_confirmed")) or cint(sr.get("open_issue_count", 1)) > 0:
 		return "analysis"
-	if not cint(sr.get("customer_confirmed")):
-		return "confirm"
+	# Solutions before Confirm: the customer cannot approve a price until the
+	# work that determines it has been chosen. Asking first only ever produced
+	# a hand-typed number, because the estimate is priced off solution lines.
 	if not cint(sr.get("solution_count")):
 		return "solutions"
+	if not cint(sr.get("customer_confirmed")):
+		return "confirm"
 	if not cint(sr.get("assignment_count")):
 		return "assign"
 
@@ -416,7 +419,7 @@ def accept_and_create_service_order(sr_name) -> dict:
 		"analysis_confirmed": 1,
 		"repairability_status": "Repairable",
 	}, update_modified=False)
-	_log_ops_stage(sr_name, "draft", "confirm")
+	_log_ops_stage(sr_name, "draft", "solutions")
 
 	from gofix.gofix_services import orchestration
 
@@ -958,8 +961,8 @@ def confirm_analysis(sr_name) -> dict:
 	if frappe.db.has_column("Service Request", "analysis_confirmed"):
 		frappe.db.set_value("Service Request", sr_name, "analysis_confirmed", 1, update_modified=False)
 
-	_log_ops_stage(sr_name, "analysis", "confirm")
-	return {"ok": True, "stage": "confirm"}
+	_log_ops_stage(sr_name, "analysis", "solutions")
+	return {"ok": True, "stage": "solutions"}
 
 
 # ── Step 2: Customer Confirmation ─────────────────────────────────────────────
@@ -1023,6 +1026,58 @@ def send_confirmation_whatsapp(sr_name) -> dict:
 	return {"ok": True, "whatsapp_sent": sent}
 
 
+@frappe.whitelist()
+def get_estimate_breakdown(sr_name) -> dict:
+	"""Price the chosen repairs so Confirm can show a real number.
+
+	The Confirm step used to render a hand-typed ``estimated_cost``, which is
+	why it read Rs 0 -- nothing ever priced the ticket. This runs the same
+	engine the estimate versions use, so what the customer is asked to approve
+	is what the rate card actually says.
+
+	Returns the breakdown plus ``priced``: False when there is nothing to price
+	yet, so the UI can say so instead of showing a misleading zero.
+	"""
+	_assert_sr_permission(sr_name, "read")
+	sr = frappe.get_doc("Service Request", sr_name)
+
+	solutions = [
+		r for r in (sr.get("solution_lines") or [])
+		if r.status not in ("Cancelled", "Skipped") and r.repair_solution
+	]
+	if not solutions:
+		return {
+			"priced": False,
+			"reason": _("No repair has been chosen yet — pick the work on the Solutions step."),
+			"labour": 0, "parts": 0, "total": 0, "lines": [],
+		}
+
+	from gofix.gofix_services.doctype.gofix_pricing_rule.gofix_pricing_rule import (
+		calculate_estimate_from_rules,
+	)
+
+	result = calculate_estimate_from_rules(
+		issue_categories=[r.issue_category for r in (sr.get("issue_lines") or [])],
+		solutions=[
+			{"repair_solution": r.repair_solution, "issue_category": r.issue_category}
+			for r in solutions
+		],
+		brand=sr.get("brand"),
+		warranty_status=sr.get("warranty_status"),
+		company=sr.get("company"),
+		warranty_plan=sr.get("warranty_plan"),
+		device_item=sr.get("device_item"),
+	)
+	return {
+		"priced": True,
+		"labour": flt(result.get("labor_total")),
+		"parts": flt(result.get("spare_total")),
+		"total": flt(result.get("estimate_total")),
+		"lines": result.get("line_details") or [],
+		"stored": flt(sr.get("estimated_cost")),
+	}
+
+
 @frappe.whitelist(methods=["POST"])
 def mark_customer_confirmed(sr_name) -> dict:
 	"""Mark customer as having confirmed the estimate and issues list."""
@@ -1031,8 +1086,8 @@ def mark_customer_confirmed(sr_name) -> dict:
 	if frappe.db.has_column("Service Request", "customer_confirmed"):
 		frappe.db.set_value("Service Request", sr_name, "customer_confirmed", 1, update_modified=True)
 
-	_log_ops_stage(sr_name, "confirm", "solutions")
-	return {"ok": True, "stage": "solutions"}
+	_log_ops_stage(sr_name, "confirm", "assign")
+	return {"ok": True, "stage": "assign"}
 
 
 # ── Step 3: Solution Assignment ───────────────────────────────────────────────
@@ -1282,8 +1337,8 @@ def save_solution_assignment(sr_name, solutions_json) -> dict:
 
 	sr.save()
 
-	_log_ops_stage(sr_name, "solutions", "assign")
-	return {"ok": True, "solution_count": len(sr.solution_lines), "stage": "assign"}
+	_log_ops_stage(sr_name, "solutions", "confirm")
+	return {"ok": True, "solution_count": len(sr.solution_lines), "stage": "confirm"}
 
 
 # ── Step 4: Technician Assignment ─────────────────────────────────────────────

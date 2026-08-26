@@ -3,12 +3,19 @@
 
 :root {
 	--goh-sidebar-w: 320px;
-	--goh-border: #e2e8f0;
-	--goh-bg: #f8fafc;
-	--goh-card-bg: #fff;
-	--goh-text: #1e293b;
-	--goh-muted: #64748b;
 	--goh-radius: 8px;
+
+	/* Follow the desk theme. Frappe redefines these under [data-theme="dark"],
+	   so aliasing rather than hardcoding is what keeps this page in step with
+	   the rest of Desk -- and stops native controls (link dropdowns, date
+	   pickers) rendering dark on a hardcoded-light page. */
+	--goh-border: var(--border-color);
+	--goh-bg: var(--bg-color);
+	--goh-card-bg: var(--card-bg);
+	--goh-text: var(--text-color);
+	--goh-muted: var(--text-muted);
+	--goh-subtle: var(--subtle-fg, var(--control-bg));
+	--goh-control-bg: var(--control-bg);
 }
 
 /* ── Root Layout ─────────────────────────────────────────────────────────── */
@@ -48,7 +55,7 @@
 }
 .goh-queue-count {
 	font-size: 11px;
-	background: #e2e8f0;
+	background: var(--goh-border);
 	color: var(--goh-muted);
 	padding: 2px 6px;
 	border-radius: 10px;
@@ -76,7 +83,7 @@
 	cursor: pointer;
 	transition: background 0.15s;
 }
-.goh-q-card:hover { background: #f1f5f9; }
+.goh-q-card:hover { background: var(--goh-subtle); }
 .goh-q-card.goh-q-active {
 	background: #eff6ff;
 	border-left: 3px solid #3b82f6;
@@ -189,18 +196,18 @@
 	justify-content: center;
 	font-size: 12px;
 	font-weight: 600;
-	border: 2px solid #cbd5e1;
-	background: #fff;
-	color: #94a3b8;
+	border: 2px solid var(--goh-border);
+	background: var(--goh-card-bg);
+	color: var(--goh-muted);
 	transition: all 0.2s;
 }
 .goh-step-done .goh-step-dot {
 	background: #10b981;
 	border-color: #10b981;
-	color: #fff;
+	color: var(--goh-card-bg);
 }
 .goh-step-active .goh-step-dot {
-	color: #fff;
+	color: var(--goh-card-bg);
 	box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
 }
 .goh-step-label {
@@ -235,7 +242,7 @@
 .goh-step-line {
 	flex: 1;
 	height: 2px;
-	background: #e2e8f0;
+	background: var(--goh-border);
 	min-width: 20px;
 	max-width: 60px;
 	margin: 0 4px;
@@ -272,7 +279,7 @@
 	border-radius: 10px;
 	font-size: 10px;
 	font-weight: 600;
-	color: #fff;
+	color: var(--goh-card-bg);
 }
 .goh-banner-meta {
 	display: flex;
@@ -365,7 +372,7 @@
 .badge-green   { background: #f0fdf4; color: #16a34a; }
 .badge-red     { background: #fef2f2; color: #dc2626; }
 .badge-indigo  { background: #eef2ff; color: #4f46e5; }
-.badge-muted   { background: #f1f5f9; color: #64748b; }
+.badge-muted   { background: var(--goh-subtle); color: var(--goh-muted); }
 .badge-orange  { background: #fff7ed; color: #ea580c; }
 .badge-done    { background: #f0fdf4; color: #059669; }
 
@@ -402,7 +409,7 @@
 	font-size: 12px;
 }
 .goh-table th {
-	background: #f8fafc;
+	background: var(--goh-bg);
 	padding: 6px 10px;
 	font-weight: 600;
 	color: var(--goh-muted);
@@ -413,7 +420,7 @@
 }
 .goh-table td {
 	padding: 6px 10px;
-	border-bottom: 1px solid #f1f5f9;
+	border-bottom: 1px solid var(--goh-subtle);
 	color: var(--goh-text);
 }
 .goh-table tfoot td {
@@ -470,7 +477,7 @@
 	top: 8px;
 	bottom: -8px;
 	width: 2px;
-	background: #e2e8f0;
+	background: var(--goh-border);
 }
 .goh-tl-item:last-child::before { display: none; }
 .goh-tl-dot {
@@ -481,8 +488,8 @@
 	height: 10px;
 	border-radius: 50%;
 	background: #3b82f6;
-	border: 2px solid #fff;
-	box-shadow: 0 0 0 2px #e2e8f0;
+	border: 2px solid var(--goh-card-bg);
+	box-shadow: 0 0 0 2px var(--goh-border);
 }
 .goh-tl-header {
 	display: flex;
@@ -498,10 +505,10 @@
 	border: 1px solid var(--goh-border);
 	border-radius: 6px;
 	padding: 10px 14px;
-	background: #fafafa;
+	background: var(--goh-bg);
 	transition: border-color 0.15s;
 }
-.goh-repair-card:hover { border-color: #94a3b8; }
+.goh-repair-card:hover { border-color: var(--goh-muted); }
 .goh-repair-card-head {
 	display: flex;
 	justify-content: space-between;
@@ -519,7 +526,7 @@
 	color: var(--goh-muted);
 	margin-top: 4px;
 	padding: 4px 8px;
-	background: #f1f5f9;
+	background: var(--goh-subtle);
 	border-radius: 4px;
 }
 .goh-repair-card-actions {
@@ -552,7 +559,7 @@
 	align-items: center;
 	gap: 6px;
 	padding: 4px 10px;
-	background: #f8fafc;
+	background: var(--goh-bg);
 	border: 1px solid var(--goh-border);
 	border-radius: 6px;
 	font-size: 12px;
@@ -577,7 +584,7 @@
 	cursor: pointer;
 	font-size: 12px;
 }
-.goh-sol-option:hover { background: #f1f5f9; }
+.goh-sol-option:hover { background: var(--goh-subtle); }
 .goh-sol-name { font-weight: 500; }
 .goh-existing-sols, .goh-existing-assigns {
 	display: flex;
@@ -629,7 +636,7 @@
 .goh-note-block {
 	margin-bottom: 12px;
 	padding: 10px 14px;
-	background: #f8fafc;
+	background: var(--goh-bg);
 	border-left: 3px solid #3b82f6;
 	border-radius: 0 6px 6px 0;
 }
@@ -736,7 +743,7 @@
 }
 .goh-sol-actions .btn { min-width: 28px; }
 .goh-sol-actions .btn-default { color: var(--goh-muted); background: var(--goh-card-bg); border: 1px solid var(--goh-border); }
-.goh-sol-actions .btn-default:hover { color: var(--goh-text); border-color: #cbd5e1; }
+.goh-sol-actions .btn-default:hover { color: var(--goh-text); border-color: var(--goh-border); }
 .goh-sol-done-details { margin-top: 10px; }
 .goh-sol-done-details > summary { list-style: none; outline: none; user-select: none; }
 .goh-sol-done-details > summary::-webkit-details-marker { display: none; }
@@ -756,3 +763,35 @@
 }
 .goh-custody-details > summary .goh-caret::before { content: "▸"; margin-right: 4px; }
 .goh-custody-details[open] > summary .goh-caret::before { content: "▾"; }
+
+/* ── Dark theme ──────────────────────────────────────────────────────────── */
+/* Layout colours already follow the desk theme through the --goh-* aliases
+   above. Only the semantic chips need a hand: their pale tints are unreadable
+   as-is on a dark surface, so keep the hue and darken the ground. */
+[data-theme="dark"] {
+	--goh-subtle: var(--gray-800, #1f2937);
+}
+
+[data-theme="dark"] .badge-blue    { background: rgba(59, 130, 246, 0.18); color: #93c5fd; }
+[data-theme="dark"] .badge-purple  { background: rgba(124, 58, 237, 0.18); color: #c4b5fd; }
+[data-theme="dark"] .badge-yellow  { background: rgba(217, 119, 6, 0.18);  color: #fcd34d; }
+[data-theme="dark"] .badge-green   { background: rgba(22, 163, 74, 0.18);  color: #86efac; }
+[data-theme="dark"] .badge-red     { background: rgba(220, 38, 38, 0.18);  color: #fca5a5; }
+[data-theme="dark"] .badge-indigo  { background: rgba(79, 70, 229, 0.18);  color: #a5b4fc; }
+[data-theme="dark"] .badge-orange  { background: rgba(234, 88, 12, 0.18);  color: #fdba74; }
+[data-theme="dark"] .badge-done    { background: rgba(5, 150, 105, 0.18);  color: #6ee7b7; }
+[data-theme="dark"] .badge-muted   { background: var(--goh-subtle); color: var(--goh-muted); }
+
+[data-theme="dark"] .goh-sla-pill.goh-sla-breach { background: rgba(220, 38, 38, 0.18); color: #fca5a5; }
+[data-theme="dark"] .goh-sla-pill.goh-sla-warn   { background: rgba(217, 119, 6, 0.18); color: #fcd34d; }
+[data-theme="dark"] .goh-sla-pill.goh-sla-ok     { background: rgba(22, 163, 74, 0.18); color: #86efac; }
+
+/* pale panel grounds that would otherwise stay white on a dark page */
+[data-theme="dark"] .goh-q-card:hover { background: var(--goh-subtle); }
+
+/* ── Estimate breakdown on the Confirm step ──────────────────────────────── */
+.goh-est-breakdown { margin: 10px 0; }
+.goh-est-table { width: 100%; font-size: 12px; border-collapse: collapse; }
+.goh-est-table th, .goh-est-table td { padding: 4px 8px; border-bottom: 1px solid var(--goh-border); }
+.goh-est-table thead th { color: var(--goh-muted); font-weight: 600; }
+.goh-est-table tfoot th { border-top: 2px solid var(--goh-border); border-bottom: none; color: var(--goh-text); }

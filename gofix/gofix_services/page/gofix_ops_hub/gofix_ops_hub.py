@@ -838,6 +838,26 @@ def get_ticket_detail(sr_name) -> dict:
 
 # ── Step 1: Technical Analysis ────────────────────────────────────────────────
 
+def _invalidate_qc_checklist(service_order) -> int:
+	"""Clear recorded QC results so the next QC starts from a blank checklist.
+
+	A pass recorded before a late issue was found certified a smaller scope.
+	Leaving those results in place would let the re-run inherit ticks nobody
+	re-checked, so the results are cleared while the rows themselves stay —
+	the checklist template does not need rebuilding, only re-answering.
+	"""
+	rows = frappe.get_all(
+		"GoFix QC Checklist", filters={"parent": service_order}, pluck="name"
+	)
+	for name in rows:
+		frappe.db.set_value(
+			"GoFix QC Checklist", name,
+			{"result": "", "remarks": "", "fail_reason": ""},
+			update_modified=False,
+		)
+	return len(rows)
+
+
 @frappe.whitelist(methods=["POST"])
 def save_issue_lines(sr_name, issues_json) -> dict:
 	"""Save issue lines identified during technical analysis.
@@ -889,7 +909,19 @@ def save_issue_lines(sr_name, issues_json) -> dict:
 		so_state = frappe.db.get_value(
 			"Sales Order", sr.service_order, ["qc_status", "workflow_state"], as_dict=True
 		)
-		if not gaps["ready_for_qc"] and so_state and so_state.workflow_state == "QC Awaiting":
+		# Reset whether QC is still awaiting OR has already passed: a repair
+		# certified before this issue existed was certified against a different
+		# scope, so the sign-off no longer covers the device and QC must be
+		# re-run from the start on the full set of work.
+		qc_reached = bool(
+			so_state
+			and (
+				so_state.workflow_state == "QC Awaiting"
+				or (so_state.qc_status or "") in ("Awaiting", "Pass")
+			)
+		)
+		if not gaps["ready_for_qc"] and qc_reached:
+			_invalidate_qc_checklist(sr.service_order)
 			frappe.db.set_value("Sales Order", sr.service_order, {
 				"qc_status": "Pending",
 				"workflow_state": "Work in Progress",
@@ -2788,12 +2820,26 @@ def submit_for_qc(sr_name) -> dict:
 
 	_assert_removed_part_details_complete(sr)
 
-	# Mark remaining In-Progress / Planned solutions as Completed (skip Cancelled)
+	# QC certifies finished work, so every solution must actually BE finished.
+	# This used to force-complete anything still Planned or In Progress, which
+	# meant pressing "Submit for QC" silently marked unfinished repairs as done
+	# and QC then signed off on work nobody had performed. Skipped and Cancelled
+	# rows are deliberate decisions and are not outstanding.
+	outstanding = [
+		row for row in sr.get("solution_lines", [])
+		if row.status in ("Planned", "In Progress", "On Hold")
+	]
+	if outstanding:
+		frappe.throw(
+			_("Cannot submit for QC — these repairs are not finished yet: {0}. "
+			  "Complete each one (or skip it with a reason) before QC.").format(
+				", ".join(f"{row.repair_solution} ({row.status})" for row in outstanding)
+			),
+			title=_("Repairs Still In Progress"),
+		)
+
 	sr.flags.ignore_validate_update_after_submit = True
 	sr.flags.ignore_mandatory = True
-	for row in sr.get("solution_lines", []):
-		if row.status in ("Planned", "In Progress"):
-			row.status = "Completed"
 	sr.save()
 
 	# Complete any open Job Assignments so QC guard passes. Go through
@@ -2899,6 +2945,39 @@ def complete_qc(sr_name, qc_result) -> dict:
 	_assert_removed_part_details_complete(sr)
 
 	so = frappe.get_doc("Sales Order", sr.service_order)
+	# A pass is a sign-off, so it needs the checklist actually answered. The hub
+	# offers Pass/Fail as soon as the QC step opens, which let a ticket be
+	# certified with the checklist still reading "No QC checklist found".
+	# A Fail stays open — a technician must be able to reject a device without
+	# first ticking every box.
+	if qc_result == "Pass":
+		checks = frappe.get_all(
+			"GoFix QC Checklist",
+			filters={"parent": sr.service_order},
+			fields=["check_name", "result", "is_mandatory"],
+		)
+		if not checks:
+			frappe.throw(
+				_("No QC checklist on this ticket. Submit it for QC from the Repair "
+				  "step so the checklist is raised, then record the results."),
+				title=_("QC Checklist Missing"),
+			)
+		unanswered = [c.check_name for c in checks if not (c.result or "").strip()]
+		if unanswered:
+			frappe.throw(
+				_("QC cannot pass with unanswered checks: {0}.").format(", ".join(unanswered)),
+				title=_("QC Checklist Incomplete"),
+			)
+		failed = [c.check_name for c in checks if (c.result or "") == "Fail"]
+		if failed:
+			frappe.throw(
+				_("These checks are marked Fail, so QC cannot be passed: {0}. "
+				  "Record a QC Fail instead, or re-check them after rework.").format(
+					", ".join(failed)
+				),
+				title=_("Failed Checks Present"),
+			)
+
 	so.db_set("qc_status", qc_result, update_modified=True)
 	so.db_set("qc_checked_by", frappe.session.user, update_modified=False)
 	so.db_set("qc_datetime", now_datetime(), update_modified=False)

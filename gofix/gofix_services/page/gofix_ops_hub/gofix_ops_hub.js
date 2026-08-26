@@ -874,7 +874,13 @@ class GoFixOpsHub {
 	/* ═══════════════════════════════════════════════════════════════════════ */
 	_html_assign(d) {
 		const esc = frappe.utils.escape_html;
-		const sols = (d.solution_lines || []).filter(s => s.status !== "Cancelled");
+		// Match the server's definition of assignable: a Skipped row is not
+		// active work, and offering it pre-checked only sets the operator up
+		// for "Invalid Solution Selection" on submit. Skipped rows are listed
+		// separately below with a pointer to Restart on the Repair step.
+		const all = (d.solution_lines || []).filter(s => s.status !== "Cancelled");
+		const skipped = all.filter(s => s.status === "Skipped");
+		const sols = all.filter(s => s.status !== "Skipped");
 		const assigned = sols.filter(s => s.technician);
 		const unassigned = sols.filter(s => !s.technician);
 		const allDone = sols.length > 0 && unassigned.length === 0;
@@ -929,6 +935,13 @@ class GoFixOpsHub {
 			</div>
 		`).join("");
 
+		const skippedHtml = skipped.length ? `
+			<div class="text-muted" style="font-size:12px;margin:6px 0 0 4px">
+				<i class="fa fa-forward"></i> ${__("Skipped (not assignable)")}:
+				${skipped.map(s => esc(s.repair_solution)).join(", ")}
+				— ${__("use Restart on the Repair step to bring one back")}
+			</div>` : "";
+
 		const progressPct = sols.length ? Math.round((assigned.length / sols.length) * 100) : 0;
 
 		return `
@@ -962,6 +975,7 @@ class GoFixOpsHub {
 							<span style="font-weight:400;font-size:11px;color:var(--text-muted);margin-left:8px">${__("Select solutions & assign a technician")}</span>
 						</div>
 						${unassignedHtml}
+				${skippedHtml}
 						<div style="display:flex;gap:10px;align-items:flex-end;margin-top:12px;padding-top:10px;border-top:1px solid var(--border-color)">
 							<div style="flex:2">
 								<label class="goh-field-label" style="font-size:11px">${__("Technician")}</label>

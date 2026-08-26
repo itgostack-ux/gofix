@@ -1484,11 +1484,22 @@ def _solution_rows_for_assignment(sr, row_names=None) -> list:
 	selected = [row for row in rows if row.name in requested]
 	missing = requested - {row.name for row in selected}
 	if missing:
+		# Name the solution and say WHY it is not assignable — a child-row hash
+		# like "al24i2n8e6" tells the operator nothing. The usual cause is a
+		# stale browser tab: the row was Skipped/Cancelled after the page loaded.
+		by_name = {row.name: row for row in (sr.get("solution_lines") or [])}
+		described = []
+		for name in sorted(missing):
+			row = by_name.get(name)
+			if row:
+				described.append(_("{0} (status: {1})").format(row.repair_solution, _(row.status)))
+			else:
+				described.append(_("a row that no longer exists"))
 		frappe.throw(
-			_("Selected solution rows are not active on {0}: {1}").format(
-				sr.name, ", ".join(sorted(missing))
-			),
-			title=_("Invalid Solution Selection"),
+			_("These solutions on {0} can no longer be assigned: {1}. "
+			  "Refresh the page — a Skipped solution can be brought back with "
+			  "Restart on the Repair step.").format(sr.name, "; ".join(described)),
+			title=_("Solution Not Assignable"),
 		)
 	return selected
 

@@ -140,6 +140,7 @@ def _seed_spare_grades():
 
 
 def _seed_pricing_rules():
+	_unscope_seeded_rules()
 	existing = {
 		(r.repair_solution, r.device_brand or "")
 		for r in frappe.get_all(
@@ -170,10 +171,36 @@ def _seed_pricing_rules():
 	frappe.logger("gofix").info(f"GoFix: created {created} pricing rule(s)")
 
 
+def _unscope_seeded_rules():
+	"""Blank the company on rules this patch created before the fix.
+
+	Only touches rows whose name matches the seeded pattern, so a rule an admin
+	deliberately scoped to one company is left alone.
+	"""
+	names = [
+		f"{sol} — {brand}"[:140]
+		for sol in RATE_CARD
+		for brand in ("Standard",) + PREMIUM_BRANDS
+	]
+	rows = frappe.get_all(
+		"GoFix Pricing Rule",
+		filters={"rule_name": ("in", names), "company": ("is", "set")},
+		pluck="name",
+	)
+	for name in rows:
+		frappe.db.set_value("GoFix Pricing Rule", name, "company", None, update_modified=False)
+	if rows:
+		frappe.logger("gofix").info(f"GoFix: unscoped {len(rows)} seeded pricing rule(s)")
+
+
 def _make_rule(solution, issue_category, brand, labour, priority):
 	doc = frappe.new_doc("GoFix Pricing Rule")
 	doc.rule_name = f"{solution} — {brand or 'Standard'}"[:140]
 	doc.is_active = 1
+	# Leave company blank so the card applies to every company. new_doc()
+	# otherwise inherits the session default, which silently scopes the rule to
+	# one company and makes every other company's tickets price at zero.
+	doc.company = COMPANY_AGNOSTIC
 	doc.issue_category = issue_category
 	doc.repair_solution = solution
 	if brand:

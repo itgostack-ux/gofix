@@ -134,8 +134,16 @@ doc_events = {
 	},
 	"Sales Invoice": {
 		"before_insert": "gofix.overrides.sales_invoice.resolve_gofix_links",
-		"on_submit": "gofix.overrides.sales_invoice.update_service_request_on_invoice",
+		"on_submit": [
+			"gofix.overrides.sales_invoice.update_service_request_on_invoice",
+			"gofix.spare_lifecycle.on_sales_invoice_update",
+		],
+		# Outstanding changes here when a payment is allocated against the bill.
+		"on_update_after_submit": "gofix.spare_lifecycle.on_sales_invoice_update",
 		"on_cancel": "gofix.overrides.sales_invoice.update_service_request_on_invoice"
+	},
+	"Payment Entry": {
+		"on_submit": "gofix.spare_lifecycle.on_payment_entry",
 	},
 	"Delivery Note": {
 		"on_submit": "gofix.overrides.delivery_note.update_service_request_on_delivery",
@@ -149,7 +157,10 @@ doc_events = {
 	},
 	"Service Request": {
 		"on_update": "gofix.gofix_services.whatsapp_notifications.on_service_request_update",
-		"on_update_after_submit": "gofix.gofix_services.doctype.service_request.service_request.ensure_service_order_on_accept",
+		"on_update_after_submit": [
+			"gofix.gofix_services.doctype.service_request.service_request.ensure_service_order_on_accept",
+			"gofix.spare_lifecycle.release_holds_on_dead_ticket",
+		],
 	},
 }
 

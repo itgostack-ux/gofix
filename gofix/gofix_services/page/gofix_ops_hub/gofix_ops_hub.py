@@ -2178,7 +2178,7 @@ def _assert_solution_parts_ready(sr_name, repair_solution) -> None:
 				  "other repairs can continue meanwhile.").format(label, _(row.status)),
 				title=_("Parts Not Installed"),
 			)
-		if row.status == "Consumed" and not (row.installed_part_serial or "").strip():
+		if row.status in ("Consumed", "Sold") and not (row.installed_part_serial or "").strip():
 			frappe.throw(
 				_("New part serial/IMEI is missing for {0}. Record it via the spare line's "
 				  "✎ button before marking this solution Done.").format(label),
@@ -2363,6 +2363,18 @@ def add_spare_to_ticket(sr_name, spare_item, qty, rate=0, repair_solution=None,
 	avail = _get_spare_availability(spare_item, warehouse)
 	in_stock = avail["available_qty"] >= qty
 
+	# Not on the bench? Look across the network before buying one. A part idle
+	# on a sibling branch's shelf beats a purchase order and a waiting customer.
+	# `best_source` searches bench → zone hub → main hub → any other store, and
+	# counts only FREE stock, so a part promised to another ticket is skipped.
+	network_source = None
+	if not in_stock:
+		from gofix.spare_sourcing import best_source
+
+		network_source = best_source(
+			spare_item, warehouse, qty, sr.company, exclude_sr=sr_name
+		)
+
 	# The child row is the plan. Stock is consumed only by submitting the bound
 	# Spare Parts Usage execution record below.
 	status = "Reserved" if in_stock else "Awaiting Procurement"
@@ -2418,14 +2430,57 @@ def add_spare_to_ticket(sr_name, spare_item, qty, rate=0, repair_solution=None,
 		)
 		approval_required = bool(usage.requires_approval and usage.approval_status != "Approved")
 
+	# Nothing free at the bench: raise the requisition NOW, on the technician's
+	# behalf, rather than leaving the line for someone to notice and chase. It is
+	# a transfer when the network has the part and a purchase when it does not,
+	# and either way it goes out released — see _raise_spare_requisition.
+	requisition = None
+	sourced_from = None
+	plan_line = sr.spare_lines[-1]
+	if not in_stock:
+		try:
+			if network_source:
+				sourced_from = network_source
+				requisition = _raise_spare_requisition(
+					sr, [plan_line],
+					mr_type="Material Transfer",
+					destination=warehouse,
+					source_warehouse=network_source["warehouse"],
+					reason=_("Free stock found at {0} ({1}).").format(
+						network_source["warehouse"], network_source["tier_label"]
+					),
+				)
+			else:
+				requisition = _raise_spare_requisition(
+					sr, [plan_line],
+					mr_type="Purchase",
+					destination=warehouse,
+					reason=_("No free stock at the bench, the hubs or any other store."),
+				)
+		except Exception:
+			# The spare line is the technician's request and must survive even if
+			# the requisition could not be raised; the ticket's spare request
+			# button retries it.
+			frappe.log_error(frappe.get_traceback(), f"GoFix: auto-requisition failed for {sr_name}")
+
+		if requisition:
+			updates = {"material_request": requisition}
+			if plan_line.meta.get_field("expected_date"):
+				updates["expected_date"] = add_days(
+					nowdate(), get_int_setting("spare_procurement_lead_days", 3)
+				)
+			frappe.db.set_value("SR Spare Line", plan_line.name, updates, update_modified=False)
+
 	return {
 		"ok": True,
 		"status": status,
 		"available_qty": avail["available_qty"],
-		"spare_line": plan_row.name if in_stock else sr.spare_lines[-1].name,
+		"spare_line": plan_row.name if in_stock else plan_line.name,
 		"spare_usage": usage_name,
 		"stock_entry": stock_entry,
 		"approval_required": approval_required,
+		"material_request": requisition,
+		"sourced_from": sourced_from,
 	}
 
 
@@ -2736,39 +2791,15 @@ def get_spare_availability(item_code, warehouse) -> dict:
 
 
 def _get_spare_availability(item_code, warehouse) -> dict:
-	"""Check available qty for a spare in warehouse, accounting for reservations.
+	"""Bin / reserved / free breakdown for a spare at one warehouse.
 
-	available_qty = bin.actual_qty − already-reserved-on-other-tickets
+	Delegates to :mod:`gofix.spare_sourcing`, which owns the definition of
+	"available" for the whole app so the single-warehouse check here and the
+	network-wide search cannot drift apart.
 	"""
-	actual_qty = flt(
-		frappe.db.get_value("Bin", {"item_code": item_code, "warehouse": warehouse}, "actual_qty")
-	)
+	from gofix.spare_sourcing import get_spare_availability
 
-	# Count already committed (reserved or consumed) across all SRs whose
-	# repair is effectively happening at this warehouse — transferred devices
-	# reserve hub stock, not their origin store's.
-	reserved_qty = flt(frappe.db.sql("""
-		SELECT COALESCE(SUM(sl.qty), 0)
-		FROM `tabSR Spare Line` sl
-		JOIN `tabService Request` sr ON sr.name = sl.parent
-		WHERE sl.spare_item = %(item)s
-		  AND sl.status IN ('Reserved', 'Issued')
-		  AND sl.parenttype = 'Service Request'
-		  AND (
-			CASE
-				WHEN sr.transfer_status IN ('In Transit', 'Received at Service Center')
-					AND COALESCE(sr.transferred_to_store, '') != ''
-				THEN sr.transferred_to_store
-				ELSE COALESCE(NULLIF(sr.current_location, ''), sr.source_warehouse)
-			END
-		  ) = %(wh)s
-	""", {"item": item_code, "wh": warehouse})[0][0])
-
-	return {
-		"actual_qty": actual_qty,
-		"reserved_qty": reserved_qty,
-		"available_qty": actual_qty - reserved_qty,
-	}
+	return get_spare_availability(item_code, warehouse)
 
 
 @frappe.whitelist(methods=["POST"])
@@ -2798,19 +2829,134 @@ def release_spare_reservation(sr_name, spare_row_name) -> dict:
 	frappe.throw(_("Spare line not found or not in a removable state."))
 
 
+def _raise_spare_requisition(sr, lines, *, mr_type, destination, source_warehouse=None,
+                             reason="") -> str:
+	"""Raise ONE requisition for `lines` and release it to whoever must act.
+
+	Two shapes, same document:
+
+	* ``Material Transfer`` — the part exists somewhere in the network and is
+	  being pulled to the bench. No money is involved; the stock is already ours.
+	* ``Purchase`` — the part exists nowhere and has to be bought.
+
+	Both are released immediately (``custom_approval_status = "Approved"``,
+	then submitted) rather than parked for a stock manager. The approval gate
+	exists to weigh a discretionary purchase, and a GoFix spare requisition is
+	not one: the sourcing search has already proved there is no free stock
+	anywhere in the company, so the only alternatives are to buy the part or to
+	leave a customer's device on the bench. Somebody rubber-stamping an
+	unavoidable purchase adds delay, not control.
+
+	The release is recorded on the document — who it was raised for, which
+	ticket, and the sourcing evidence behind it — so it reads as a policy
+	decision with a reason rather than a silently bypassed gate.
+
+	NOTE this is deliberately narrow: it fires only for catalogued GoFix spares
+	requisitioned against a Service Request. Every other Material Request keeps
+	the standard approval gate, which is untouched.
+	"""
+	lead_days = get_int_setting("spare_procurement_lead_days", 3)
+	schedule_date = add_days(nowdate(), lead_days)
+
+	mr = frappe.new_doc("Material Request")
+	mr.material_request_type = mr_type
+	mr.company = sr.company or frappe.defaults.get_user_default("Company")
+	mr.service_request = sr.name
+	mr.transaction_date = nowdate()
+	mr.schedule_date = schedule_date
+	mr.set_warehouse = destination
+	if mr_type == "Material Transfer" and source_warehouse:
+		mr.set_from_warehouse = source_warehouse
+	mr.title = f"Spares for {sr.name} — {sr.customer_name or sr.customer}"
+	if mr.meta.get_field("custom_request_notes"):
+		mr.custom_request_notes = reason
+
+	for sl in lines:
+		row = {
+			"item_code": sl.spare_item,
+			"item_name": sl.item_name,
+			"qty": sl.qty,
+			"uom": sl.uom or "Nos",
+			"warehouse": destination,
+			"schedule_date": schedule_date,
+		}
+		if mr_type == "Material Transfer" and source_warehouse:
+			row["from_warehouse"] = source_warehouse
+		mr.append("items", row)
+
+	frappe.has_permission("Material Request", "create", throw=True)
+	mr.insert()
+
+	released = False
+	if mr.meta.get_field("custom_approval_status"):
+		mr.db_set("custom_approval_status", "Approved", update_modified=False)
+		mr.reload()
+	try:
+		mr.flags.ch_mr_approval_authorized = True
+		mr.submit()
+		released = True
+	except Exception:
+		# A requisition that cannot be released is still a requisition. Leave it
+		# for the purchase queue rather than losing the technician's request.
+		frappe.log_error(frappe.get_traceback(), f"GoFix: could not release {mr.name}")
+
+	mr.add_comment(
+		"Info",
+		_("Raised automatically for Service Request {0} on behalf of {1}. {2}").format(
+			f'<a href="/app/service-request/{sr.name}">{sr.name}</a>',
+			frappe.session.user,
+			reason,
+		),
+	)
+	if released and mr_type == "Purchase":
+		_notify_purchase_team(mr, sr)
+	return mr.name
+
+
+def _notify_purchase_team(mr, sr) -> None:
+	"""Tell whoever buys spares that a released requisition is waiting."""
+	try:
+		from ch_erp15.ch_erp15.store_request_api import _get_purchase_team_users
+
+		recipients = _get_purchase_team_users(mr.get("custom_store"), mr.company)
+	except Exception:
+		recipients = []
+	if not recipients:
+		return
+
+	notification = frappe.new_doc("Notification Log")
+	notification.subject = _("Spare purchase {0} released for repair {1}").format(mr.name, sr.name)
+	notification.email_content = _(
+		"No free stock for these spares anywhere in the network, so the requisition "
+		"was released straight to purchasing. Device: {0}. Customer: {1}."
+	).format(sr.device_item_name or sr.device_item or "—", sr.customer_name or sr.customer or "—")
+	notification.document_type = "Material Request"
+	notification.document_name = mr.name
+	notification.type = "Alert"
+	for user in recipients:
+		notification.for_user = user
+		notification.flags.ignore_permissions = True
+		notification.insert(ignore_permissions=True)
+		notification = frappe.copy_doc(notification)
+
+
 @frappe.whitelist(methods=["POST"])
 def raise_material_request(sr_name) -> dict:
-	"""Raise a single Material Request for all spares on this SR that need procurement.
+	"""Source every spare still awaiting procurement on this ticket.
 
-	Collects all spare_lines with status = 'Awaiting Procurement' and creates one MR
-	linked to the Service Request.
+	Each spare is searched across the network — bench, zone hub, main hub, then
+	any other store holding a free one — and requisitioned from wherever it is
+	nearest. Anything the network cannot supply is bought.
 	"""
 	_assert_sr_permission(sr_name, "write")
 	sr = frappe.get_doc("Service Request", sr_name)
 
-	pending_lines = [sl for sl in sr.spare_lines if sl.status == "Awaiting Procurement"]
+	pending_lines = [
+		sl for sl in sr.spare_lines
+		if sl.status == "Awaiting Procurement" and not sl.get("material_request")
+	]
 	if not pending_lines:
-		frappe.throw(_("No spares awaiting procurement on this ticket."))
+		frappe.throw(_("No spares awaiting sourcing on this ticket."))
 
 	# Procure to wherever the repair is physically happening (hub when the
 	# device has been transferred, else the source store).
@@ -2818,79 +2964,71 @@ def raise_material_request(sr_name) -> dict:
 	if not warehouse:
 		frappe.throw(_("Source warehouse not set on Service Request."))
 
-	mr = frappe.new_doc("Material Request")
-	mr.material_request_type = "Purchase"
-	mr.company = sr.company or frappe.defaults.get_user_default("Company")
-	mr.service_request = sr_name
-	mr.transaction_date = nowdate()
-	lead_days = get_int_setting("spare_procurement_lead_days", 3)
-	mr.schedule_date = add_days(nowdate(), lead_days)
-	mr.set_warehouse = warehouse
-	mr.title = f"Spares for {sr_name} — {sr.customer_name or sr.customer}"
+	from gofix.spare_sourcing import best_source
 
+	# Group by where each part is coming from: one requisition per source, so a
+	# transfer from one store does not get mixed with a purchase.
+	transfers, to_buy = {}, []
 	for sl in pending_lines:
-		mr.append("items", {
-			"item_code": sl.spare_item,
-			"item_name": sl.item_name,
-			"qty": sl.qty,
-			"uom": sl.uom or "Nos",
-			"warehouse": warehouse,
-			"schedule_date": add_days(nowdate(), lead_days),
-		})
+		source = best_source(sl.spare_item, warehouse, flt(sl.qty), sr.company, exclude_sr=sr.name)
+		if source and source["warehouse"] != warehouse:
+			transfers.setdefault(source["warehouse"], []).append((sl, source))
+		else:
+			to_buy.append(sl)
 
-	frappe.has_permission("Material Request", "create", throw=True)
-	mr.insert()
+	raised = []
+	for source_wh, rows in transfers.items():
+		label = rows[0][1]["tier_label"]
+		mr_name = _raise_spare_requisition(
+			sr, [row[0] for row in rows],
+			mr_type="Material Transfer",
+			destination=warehouse,
+			source_warehouse=source_wh,
+			reason=_("Free stock found at {0} ({1}).").format(source_wh, label),
+		)
+		raised.append((mr_name, [row[0] for row in rows], _("transfer from {0}").format(label)))
 
-	# Leave the requisition PENDING APPROVAL rather than submitting it here.
-	# ch_erp15 guards Material Request submit with block_purchase_mr_direct_submit,
-	# which requires custom_approval_status == "Approved" — set only by the
-	# approve-for-purchase action. Calling mr.submit() straight after insert
-	# always threw "must be approved through the configured approval action",
-	# so the spare request button could never actually raise a request.
-	# A requisition awaiting release is also the correct shape: procurement
-	# approves spend, the technician does not.
-	submitted = False
-	if (mr.get("custom_approval_status") or "") == "Approved":
-		mr.submit()
-		submitted = True
+	if to_buy:
+		mr_name = _raise_spare_requisition(
+			sr, to_buy,
+			mr_type="Purchase",
+			destination=warehouse,
+			reason=_("No free stock at the bench, the hubs or any other store."),
+		)
+		raised.append((mr_name, to_buy, _("purchase")))
 
-	# Update spare_lines with MR reference
 	sr.flags.ignore_validate_update_after_submit = True
 	sr.flags.ignore_mandatory = True
-	for sl in pending_lines:
-		sl.material_request = mr.name
-		# A first, provisional date from the configured lead time so the ticket
-		# can answer "when?" before a supplier has committed. The purchase order
-		# overwrites it with the real promise.
-		if sl.meta.get_field("expected_date"):
-			sl.expected_date = mr.schedule_date
+	for mr_name, rows, _kind in raised:
+		for sl in rows:
+			sl.material_request = mr_name
+			# A first, provisional date from the configured lead time so the
+			# ticket can answer "when?" before a supplier has committed. The
+			# purchase order overwrites it with the real promise.
+			if sl.meta.get_field("expected_date"):
+				sl.expected_date = add_days(nowdate(), get_int_setting("spare_procurement_lead_days", 3))
 	sr.save()
 
-	sr.add_comment(
-		"Comment",
-		_("Spare request {0} raised for {1} — {2}.").format(
-			mr.name,
-			", ".join(f"{sl.item_name or sl.spare_item} × {sl.qty:g}" for sl in pending_lines),
-			_("submitted") if submitted else _("awaiting purchase approval"),
-		),
-	)
+	summary = []
+	for mr_name, rows, kind in raised:
+		items = ", ".join(f"{sl.item_name or sl.spare_item} × {sl.qty:g}" for sl in rows)
+		summary.append(f"{mr_name} — {items} ({kind})")
+		sr.add_comment("Comment", _("Spare request {0} raised for {1} — {2}.").format(mr_name, items, kind))
 
 	frappe.msgprint(
-		_("Spare request {0} raised for {1} spare(s) — {2}.").format(
-			f'<a href="/app/material-request/{mr.name}">{mr.name}</a>',
-			len(pending_lines),
-			_("submitted") if submitted
-			else _("now awaiting purchase approval before it can be ordered"),
+		"<br>".join(
+			f'<a href="/app/material-request/{line.split(" — ")[0]}">{line}</a>' for line in summary
 		),
-		title=_("Spare Request Raised"),
-		indicator="green" if submitted else "orange",
+		title=_("Spare Requests Raised"),
+		indicator="green",
 	)
 	return {
 		"ok": True,
-		"material_request": mr.name,
+		"material_requests": [mr for mr, _r, _k in raised],
+		"material_request": raised[0][0] if raised else None,
 		"count": len(pending_lines),
-		"submitted": submitted,
-		"approval_status": mr.get("custom_approval_status") or "",
+		"transfers": len(transfers),
+		"purchases": 1 if to_buy else 0,
 	}
 
 

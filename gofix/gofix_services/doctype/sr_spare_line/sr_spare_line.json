@@ -106,7 +106,7 @@
    "fieldname": "removed_part_serial",
    "fieldtype": "Data",
    "label": "Removed Part Serial (Old)",
-   "description": "Serial/IMEI of the part taken OUT of the device (KBB) \u2014 drives defective-return credit",
+   "description": "Serial/IMEI of the part taken OUT of the device (KBB) — drives defective-return credit",
    "read_only": 1
   },
   {
@@ -114,7 +114,7 @@
    "fieldtype": "Select",
    "label": "Removed Part Condition",
    "options": "\nGood\nFaulty\nDamaged\nScrap",
-   "description": "Condition of the part taken out \u2014 drives return-credit disposition",
+   "description": "Condition of the part taken out — drives return-credit disposition",
    "read_only": 1
   },
   {
@@ -133,7 +133,7 @@
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "Status",
-   "options": "Pending\nReserved\nIssued\nConsumed\nReturned\nDamaged\nAwaiting Procurement\nIn Transit",
+   "options": "Pending\nReserved\nIssued\nConsumed\nReturned\nDamaged\nAwaiting Procurement\nIn Transit\nSold",
    "read_only": 1
   },
   {
@@ -163,7 +163,7 @@
    "options": "Purchase Order",
    "read_only": 1,
    "insert_after": "material_request",
-   "description": "Set when the requisition is ordered \u2014 this is what makes the part In Transit."
+   "description": "Set when the requisition is ordered — this is what makes the part In Transit."
   },
   {
    "fieldname": "expected_date",

@@ -2044,7 +2044,9 @@ def missing_removed_part_details(sr) -> list:
 		sr = frappe.get_doc("Service Request", sr)
 	missing = []
 	for row in sr.get("spare_lines", []):
-		if row.status != "Consumed":
+		# "Sold" is "Consumed" that has been billed and paid — the part was still
+		# fitted, so it still owes a serial.
+		if row.status not in ("Consumed", "Sold"):
 			continue
 		item_flags = frappe.db.get_value(
 			"Item", row.spare_item, ["is_stock_item", "gofix_universal_spare"], as_dict=True

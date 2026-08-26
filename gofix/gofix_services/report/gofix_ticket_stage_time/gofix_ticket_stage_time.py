@@ -241,9 +241,9 @@ def _spare_flow(names):
 	):
 		rec = out.setdefault(row.parent, {"req": 0, "recd": 0, "fitted": 0})
 		rec["req"] += 1
-		if row.status in ("Reserved", "Issued", "Consumed"):
+		if row.status in ("Reserved", "Issued", "Consumed", "Sold"):
 			rec["recd"] += 1
-		if row.status == "Consumed":
+		if row.status in ("Consumed", "Sold"):
 			rec["fitted"] += 1
 	return {k: f"{v['req']} / {v['recd']} / {v['fitted']}" for k, v in out.items()}
 

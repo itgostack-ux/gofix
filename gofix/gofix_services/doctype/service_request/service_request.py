@@ -1190,7 +1190,7 @@ class ServiceRequest(Document):
 			items.append(row)
 
 		if items:
-			return items
+			return self._apply_final_cost(items)
 
 		if self.service_order:
 			service_order = frappe.get_doc("Sales Order", self.service_order)
@@ -1208,6 +1208,45 @@ class ServiceRequest(Document):
 					item_row["so_detail"] = row.name
 				items.append(item_row)
 
+		return self._apply_final_cost(items)
+
+	def _apply_final_cost(self, items):
+		"""Make the invoice total match an agreed final cost.
+
+		``final_cost`` is the negotiated price — a goodwill reduction, or a
+		figure the customer accepted after the estimate moved. The Ops Hub has
+		always shown it as "Cost to Customer", but the invoice was built purely
+		from the estimate lines, so a ticket set to 9,000 still billed 3,500.
+		The screen and the invoice disagreed, and the invoice won silently.
+
+		The lines are scaled proportionally rather than collapsed into one, so
+		the labour/spares split — and the separate income accounts this class
+		deliberately routes them to — survive the adjustment. Rounding lands on
+		the last line so the total is exact to the paisa.
+		"""
+		final_cost = flt(self.get("final_cost") or 0)
+		if not final_cost or not items:
+			return items
+
+		base_total = sum(flt(row.get("rate")) * flt(row.get("qty") or 1) for row in items)
+		if flt(base_total, 2) == flt(final_cost, 2):
+			return items
+
+		if not base_total:
+			# Nothing to scale against — bill it as a single agreed amount.
+			items[0]["qty"] = 1
+			items[0]["rate"] = final_cost
+			return items
+
+		factor = final_cost / base_total
+		running = 0.0
+		for row in items[:-1]:
+			qty = flt(row.get("qty") or 1)
+			row["rate"] = flt(flt(row.get("rate")) * factor, 2)
+			running += row["rate"] * qty
+		last = items[-1]
+		last_qty = flt(last.get("qty") or 1) or 1
+		last["rate"] = flt((final_cost - running) / last_qty, 2)
 		return items
 
 	def _set_optional_field(self, fieldname, value):

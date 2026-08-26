@@ -1740,9 +1740,36 @@ def advance_to_repair(sr_name) -> dict:
 	_assert_sr_permission(sr_name, "write")
 
 	sr = frappe.get_doc("Service Request", sr_name)
-	unassigned = [row for row in sr.get("solution_lines", []) if not row.technician and row.status != "Cancelled"]
+	# Skipped is not outstanding work — the same exclusion the Assign step and
+	# _solution_rows_for_assignment use. Counting it here made a ticket showing
+	# "1/1 assigned, 100%" refuse to advance.
+	outstanding = [
+		row for row in sr.get("solution_lines", [])
+		if row.status not in ("Cancelled", "Skipped")
+	]
+	assigned = [row for row in outstanding if row.technician]
+	unassigned = [row for row in outstanding if not row.technician]
+
+	# A repair is not one indivisible job. Different technicians take different
+	# solutions at different times — an L1 does the diagnosis while the screen
+	# is still on order, an L3 picks up the board work tomorrow. Requiring the
+	# whole ticket to be assigned before anyone may start is not how a service
+	# desk runs, so only a ticket with NOTHING assigned is held back.
+	if not assigned:
+		frappe.throw(
+			_("Assign at least one solution to a technician before starting repair."),
+			title=_("Nothing Assigned Yet"),
+		)
 	if unassigned:
-		frappe.throw(_("All solutions must be assigned before proceeding to repair."), title=_("Validation Error"))
+		frappe.msgprint(
+			_("Starting repair with {0} of {1} solutions assigned. Still unassigned: {2}. "
+			  "These can be assigned to another technician at any time.").format(
+				len(assigned), len(outstanding),
+				", ".join(row.repair_solution for row in unassigned),
+			),
+			title=_("Partially Assigned"),
+			indicator="orange",
+		)
 
 	_log_ops_stage(sr_name, "assign", "repair")
 	_mark_sr_in_service(sr_name)

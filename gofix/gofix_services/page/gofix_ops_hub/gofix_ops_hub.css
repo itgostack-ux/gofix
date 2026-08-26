@@ -795,3 +795,9 @@
 .goh-est-table th, .goh-est-table td { padding: 4px 8px; border-bottom: 1px solid var(--goh-border); }
 .goh-est-table thead th { color: var(--goh-muted); font-weight: 600; }
 .goh-est-table tfoot th { border-top: 2px solid var(--goh-border); border-bottom: none; color: var(--goh-text); }
+
+/* Tell the browser which way to render native UI it draws itself — select
+   popups, scrollbars, date pickers. Without this the OS/GTK preference wins,
+   which is how a dark popup ended up on a light page. */
+.goh-root { color-scheme: light; }
+[data-theme="dark"] .goh-root { color-scheme: dark; }

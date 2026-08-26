@@ -717,7 +717,7 @@ class GoFixOpsHub {
 
 		const issueRows = activeIssues.map((row, i) => `
 			<tr data-name="${esc(row.name)}" data-idx="${i}">
-				<td><input class="form-control input-xs goh-issue-cat" value="${esc(row.issue_category)}" list="goh-cat-list" placeholder="${__("Issue Category")}"></td>
+				<td><select class="form-control input-xs goh-issue-cat" data-selected="${esc(row.issue_category)}"><option value="">${__("Issue Category")}</option></select></td>
 				<td>
 					<select class="form-control input-xs goh-issue-reporter">
 						<option value="Technician" ${row.reported_by === "Technician" ? "selected" : ""}>${__("Technician")}</option>
@@ -752,7 +752,6 @@ class GoFixOpsHub {
 		` : "";
 
 		return `
-			<datalist id="goh-cat-list"></datalist>
 			<div class="goh-section">
 				<div class="goh-section-title">
 					<i class="fa fa-search"></i> ${__("Technical Analysis")}
@@ -1476,9 +1475,13 @@ class GoFixOpsHub {
 		/* ── Analysis ────────────────────────────────────────────────── */
 		if (activeStage === "analysis") {
 			// Load categories
+			// A native <datalist> popup is drawn by the browser, not the page, so
+			// it ignores the desk theme entirely and renders dark on a light page.
+			// A <select> is browser-themed consistently, and Issue Category is a
+			// closed list anyway — free text only invited typos.
 			frappe.xcall(`${API}.get_issue_categories`).then(cats => {
-				const opts = (cats || []).map(c => `<option value="${frappe.utils.escape_html(c)}">`).join("");
-				this.parent.find("#goh-cat-list").html(opts);
+				self._issue_categories = cats || [];
+				self._fill_issue_category_selects();
 			});
 
 			content.find("#goh-add-issue").on("click", () => {
@@ -1487,13 +1490,15 @@ class GoFixOpsHub {
 				const idx = tbody.find("tr").length;
 				tbody.append(`
 					<tr data-idx="${idx}">
-						<td><input class="form-control input-xs goh-issue-cat" list="goh-cat-list" placeholder="${__("Issue Category")}"></td>
+						<td><select class="form-control input-xs goh-issue-cat"><option value="">${__("Issue Category")}</option></select></td>
 						<td><select class="form-control input-xs goh-issue-reporter"><option value="Technician">${__("Technician")}</option><option value="Customer">${__("Customer")}</option></select></td>
 						<td><input class="form-control input-xs goh-issue-desc" placeholder="${__("Description")}"></td>
 						<td></td>
 						<td><button class="btn btn-xs btn-danger goh-issue-remove"><i class="fa fa-trash"></i></button></td>
 					</tr>
 				`);
+				self._fill_issue_category_selects();
+				tbody.find("tr:last .goh-issue-cat").focus();
 			});
 
 			content.on("click", ".goh-issue-remove", function () {
@@ -2176,6 +2181,29 @@ class GoFixOpsHub {
 	/* ═══════════════════════════════════════════════════════════════════════ */
 	/*  Helper Methods                                                       */
 	/* ═══════════════════════════════════════════════════════════════════════ */
+	_fill_issue_category_selects() {
+		/* Options come from the server once, then every Issue Category <select>
+		   on screen is (re)filled. data-selected carries the row's saved value so
+		   refilling never silently blanks an existing issue. */
+		const cats = this._issue_categories || [];
+		this.parent.find("select.goh-issue-cat").each(function () {
+			const $sel = $(this);
+			const chosen = $sel.val() || $sel.data("selected") || "";
+			const placeholder = $sel.find('option[value=""]').text() || __("Issue Category");
+			$sel.html(
+				`<option value="">${frappe.utils.escape_html(placeholder)}</option>` +
+				cats.map(c => {
+					const v = frappe.utils.escape_html(c);
+					return `<option value="${v}"${c === chosen ? " selected" : ""}>${v}</option>`;
+				}).join("")
+			);
+			if (chosen && !cats.includes(chosen)) {
+				// keep a value the catalogue no longer offers rather than dropping it
+				$sel.append(`<option value="${frappe.utils.escape_html(chosen)}" selected>${frappe.utils.escape_html(chosen)}</option>`);
+			}
+		});
+	}
+
 	_collect_issues() {
 		const issues = [];
 		this.parent.find("#goh-issue-tbody tr").each(function () {

@@ -1176,15 +1176,38 @@ class GoFixOpsHub {
 
 		// Technician info — the current device holder glows; others queue
 		const activeAssigns = (d.assignments || []).filter(a => a.assignment_status !== "Cancelled");
+
+		// Hands-on hours per technician, from the custody log — the spells when
+		// they actually had the device, not the elapsed age of the ticket. A
+		// still-open spell counts up to now so a job in hand shows live time.
+		const heldHours = {};
+		(d.custody_log || []).forEach(c => {
+			const who = c.technician || c.technician_name;
+			if (!who) return;
+			// an open spell has no stored hours yet — count it up to now
+			const hrs = c.released_at
+				? flt(c.hours)
+				: (c.taken_at ? Math.max(0, moment().diff(moment(c.taken_at), "minutes") / 60) : 0);
+			heldHours[who] = (heldHours[who] || 0) + hrs;
+		});
+
 		const techInfo = activeAssigns.map(a => {
 			const holds = a.assignment_status === "In Progress";
+			const hrs = heldHours[a.service_engineer] || flt(a.actual_hours);
+			const hoursBadge = hrs
+				? ` <span class="goh-badge badge-muted" title="${__("Hands-on time recorded against this technician")}">${hrs.toFixed(1)}h</span>`
+				: "";
 			return `
 			<span class="goh-assign-chip-sm" style="${holds ? "background:var(--green-100,#dcfce7);border:1.5px solid var(--green-600,#16a34a);font-weight:600" : ""}">
 				<i class="fa ${holds ? "fa-mobile" : "fa-user"}" ${holds ? 'style="color:var(--green-600,#16a34a)"' : ""}></i>
 				${esc(a.engineer_display)}
 				${holds ? `<span class="goh-badge badge-green">${__("has device")}</span>` : `<span class="goh-badge badge-muted">${esc(a.assignment_status)}</span>`}
+				${hoursBadge}
 			</span>`;
 		}).join("");
+
+		const totalHeld = Object.values(heldHours).reduce((a, b) => a + b, 0)
+			|| activeAssigns.reduce((sum, a) => sum + flt(a.actual_hours), 0);
 
 		const custodyRows = (d.custody_log || []).slice(0, 6).map(c => `
 			<div class="small" style="padding:1px 0">
@@ -1198,6 +1221,7 @@ class GoFixOpsHub {
 			<div class="goh-section">
 				<div class="goh-section-title" style="display:flex;align-items:center;gap:8px">
 					<span><i class="fa fa-users"></i> ${__("Technicians")}</span>
+					${totalHeld ? `<span class="goh-badge badge-blue" title="${__("Total hands-on time across every technician who held this device")}"><i class="fa fa-clock-o"></i> ${totalHeld.toFixed(1)}h ${__("hands-on")}</span>` : ""}
 					<span style="flex:1"></span>
 					${activeAssigns.length ? `<button class="btn btn-xs btn-default" id="goh-device-handover" title="${__("Move the physical device to another technician on this ticket (⇄ on a card moves the solution instead)")}"><i class="fa fa-mobile"></i> ${__("Hand Over Device")}</button>` : ""}
 				</div>

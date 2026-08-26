@@ -1203,6 +1203,13 @@ class ServiceRequest(Document):
 					"rate": row.rate,
 					"uom": row.uom,
 				}
+				# Route it like the other two paths do. Without this the fallback
+				# posted repair revenue to the company default (retail "Sales"),
+				# which is exactly what the account split above exists to
+				# prevent — BMTNSI26000099 credited Sales - BM rather than
+				# Service Revenue — Out of Warranty - BM.
+				if labour_account:
+					item_row["income_account"] = labour_account
 				if service_order.docstatus == 1:
 					item_row["sales_order"] = service_order.name
 					item_row["so_detail"] = row.name

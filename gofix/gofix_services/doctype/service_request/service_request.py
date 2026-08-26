@@ -600,9 +600,19 @@ class ServiceRequest(Document):
 	
 	def on_update_after_submit(self):
 		"""Handle post-submission updates - mainly for Accept/Reject"""
-		# If decision changed to Accepted and no service order exists
+		# Raise the Service Order once the job is actually sellable — diagnosed,
+		# repairable, and quoted at a price the customer approved.
+		#
+		# "Accepted" alone is NOT that moment. A device checked in at the counter
+		# is accepted the instant it is handed over, long before anyone knows
+		# what the repair costs, so keying off the decision alone made every save
+		# during Analysis fail on the prerequisite gate. Ask whether the chain is
+		# complete instead, and stay quiet while it isn't.
 		if self.decision == "Accepted" and not self.service_order:
-			self.create_service_order()
+			from gofix.gofix_services.orchestration import can_create_service_order
+
+			if can_create_service_order(self):
+				self.create_service_order()
 
 		if self.is_completed_status() and not self.flags.get("skip_completion_artifacts"):
 			self.ensure_completion_artifacts()
@@ -776,9 +786,20 @@ class ServiceRequest(Document):
 		return bool(row) and not row.has_variants and not row.disabled
 
 	def create_service_order(self):
-		"""Create Service Order (Sales Order) from accepted Service Request"""
-		if self.service_order:
-			frappe.throw(_("Service Order already exists: {0}").format(self.service_order), title=_("Service Request Error"))
+		"""Create the Service Order (Sales Order) for this request, once.
+
+		Idempotent by design: several paths legitimately try to raise the order
+		for the same ticket — the post-submit handler, the accept hook, and
+		estimate approval — and whichever gets there first wins. Re-reading from
+		the database matters because the in-memory doc that calls this is often
+		the STALE one: a hook fired during a nested save already wrote the link.
+		"""
+		existing = self.service_order or frappe.db.get_value(
+			"Service Request", self.name, "service_order"
+		)
+		if existing:
+			self.service_order = existing
+			return existing
 
 		# Enforce: diagnosis → repairability → estimate approval → SO
 		try:
@@ -1873,43 +1894,56 @@ def _get_locked_service_request(service_request):
 	return assert_service_request_access(doc, permission_type="write")
 
 @frappe.whitelist(methods=["POST"])
-def accept_service_request(service_request) -> dict:
-	"""Accept Service Request and create Service Order
-	
-	This method handles accepting submitted Service Requests
+def accept_service_request(service_request) -> str:
+	"""Take the device in and open the job — the ticket moves to Analysis.
+
+	Accepting means the device is now ours to work on. It does NOT mean the job
+	has been priced: nobody has diagnosed it yet, so there is nothing to quote
+	and no order to raise. The Service Order is raised later, at Customer
+	Confirmation, once analysis and solutions have produced a real figure.
+
+	This used to call ``create_service_order()`` unconditionally and therefore
+	always failed — the SO gate requires confirmed analysis, which by definition
+	has not happened at acceptance — so the Accept button threw on every
+	un-diagnosed ticket. The ``draft → analysis`` timeline entry at the end was
+	always the intent; only the forced order contradicted it.
+
+	Returns the Service Order name when one legitimately exists (a ticket that
+	was already diagnosed and approved), otherwise an empty string.
 	"""
 	doc = frappe.get_doc("Service Request", service_request)
 	doc.check_permission("write")
-	
-	# Check if already accepted
-	if doc.decision == "Accepted":
-		if doc.service_order:
-			frappe.msgprint(_("Service Request already accepted. Service Order: {0}").format(doc.service_order))
-			return doc.service_order
-	
+
+	if doc.decision == "Accepted" and doc.service_order:
+		frappe.msgprint(_("Service Request already accepted. Service Order: {0}").format(doc.service_order))
+		return doc.service_order
+
 	# Update decision using db_set to work with submitted docs
 	doc.db_set("decision", "Accepted", update_modified=True)
 	doc.db_set("accepted_by", frappe.session.user, update_modified=False)
 	doc.db_set("accepted_datetime", frappe.utils.now(), update_modified=False)
 	doc.db_set("walkin_status", "Accepted", update_modified=False)  # Customer left device
 	_safe_set_sr_workflow_state(doc, "Accepted")
-	
-	# Create Service Order
+
+	# Raise the order only if this ticket is genuinely ready for one.
 	doc.reload()
-	doc.create_service_order()
-	
+	from gofix.gofix_services.orchestration import can_create_service_order
+
+	if not doc.service_order and can_create_service_order(doc):
+		doc.create_service_order()
+
 	# Acceptance immediately enters the operational In Service state.
 	doc.db_set("decision", "In Service", update_modified=False)
 	_safe_set_sr_workflow_state(doc, "In Service")
-	
+
 	# Log intake → analysis transition for ops timeline
 	try:
 		from gofix.gofix_services.page.gofix_ops_hub.gofix_ops_hub import _log_ops_stage
 		_log_ops_stage(service_request, "draft", "analysis")
 	except Exception:
 		frappe.log_error(frappe.get_traceback(), f"Failed to log acceptance timeline for {service_request}")
-	
-	return doc.service_order
+
+	return doc.service_order or ""
 
 @frappe.whitelist(methods=["POST"])
 def reject_service_request(service_request, rejection_reason) -> bool:
@@ -2540,12 +2574,22 @@ def flag_unclaimed_devices(days_threshold=None):
 
 
 def ensure_service_order_on_accept(doc, method=None):
-	"""Hook: guarantee SO exists whenever an SR is accepted.
+	"""Hook: guarantee the SO exists once the job is sellable.
 
-	Catches cases where decision is set via db_set / direct SQL
-	and the class method on_update_after_submit didn't fire.
+	Catches cases where decision is set via db_set / direct SQL and the class
+	method on_update_after_submit didn't fire.
+
+	Gated on the same readiness check as that method: "Accepted" means the
+	device has been taken in, not that it has been diagnosed and quoted, so
+	firing on the decision alone made every save during Analysis blow up on the
+	prerequisite gate.
 	"""
-	if doc.decision == "Accepted" and not doc.service_order:
+	if doc.decision != "Accepted" or doc.service_order:
+		return
+
+	from gofix.gofix_services.orchestration import can_create_service_order
+
+	if can_create_service_order(doc):
 		doc.create_service_order()
 		frappe.logger("gofix").info(
 			f"Auto-created SO for {doc.name} via hook"

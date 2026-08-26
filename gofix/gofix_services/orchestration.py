@@ -699,41 +699,61 @@ def qc_fail_with_issues(service_request, failed_checks_json, new_issues_json=Non
 # 7. FLOW ENFORCEMENT: diagnosis before SO creation
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def validate_so_creation_prerequisites(sr):
-	"""Called before creating a Service Order.
-	Enforces: diagnosis → repairability → estimate → approval → SO.
+def so_creation_blockers(sr) -> list:
+	"""Why this Service Request cannot become a Service Order yet.
+
+	Empty list means the chain diagnosis → repairability → estimate → approval
+	is complete. Returned rather than thrown so callers can ASK without a
+	try/except: catching a ``frappe.throw`` leaves the message in
+	``frappe.message_log`` and it surfaces later as a stray popup.
 	"""
+	blockers = []
 	if not sr.get("analysis_confirmed"):
-		frappe.throw(_(
-			"Cannot create Service Order: Issue analysis has not been confirmed. "
-			"Complete diagnosis in the Ops Hub first."
+		blockers.append(_(
+			"Issue analysis has not been confirmed. Complete diagnosis in the Ops Hub first."
 		))
 
 	repairability = sr.get("repairability_status")
 	if repairability != "Repairable":
-		frappe.throw(_(
-			"Cannot create Service Order: Device repairability not confirmed. "
-			"Current status: {0}"
-		).format(repairability or "Pending Analysis"))
+		blockers.append(_(
+			"Device repairability not confirmed. Current status: {0}"
+		).format(repairability or _("Pending Analysis")))
 
-	# Check latest estimate is approved
 	if sr.get("estimate_approval_pending"):
-		frappe.throw(_(
-			"Cannot create Service Order: Latest estimate is pending customer approval."
-		))
+		blockers.append(_("Latest estimate is pending customer approval."))
 
 	latest_version = sr.get("latest_estimate_version") or 0
 	if latest_version > 0:
-		# Check the latest version is approved
-		approved = False
-		for ev in (sr.get("estimate_versions") or []):
-			if ev.version_number == latest_version and ev.status == "Customer Approved":
-				approved = True
-				break
+		approved = any(
+			ev.version_number == latest_version and ev.status == "Customer Approved"
+			for ev in (sr.get("estimate_versions") or [])
+		)
 		if not approved:
-			frappe.throw(_(
-				"Cannot create Service Order: Estimate version {0} is not approved by customer."
+			blockers.append(_(
+				"Estimate version {0} is not approved by customer."
 			).format(latest_version))
+	# No estimate raised at all is deliberately NOT a blocker: the direct accept
+	# path (store queue, the SR form's Accept button) raises the order first and
+	# quotes afterwards. Tightening that here would break those flows.
+
+	return blockers
+
+
+def can_create_service_order(sr) -> bool:
+	"""Non-throwing readiness check — see :func:`so_creation_blockers`."""
+	return not so_creation_blockers(sr)
+
+
+def validate_so_creation_prerequisites(sr):
+	"""Called before creating a Service Order.
+	Enforces: diagnosis → repairability → estimate → approval → SO.
+	"""
+	blockers = so_creation_blockers(sr)
+	if blockers:
+		frappe.throw(
+			_("Cannot create Service Order:") + "<ul><li>" + "</li><li>".join(blockers) + "</li></ul>",
+			title=_("Service Order Prerequisites"),
+		)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

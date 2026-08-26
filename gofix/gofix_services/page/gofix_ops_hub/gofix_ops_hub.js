@@ -1504,6 +1504,20 @@ class GoFixOpsHub {
 
 		/* ── Draft: accept & create the Service Order from the hub ───── */
 		if (activeStage === "draft") {
+			content.find("#goh-open-job").on("click", (e) => {
+				const btn = $(e.currentTarget);
+				btn.prop("disabled", true).html(`<i class="fa fa-spinner fa-spin"></i> ${__("Opening…")}`);
+				frappe.xcall(`${API}.open_walkin_job`, { sr_name: d.name })
+					.then(() => {
+						frappe.show_alert({ message: __("Job opened — ticket is in Analysis."), indicator: "green" });
+						self._refresh_all();
+					})
+					.catch((err) => {
+						frappe.msgprint({ title: __("Could not open the job"), message: err.message || String(err), indicator: "red" });
+						btn.prop("disabled", false).html(`<i class="fa fa-inbox"></i> ${__("Take In — start Analysis")}`);
+					});
+			});
+
 			content.find("#goh-accept-create-so").on("click", (e) => {
 				const btn = $(e.currentTarget);
 				btn.prop("disabled", true).html(`<i class="fa fa-spinner fa-spin"></i> ${__("Accepting…")}`);
@@ -1634,9 +1648,23 @@ class GoFixOpsHub {
 					});
 			});
 
-			content.find("#goh-mark-confirmed").on("click", () => {
+			content.find("#goh-mark-confirmed").on("click", (e) => {
+				const btn = $(e.currentTarget);
+				btn.prop("disabled", true);
 				frappe.xcall(`${API}.mark_customer_confirmed`, { sr_name: d.name })
-					.then(() => { frappe.show_alert({ message: __("Customer confirmed."), indicator: "green" }); self._refresh_all(); });
+					.then((r) => {
+						frappe.show_alert({
+							message: r && r.service_order
+								? __("Customer confirmed — Service Order {0} raised.", [r.service_order])
+								: __("Customer confirmed."),
+							indicator: "green",
+						});
+						self._refresh_all();
+					})
+					.catch((err) => {
+						frappe.msgprint({ title: __("Could not confirm"), message: err.message || String(err), indicator: "red" });
+						btn.prop("disabled", false);
+					});
 			});
 
 			content.find("#goh-back-to-analysis").on("click", () => {
@@ -2304,9 +2332,17 @@ class GoFixOpsHub {
 				</div>
 			</div>
 			<p class="text-muted" style="font-size:12px">
-				${__("Accepting confirms the diagnosis, records estimate v1 as customer-approved and creates the Service Order — the ticket then moves into Solutions → Assign → Repair. For a detailed diagnosis or a formal estimate approval first, use the stepper stages instead.")}
+				${__("Tickets raised at a counter open themselves — the device is already in hand. This queue is for requests raised remotely, where taking the job is a decision.")}
 			</p>
-			<button class="btn btn-primary" id="goh-accept-create-so">
+			<p class="text-muted" style="font-size:12px">
+				<b>${__("Take In")}</b> ${__("opens the job and sends it to Analysis. Nothing is quoted or ordered yet — the Service Order is raised once the customer confirms the estimate.")}
+				<br>
+				<b>${__("Accept & Create Service Order")}</b> ${__("additionally records estimate v1 as customer-approved and raises the Service Order up front. Use it only when the price is already agreed.")}
+			</p>
+			<button class="btn btn-primary" id="goh-open-job">
+				<i class="fa fa-inbox"></i> ${__("Take In — start Analysis")}
+			</button>
+			<button class="btn btn-default" id="goh-accept-create-so" style="margin-left:6px">
 				<i class="fa fa-check"></i> ${__("Accept & Create Service Order")}
 			</button>
 		</div>`;

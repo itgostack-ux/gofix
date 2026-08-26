@@ -382,6 +382,55 @@ def _derive_stage(sr):
 # ── Ticket Detail ─────────────────────────────────────────────────────────────
 
 @frappe.whitelist(methods=["POST"])
+def open_walkin_job(sr_name) -> dict:
+	"""Open the job for a device handed over at the counter.
+
+	A walk-in has nothing to accept. The customer is standing there, the device
+	is in the drawer, and the intake form they signed IS the authorisation to
+	look at it. Holding the ticket in a Draft queue for someone to press
+	"Accept" adds a wait with no decision behind it.
+
+	Every repair chain works this way — Cashify, uBreakiFix, Apple's GSX,
+	authorised service centres — and so does every ERP with a service module:
+	SAP's notification and Dynamics' service order are both created at check-in
+	and start life in diagnosis. The accept/reject decision belongs to the
+	REMOTE path, where the device has not arrived yet.
+
+	Deliberately does NOT create the Service Order. That is a Sales Order, and
+	no honest ERP raises one before it knows what it is selling — the price is
+	not knowable until the device has been diagnosed and solutions chosen. The
+	SO is born at Customer Confirmation, where it belongs, against a real quote.
+	"""
+	_assert_sr_permission(sr_name, "write")
+	sr = frappe.get_doc("Service Request", sr_name)
+	if sr.docstatus != 1:
+		frappe.throw(_("Submit the Service Request before opening the job."), title=_("Validation Error"))
+	if sr.decision != "Draft":
+		return {"ok": True, "stage": _derive_stage(sr.as_dict()), "already_open": True}
+
+	# Seed the reported issue so Analysis opens with the customer's complaint on
+	# it rather than an empty list.
+	active_issues = [r for r in sr.get("issue_lines", []) if r.status not in ("Deleted", "Cancelled")]
+	if not active_issues and sr.issue_category:
+		sr.flags.ignore_validate_update_after_submit = True
+		sr.flags.ignore_mandatory = True
+		sr.append("issue_lines", {
+			"issue_category": sr.issue_category,
+			"reported_by": "Customer",
+			"status": "Open",
+		})
+		sr.save()
+
+	updates = {"decision": "Accepted", "walkin_status": "Accepted"}
+	if frappe.db.has_column("Service Request", "accepted_by"):
+		updates["accepted_by"] = frappe.session.user
+	sr.db_set(updates, update_modified=False)
+	_log_ops_stage(sr_name, "draft", "analysis")
+
+	return {"ok": True, "stage": "analysis", "service_order": ""}
+
+
+@frappe.whitelist(methods=["POST"])
 def accept_and_create_service_order(sr_name) -> dict:
 	"""Express acceptance from the hub's Draft stage.
 
@@ -390,6 +439,14 @@ def accept_and_create_service_order(sr_name) -> dict:
 	repairability Repairable, estimate v1 recorded as customer-approved —
 	which births the Service Order (SAP notification→order moment). Every
 	step lands in the ops stage log / estimate versions for audit.
+
+	This is the REMOTE path — a request raised by phone or web, where someone
+	has to decide whether to take the job at all. A counter walk-in uses
+	``open_walkin_job`` instead: the device is already in hand.
+
+	The ticket lands in Analysis: the estimate approved here is the acceptance
+	of a job, not of a diagnosis, and the seeded issue is still open. It moves
+	on to Solutions once a technician confirms the analysis.
 	"""
 	_assert_sr_permission(sr_name, "write")
 	sr = frappe.get_doc("Service Request", sr_name)
@@ -419,7 +476,7 @@ def accept_and_create_service_order(sr_name) -> dict:
 		"analysis_confirmed": 1,
 		"repairability_status": "Repairable",
 	}, update_modified=False)
-	_log_ops_stage(sr_name, "draft", "solutions")
+	_log_ops_stage(sr_name, "draft", "analysis")
 
 	from gofix.gofix_services import orchestration
 
@@ -1019,8 +1076,20 @@ def confirm_analysis(sr_name) -> dict:
 
 	sr.save()
 
+	updates = {}
 	if frappe.db.has_column("Service Request", "analysis_confirmed"):
-		frappe.db.set_value("Service Request", sr_name, "analysis_confirmed", 1, update_modified=False)
+		updates["analysis_confirmed"] = 1
+
+	# Confirming the analysis IS the repairability verdict. The technician has
+	# looked at the device and listed work that can be done, so the placeholder
+	# "Pending Analysis" is now answered — and it has to be, because the Service
+	# Order gate reads this field and a repair with no verdict can never be
+	# quoted. A real verdict already recorded (Not Repairable / BER, which take
+	# the spare-recovery path) is never overwritten.
+	if (sr.get("repairability_status") or "Pending Analysis") == "Pending Analysis":
+		updates["repairability_status"] = "Repairable"
+
+	frappe.db.set_value("Service Request", sr_name, updates, update_modified=False)
 
 	_log_ops_stage(sr_name, "analysis", "solutions")
 	return {"ok": True, "stage": "solutions"}
@@ -1141,14 +1210,44 @@ def get_estimate_breakdown(sr_name) -> dict:
 
 @frappe.whitelist(methods=["POST"])
 def mark_customer_confirmed(sr_name) -> dict:
-	"""Mark customer as having confirmed the estimate and issues list."""
+	"""Customer approves the diagnosed quote — this is where the job becomes an order.
+
+	By this point Analysis has confirmed what is wrong and Solutions has chosen
+	the work, so a price finally exists to approve. Recording that approval
+	raises the Service Order (the Sales Order), which is the correct moment for
+	it: SAP's service order and Dynamics' work order are both created when the
+	quotation is accepted, not at check-in.
+
+	A ticket that came through the remote Accept path already has its Service
+	Order, so this only marks the confirmation.
+	"""
 	_assert_sr_permission(sr_name, "write")
+	sr = frappe.get_doc("Service Request", sr_name)
 
 	if frappe.db.has_column("Service Request", "customer_confirmed"):
 		frappe.db.set_value("Service Request", sr_name, "customer_confirmed", 1, update_modified=True)
 
+	service_order = sr.service_order
+	if not service_order:
+		from gofix.gofix_services import orchestration
+
+		# Price the chosen solutions, then record the customer's acceptance of
+		# that figure. Approval is what creates the Service Order.
+		orchestration.create_estimate_version(sr_name, reason=None, send_to_customer=False)
+		orchestration.customer_approve_estimate(
+			sr_name, remarks=_("Customer confirmed the estimate at the Ops Hub")
+		)
+		sr.reload()
+		service_order = sr.service_order
+		if not service_order:
+			frappe.throw(
+				_("Customer confirmation recorded but no Service Order was created — "
+				  "check that analysis is confirmed and the estimate is approved."),
+				title=_("Service Order Not Created"),
+			)
+
 	_log_ops_stage(sr_name, "confirm", "assign")
-	return {"ok": True, "stage": "assign"}
+	return {"ok": True, "stage": "assign", "service_order": service_order}
 
 
 # ── Step 3: Solution Assignment ───────────────────────────────────────────────

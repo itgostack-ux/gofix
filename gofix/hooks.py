@@ -141,6 +141,9 @@ doc_events = {
 		"on_submit": "gofix.overrides.delivery_note.update_service_request_on_delivery",
 		"on_cancel": "gofix.overrides.delivery_note.update_service_request_on_delivery"
 	},
+	"Purchase Order": {
+		"on_submit": "gofix.purchase_api.mark_spares_in_transit",
+	},
 	"Purchase Receipt": {
 		"on_submit": "gofix.purchase_api.allocate_received_spares_to_tickets"
 	},

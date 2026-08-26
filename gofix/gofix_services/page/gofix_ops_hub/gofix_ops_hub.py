@@ -547,7 +547,7 @@ def _assert_removed_part_details_complete(sr) -> None:
 	pending = [
 		(row.item_name or row.spare_item)
 		for row in sr.get("spare_lines", [])
-		if row.status in ("Awaiting Procurement", "Pending", "Reserved", "Issued")
+		if row.status in ("Awaiting Procurement", "In Transit", "Pending", "Reserved", "Issued")
 	]
 	if pending:
 		frappe.throw(
@@ -641,6 +641,10 @@ def get_ticket_detail(sr_name) -> dict:
 			"removed_part_serial": row.get("removed_part_serial") or "",
 			"installed_part_serial": row.get("installed_part_serial") or "",
 			"removed_part_condition": row.get("removed_part_condition") or "",
+			# procurement visibility: where the part is and when it is due
+			"material_request": row.get("material_request") or "",
+			"purchase_order": row.get("purchase_order") or "",
+			"expected_date": str(row.get("expected_date") or ""),
 		}
 		for row in sr.get("spare_lines", [])
 	]
@@ -2068,7 +2072,7 @@ def _assert_solution_parts_ready(sr_name, repair_solution) -> None:
 		if not item_flags.get("is_stock_item") or item_flags.get("gofix_universal_spare"):
 			continue
 		label = row.item_name or row.spare_item
-		if row.status in ("Awaiting Procurement", "Pending", "Reserved", "Issued"):
+		if row.status in ("Awaiting Procurement", "In Transit", "Pending", "Reserved", "Issued"):
 			frappe.throw(
 				_("{0} is not installed yet (status: {1}). Receive/install the part and record "
 				  "its serial via the spare line's ✎ button — or put this solution On Hold so "
@@ -2677,7 +2681,7 @@ def release_spare_reservation(sr_name, spare_row_name) -> dict:
 	sr.flags.ignore_mandatory = True
 
 	for row in sr.spare_lines:
-		if row.name == spare_row_name and row.status in ("Reserved", "Awaiting Procurement", "Pending"):
+		if row.name == spare_row_name and row.status in ("Reserved", "Awaiting Procurement", "In Transit", "Pending"):
 			usage_name = row.get("spare_usage") or frappe.db.get_value(
 				"Spare Parts Usage",
 				{"service_request_spare_line": row.name, "docstatus": ("<", 2)},
@@ -2756,6 +2760,11 @@ def raise_material_request(sr_name) -> dict:
 	sr.flags.ignore_mandatory = True
 	for sl in pending_lines:
 		sl.material_request = mr.name
+		# A first, provisional date from the configured lead time so the ticket
+		# can answer "when?" before a supplier has committed. The purchase order
+		# overwrites it with the real promise.
+		if sl.meta.get_field("expected_date"):
+			sl.expected_date = mr.schedule_date
 	sr.save()
 
 	sr.add_comment(

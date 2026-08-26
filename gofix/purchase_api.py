@@ -129,6 +129,74 @@ def reroute_open_spare_procurement(sr, new_warehouse) -> dict:
 	return result
 
 
+def mark_spares_in_transit(doc, method=None):
+	"""Purchase Order on_submit — the part is ordered, so tell the ticket when.
+
+	Between raising a requisition and the goods landing, a spare line sat on
+	"Awaiting Procurement" with no indication that it had even been ordered,
+	let alone when it would arrive. The technician could not answer the one
+	question the customer asks, and the SLA clock was running against a date
+	nobody could see.
+
+	Moves every waiting line on this order to In Transit and stamps the
+	promised date from the PO schedule, which is the supplier's commitment
+	rather than the lead-time guess the requisition was raised with.
+	"""
+	try:
+		eta_by_item = {}
+		mr_names = set()
+		for row in doc.get("items") or []:
+			if not row.get("material_request"):
+				continue
+			mr_names.add(row.material_request)
+			eta = row.get("schedule_date") or doc.get("schedule_date")
+			# a part needed on several rows lands when the LAST of them does
+			existing = eta_by_item.get(row.item_code)
+			if eta and (not existing or str(eta) > str(existing)):
+				eta_by_item[row.item_code] = eta
+		if not mr_names:
+			return
+
+		for mr_name in mr_names:
+			sr_name = frappe.db.get_value("Material Request", mr_name, "service_request")
+			if not sr_name:
+				continue
+			lines = frappe.get_all(
+				"SR Spare Line",
+				filters={
+					"parent": sr_name,
+					"parenttype": "Service Request",
+					"status": "Awaiting Procurement",
+					"material_request": mr_name,
+				},
+				fields=["name", "spare_item", "item_name", "qty"],
+			)
+			if not lines:
+				continue
+			for line in lines:
+				frappe.db.set_value(
+					"SR Spare Line", line.name,
+					{
+						"status": "In Transit",
+						"purchase_order": doc.name,
+						"expected_date": eta_by_item.get(line.spare_item),
+					},
+					update_modified=False,
+				)
+			eta_note = eta_by_item.get(lines[0].spare_item)
+			frappe.get_doc("Service Request", sr_name).add_comment(
+				"Comment",
+				_("Spares ordered on {0}: {1}{2}").format(
+					doc.name,
+					", ".join(f"{l.item_name or l.spare_item} × {l.qty:g}" for l in lines),
+					_(" — expected by {0}").format(frappe.utils.formatdate(eta_note)) if eta_note else "",
+				),
+			)
+	except Exception:
+		# Never block a purchase order because a ticket could not be annotated.
+		frappe.log_error(frappe.get_traceback(), f"GoFix: in-transit update failed for {doc.name}")
+
+
 def allocate_received_spares_to_tickets(doc, method=None):
 	"""Purchase Receipt on_submit hook — close the GRN → ticket loop.
 
@@ -155,7 +223,10 @@ def allocate_received_spares_to_tickets(doc, method=None):
 				filters={
 					"parent": sr_name,
 					"parenttype": "Service Request",
-					"status": "Awaiting Procurement",
+					# In Transit as well as Awaiting Procurement: once a purchase
+					# order exists the line has already moved on, and matching only
+					# the older status would leave it stuck showing a stale ETA.
+					"status": ("in", ("Awaiting Procurement", "In Transit")),
 					"spare_item": ("in", list(received_items)),
 				},
 				fields=["name", "spare_item", "item_name", "qty"],
@@ -163,8 +234,12 @@ def allocate_received_spares_to_tickets(doc, method=None):
 			if not lines:
 				continue
 			for line in lines:
+				# Arrived: it is no longer in transit, so the promised date stops
+				# being a forecast and would only mislead if left on screen.
 				frappe.db.set_value(
-					"SR Spare Line", line.name, "status", "Reserved", update_modified=False
+					"SR Spare Line", line.name,
+					{"status": "Reserved", "expected_date": None},
+					update_modified=False,
 				)
 			sr = frappe.get_doc("Service Request", sr_name)
 			sr.add_comment(

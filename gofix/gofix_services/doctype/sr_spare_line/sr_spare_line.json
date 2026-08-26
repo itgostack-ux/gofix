@@ -23,6 +23,8 @@
   "status",
   "remarks",
   "material_request",
+  "purchase_order",
+  "expected_date",
   "spare_usage"
  ],
  "fields": [
@@ -131,7 +133,7 @@
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "Status",
-   "options": "Pending\nReserved\nIssued\nConsumed\nReturned\nDamaged\nAwaiting Procurement",
+   "options": "Pending\nReserved\nIssued\nConsumed\nReturned\nDamaged\nAwaiting Procurement\nIn Transit",
    "read_only": 1
   },
   {
@@ -153,6 +155,23 @@
    "options": "Spare Parts Usage",
    "read_only": 1,
    "unique": 1
+  },
+  {
+   "fieldname": "purchase_order",
+   "fieldtype": "Link",
+   "label": "Purchase Order",
+   "options": "Purchase Order",
+   "read_only": 1,
+   "insert_after": "material_request",
+   "description": "Set when the requisition is ordered \u2014 this is what makes the part In Transit."
+  },
+  {
+   "fieldname": "expected_date",
+   "fieldtype": "Date",
+   "label": "Expected By",
+   "read_only": 1,
+   "insert_after": "purchase_order",
+   "description": "Promised arrival date. Comes from the requisition, then from the purchase order once placed."
   }
  ],
  "index_web_pages_for_search": 0,

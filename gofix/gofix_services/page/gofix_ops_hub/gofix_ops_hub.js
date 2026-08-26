@@ -1115,18 +1115,18 @@ class GoFixOpsHub {
 		// Spare parts — separate active and damaged
 		const activeSpares = (d.spare_lines || []).filter(sp => sp.status !== "Damaged");
 		const damagedSpares = (d.spare_lines || []).filter(sp => sp.status === "Damaged");
-		const awaitingCount = (d.spare_lines || []).filter(sp => sp.status === "Awaiting Procurement").length;
+		const awaitingCount = (d.spare_lines || []).filter(sp => ["Awaiting Procurement", "In Transit"].includes(sp.status)).length;
 
 		const spare_badge = (st) => {
 			const map = {
 				"Reserved": "badge-blue", "Consumed": "badge-green", "Issued": "badge-blue",
-				"Awaiting Procurement": "badge-orange", "Pending": "badge-muted", "Returned": "badge-grey",
+				"Awaiting Procurement": "badge-orange", "In Transit": "badge-blue", "Pending": "badge-muted", "Returned": "badge-grey",
 			};
 			return `<span class="goh-badge ${map[st] || "badge-muted"}">${__(st)}</span>`;
 		};
 
 		const spareRows = activeSpares.map(sp => {
-			const removable = ["Reserved", "Awaiting Procurement", "Pending"].includes(sp.status);
+			const removable = ["Reserved", "Awaiting Procurement", "In Transit", "Pending"].includes(sp.status);
 			const actionBtn = removable
 				? `<button class="btn btn-xs btn-outline-secondary goh-spare-remove" data-row="${esc(sp.name)}" title="${__("Remove")}"><i class="fa fa-times"></i></button>`
 				: `<button class="btn btn-xs btn-outline-danger goh-spare-damage" data-row="${esc(sp.name)}" title="${__("Mark Damaged")}"><i class="fa fa-exclamation-triangle"></i></button>`;
@@ -1138,9 +1138,21 @@ class GoFixOpsHub {
 					data-installed="${esc(sp.installed_part_serial || "")}" data-condition="${esc(sp.removed_part_condition || "")}"
 					title="${arrived ? __("Install part — record old + new serials") : __("Part serial details (required before close)")}"><i class="fa fa-pencil"></i></button>`
 				: "";
+			// A part that has not landed is the usual reason a ticket stalls, so
+			// say where it is and when it is due rather than just "awaiting".
+			const waiting = ["Awaiting Procurement", "In Transit"].includes(sp.status);
+			const eta = sp.expected_date ? frappe.datetime.str_to_user(sp.expected_date) : "";
+            const overdue = sp.expected_date && sp.expected_date < frappe.datetime.get_today();
+			const etaPill = waiting
+				? ` <span class="indicator-pill ${overdue ? "red" : "blue"}" style="font-size:10px">${
+					sp.status === "In Transit"
+						? (eta ? __("in transit — due {0}", [eta]) : __("in transit"))
+						: (eta ? __("not ordered yet — needed by {0}", [eta]) : __("not ordered yet"))
+				}${overdue ? " · " + __("overdue") : ""}</span>`
+				: "";
 			const pill = arrived
 				? ` <span class="indicator-pill blue" style="font-size:10px">${__("arrived — install & record new serial")}</span>`
-				: (needsGenealogy ? ` <span class="indicator-pill orange" style="font-size:10px">${__("serial details missing")}</span>` : "");
+				: (needsGenealogy ? ` <span class="indicator-pill orange" style="font-size:10px">${__("serial details missing")}</span>` : etaPill);
 			return `
 			<tr data-spare-row="${esc(sp.name)}">
 				<td>${esc(sp.item_name || sp.spare_item)}${pill}</td>

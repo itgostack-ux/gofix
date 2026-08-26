@@ -474,7 +474,25 @@ def update_spare_genealogy(sr_name, spare_row_name, removed_part_serial=None,
 		frappe.db.set_value("SR Spare Line", spare_row_name, updates, update_modified=False)
 	if consume_now:
 		sr = frappe.get_doc("Service Request", sr_name)
-		usage = frappe.get_doc("Spare Parts Usage", row.spare_usage) if row.spare_usage else frappe.get_doc({
+		# Resolve the existing usage from EITHER direction. SR Spare Line.spare_usage
+		# is written after usage.insert(), but a parent save triggered during that
+		# insert rewrites the child rows and drops it — leaving the forward link
+		# empty while Spare Parts Usage.service_request_spare_line still points
+		# back. Relying on the forward link alone sent the second call (the one
+		# after approval) down the "create new" branch, where the duplicate guard
+		# threw "Spare line already has usage record" and the approve→consume loop
+		# could never complete.
+		existing_usage = row.spare_usage or frappe.db.get_value(
+			"Spare Parts Usage",
+			{"service_request_spare_line": spare_row_name, "status": ("!=", "Cancelled")},
+			"name",
+		)
+		if existing_usage and not row.spare_usage:
+			frappe.db.set_value(
+				"SR Spare Line", spare_row_name, "spare_usage", existing_usage,
+				update_modified=False,
+			)
+		usage = frappe.get_doc("Spare Parts Usage", existing_usage) if existing_usage else frappe.get_doc({
 			"doctype": "Spare Parts Usage",
 			"service_request": sr_name,
 			"service_request_spare_line": spare_row_name,
@@ -499,7 +517,14 @@ def update_spare_genealogy(sr_name, spare_row_name, removed_part_serial=None,
 		usage.removed_part_serial = new_removed
 		if usage.is_new():
 			usage.insert()
+			# written after the insert AND re-read, because the insert can trigger
+			# a parent save that rewrites this child row
 			frappe.db.set_value("SR Spare Line", spare_row_name, "spare_usage", usage.name, update_modified=False)
+			if frappe.db.get_value("SR Spare Line", spare_row_name, "spare_usage") != usage.name:
+				frappe.db.sql(
+					"UPDATE `tabSR Spare Line` SET spare_usage=%s WHERE name=%s",
+					(usage.name, spare_row_name),
+				)
 		elif usage.docstatus == 0:
 			usage.save()
 		if usage.requires_approval and usage.approval_status != "Approved":
@@ -1297,11 +1322,21 @@ def save_solution_assignment(sr_name, solutions_json) -> dict:
 		if sol.get("auto_add_spares"):
 			from gofix.gofix_services.api import is_spare_compatible_with_device
 
-			for sp in spare_mapping_by_sol.get(sol.get("repair_solution"), []):
-				# Never auto-add a spare that doesn't fit this device
-				# (brand / category / model applicability ladder).
-				if not is_spare_compatible_with_device(sp.spare_item, sr.device_item):
-					continue
+			# A repair consumes ONE part. Several grades of the same part fit the
+			# same device -- an iPhone 11 screen exists as Compatible and as
+			# Original -- so adding every fitting spare put both on the job card
+			# and billed the customer twice for one screen. Pick the same single
+			# spare the estimate quotes (cheapest fitting) so the quote and the
+			# job card cannot disagree; the alternatives stay swappable by hand.
+			fitting = [
+				sp for sp in spare_mapping_by_sol.get(sol.get("repair_solution"), [])
+				if is_spare_compatible_with_device(sp.spare_item, sr.device_item)
+			]
+			fitting.sort(
+				key=lambda sp: spare_price_map.get(sp.spare_item)
+				or spare_std_rate_map.get(sp.spare_item, 0.0)
+			)
+			for sp in fitting[:1]:
 				spare_rate = spare_price_map.get(sp.spare_item) or spare_std_rate_map.get(sp.spare_item, 0.0)
 				sr.append("spare_lines", {
 					"repair_solution": sol.get("repair_solution"),

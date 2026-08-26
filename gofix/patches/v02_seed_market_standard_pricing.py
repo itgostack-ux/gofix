@@ -85,10 +85,30 @@ PREMIUM_MULTIPLIER = 1.8
 SPARE_MARKUP_PERCENT = 25          # typical retail markup on a fitted part
 MIN_CHARGE = 199                   # nobody leaves for less than a bench fee
 
-# spare sub-category -> (grade, part warranty days).
-# Sub-categories here are unbranded trade stock, i.e. OEM-equivalent.
+# Grade is inferred from how the trade already names the part. Getting this
+# wrong matters: grade drives both the price point offered to the customer and
+# the warranty the repair carries, and "Original" and "Compatible" variants of
+# the same screen sit side by side in the catalogue.
+GRADE_BY_KEYWORD = (
+    ("original", "OEM", 180),
+    ("genuine", "OEM", 180),
+    ("oem", "OEM", 180),
+    ("refurb", "Refurbished", 30),
+    ("pulled", "Refurbished", 30),
+    ("compatible", "Aftermarket", 90),
+    ("aftermarket", "Aftermarket", 90),
+    ("copy", "Aftermarket", 90),
+)
 DEFAULT_SPARE_GRADE = "OEM Equivalent"
 DEFAULT_PART_WARRANTY_DAYS = 90
+
+
+def _grade_for(item_name: str):
+    low = (item_name or "").lower()
+    for keyword, grade, days in GRADE_BY_KEYWORD:
+        if keyword in low:
+            return grade, days
+    return DEFAULT_SPARE_GRADE, DEFAULT_PART_WARRANTY_DAYS
 
 
 def execute():
@@ -120,7 +140,7 @@ def _seed_spare_grades():
 		return
 	rows = frappe.db.sql(
 		"""
-		SELECT DISTINCT i.name
+		SELECT DISTINCT i.name, i.item_name
 		FROM `tabItem` i
 		JOIN `tabSolution Spare Mapping` m ON m.spare_item = i.name
 		WHERE IFNULL(i.gofix_spare_grade, '') = ''
@@ -128,12 +148,10 @@ def _seed_spare_grades():
 		as_dict=True,
 	)
 	for row in rows:
+		grade, days = _grade_for(row.item_name)
 		frappe.db.set_value(
 			"Item", row.name,
-			{
-				"gofix_spare_grade": DEFAULT_SPARE_GRADE,
-				"gofix_part_warranty_days": DEFAULT_PART_WARRANTY_DAYS,
-			},
+			{"gofix_spare_grade": grade, "gofix_part_warranty_days": days},
 			update_modified=False,
 		)
 	frappe.logger("gofix").info(f"GoFix: graded {len(rows)} spare item(s)")

@@ -142,6 +142,11 @@ def ensure_service_item(solution, commit=False):
 		item.is_stock_item = 0
 		item.is_sales_item = 1
 		item.is_purchase_item = 0
+		# Governance blocks Draft items from being sold or stocked, so a service
+		# item created Draft can never reach an invoice. These are generated from
+		# an approved Repair Solution, so they are born Active.
+		if item.meta.get_field("ch_lifecycle_status"):
+			item.ch_lifecycle_status = "Active"
 		if sub_category:
 			item.ch_sub_category = sub_category
 			cat, hsn = frappe.db.get_value(

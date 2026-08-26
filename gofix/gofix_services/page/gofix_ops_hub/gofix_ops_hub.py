@@ -2805,17 +2805,29 @@ def submit_for_qc(sr_name) -> dict:
 	# force-completes assigned solutions, but it must never paper over an
 	# issue that has no solution at all.
 	from gofix.gofix_services.doctype.service_request.service_request import (
+		close_issues_with_completed_solutions,
 		get_unresolved_issue_gaps,
 	)
+
+	# Work that is finished closes its fault automatically, so the technician
+	# does not have to tick the issue off by hand after doing the repair.
+	closed = close_issues_with_completed_solutions(sr)
+	if closed:
+		sr.flags.ignore_validate_update_after_submit = True
+		sr.flags.ignore_mandatory = True
+		sr.save()
 
 	gaps = get_unresolved_issue_gaps(sr)
 	if gaps["uncovered_issues"]:
 		frappe.throw(
-			_("Cannot submit for QC — these issues have no repair solution yet: {0}. "
-			  "Assign a solution (or cancel the issue with a reason) first.").format(
+			_("Cannot submit for QC — these issues are still open: {0}.<br><br>"
+			  "Every issue must be closed first, either by <b>completing a repair</b> "
+			  "for it, or by <b>rejecting it with a reason</b> (set the issue to "
+			  "Cancelled or Not Reproducible on the Analysis step). "
+			  "Skipping a repair does not close the issue behind it.").format(
 				", ".join(gaps["uncovered_issues"])
 			),
-			title=_("All Issues Must Be Solved Before QC"),
+			title=_("All Issues Must Be Closed Before QC"),
 		)
 
 	_assert_removed_part_details_complete(sr)

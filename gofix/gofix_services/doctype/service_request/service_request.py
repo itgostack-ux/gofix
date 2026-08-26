@@ -1049,6 +1049,32 @@ class ServiceRequest(Document):
 		
 		if not self.is_completed_status():
 			frappe.throw(_("Service Invoice can only be created for Completed requests"), title=_("Service Request Error"))
+
+		# Billing is the last gate, so it re-checks rather than trusting the
+		# stage it was reached from. Two conditions, both required: QC actually
+		# passed, and every identified issue is closed — fixed or rejected with
+		# a reason. Without the second check a ticket could be invoiced with a
+		# fault still open, because a Skipped repair used to satisfy the QC gate.
+		qc_status = ""
+		if self.get("service_order"):
+			qc_status = frappe.db.get_value("Sales Order", self.service_order, "qc_status") or ""
+		if qc_status != "Pass":
+			frappe.throw(
+				_("Cannot invoice — QC has not passed on {0} (current: {1}).").format(
+					self.service_order or self.name, qc_status or _("not started")
+				),
+				title=_("QC Not Passed"),
+			)
+
+		gaps = get_unresolved_issue_gaps(self)
+		if not gaps["ready_for_qc"]:
+			frappe.throw(
+				_("Cannot invoice — these are still open: {0}. Every issue must be "
+				  "fixed or rejected with a reason before the customer is billed.").format(
+					", ".join(gaps["uncovered_issues"] + gaps["open_solutions"])
+				),
+				title=_("Open Issues Remain"),
+			)
 		
 		items = self.get_service_invoice_items()
 		if not items:
@@ -1871,18 +1897,31 @@ def get_unresolved_issue_gaps(sr) -> dict:
 	if isinstance(sr, str):
 		sr = frappe.get_doc("Service Request", sr)
 
+	# Every issue must reach a terminal state before QC: either FIXED (Resolved,
+	# which needs a Completed solution behind it) or REJECTED with a reason
+	# (Cancelled / Not Reproducible / Deleted). Anything still Open or In
+	# Progress blocks.
+	CLOSED_ISSUE = ("Resolved", "Cancelled", "Not Reproducible", "Deleted")
+
 	active_issues = {
 		row.issue_category
 		for row in sr.get("issue_lines", [])
-		if row.status in ("Open", "In Progress") and row.issue_category
+		if row.status not in CLOSED_ISSUE and row.issue_category
 	}
+
+	# Only a COMPLETED solution resolves an issue. A Skipped solution is work
+	# that was consciously not done — it cannot stand in for a fix, or a ticket
+	# could be invoiced with the fault still present. If the team decides not to
+	# do the work, the ISSUE has to be rejected explicitly, which is a decision
+	# with a reason attached rather than a side effect of skipping a task.
 	covered = set()
 	open_solutions = []
 	for row in sr.get("solution_lines", []):
-		if row.status == "Cancelled":
+		if row.status in ("Cancelled", "Skipped"):
 			continue
-		covered.add(row.issue_category)
-		if row.status not in ("Completed", "Skipped"):
+		if row.status == "Completed":
+			covered.add(row.issue_category)
+		else:
 			open_solutions.append(f"{row.repair_solution} ({row.issue_category})")
 
 	uncovered = sorted(active_issues - covered)
@@ -1891,6 +1930,26 @@ def get_unresolved_issue_gaps(sr) -> dict:
 		"open_solutions": open_solutions,
 		"ready_for_qc": not uncovered and not open_solutions,
 	}
+
+
+def close_issues_with_completed_solutions(sr) -> list:
+	"""Mark an issue Resolved once a solution for it is Completed.
+
+	Saves the technician from closing the fault by hand after doing the work.
+	An issue whose only solutions were Skipped is deliberately NOT closed here —
+	that is a judgement call and needs an explicit rejection with a reason.
+	"""
+	fixed = {
+		row.issue_category
+		for row in sr.get("solution_lines", [])
+		if row.status == "Completed" and row.issue_category
+	}
+	closed = []
+	for row in sr.get("issue_lines", []):
+		if row.status in ("Open", "In Progress") and row.issue_category in fixed:
+			row.status = "Resolved"
+			closed.append(row.issue_category)
+	return closed
 
 
 def missing_removed_part_details(sr) -> list:

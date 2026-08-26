@@ -2737,7 +2737,19 @@ def raise_material_request(sr_name) -> dict:
 
 	frappe.has_permission("Material Request", "create", throw=True)
 	mr.insert()
-	mr.submit()
+
+	# Leave the requisition PENDING APPROVAL rather than submitting it here.
+	# ch_erp15 guards Material Request submit with block_purchase_mr_direct_submit,
+	# which requires custom_approval_status == "Approved" — set only by the
+	# approve-for-purchase action. Calling mr.submit() straight after insert
+	# always threw "must be approved through the configured approval action",
+	# so the spare request button could never actually raise a request.
+	# A requisition awaiting release is also the correct shape: procurement
+	# approves spend, the technician does not.
+	submitted = False
+	if (mr.get("custom_approval_status") or "") == "Approved":
+		mr.submit()
+		submitted = True
 
 	# Update spare_lines with MR reference
 	sr.flags.ignore_validate_update_after_submit = True
@@ -2746,15 +2758,32 @@ def raise_material_request(sr_name) -> dict:
 		sl.material_request = mr.name
 	sr.save()
 
+	sr.add_comment(
+		"Comment",
+		_("Spare request {0} raised for {1} — {2}.").format(
+			mr.name,
+			", ".join(f"{sl.item_name or sl.spare_item} × {sl.qty:g}" for sl in pending_lines),
+			_("submitted") if submitted else _("awaiting purchase approval"),
+		),
+	)
+
 	frappe.msgprint(
-		_("Material Request {0} created for {1} spare(s).").format(
+		_("Spare request {0} raised for {1} spare(s) — {2}.").format(
 			f'<a href="/app/material-request/{mr.name}">{mr.name}</a>',
 			len(pending_lines),
+			_("submitted") if submitted
+			else _("now awaiting purchase approval before it can be ordered"),
 		),
-		title=_("Material Request Created"),
-		indicator="green",
+		title=_("Spare Request Raised"),
+		indicator="green" if submitted else "orange",
 	)
-	return {"ok": True, "material_request": mr.name, "count": len(pending_lines)}
+	return {
+		"ok": True,
+		"material_request": mr.name,
+		"count": len(pending_lines),
+		"submitted": submitted,
+		"approval_status": mr.get("custom_approval_status") or "",
+	}
 
 
 @frappe.whitelist(methods=["POST"])

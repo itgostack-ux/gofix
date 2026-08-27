@@ -70,12 +70,28 @@ def _log_ops_stage(sr_name, from_stage, to_stage):
 	stage_rows = [row for row in (sr.get("status_log") or []) if row.get("event_type") == "Operations Stage"]
 	if stage_rows:
 		prev_at = stage_rows[-1].changed_at
+
+	# Several actions legitimately move a ticket to the same stage — assigning a
+	# technician, assigning solutions to one, and the explicit advance button all
+	# end at Repair — and the hub calls more than one of them in a single click.
+	# The result was the same transition logged two or three times at the same
+	# second, which made the timeline unreadable. Whichever call gets there first
+	# records the move; an immediate repeat of the SAME from -> to is not a second
+	# event. A genuine loop (repair -> qc -> rework -> repair) still logs, because
+	# the rows in between differ.
+	from_label = STAGE_LABELS.get(from_stage, from_stage)
+	to_label = STAGE_LABELS.get(to_stage, to_stage)
+	if stage_rows:
+		last = stage_rows[-1]
+		if last.from_status == from_label and last.to_status == to_label:
+			return
+
 	elapsed = round(time_diff_in_hours(now_datetime(), prev_at), 2) if prev_at else 0
 
 	sr.append("status_log", {
 		"event_type": "Operations Stage",
-		"from_status": STAGE_LABELS.get(from_stage, from_stage),
-		"to_status": STAGE_LABELS.get(to_stage, to_stage),
+		"from_status": from_label,
+		"to_status": to_label,
 		"changed_by": frappe.session.user,
 		"changed_at": now_datetime(),
 		"time_in_previous_status_hours": elapsed,

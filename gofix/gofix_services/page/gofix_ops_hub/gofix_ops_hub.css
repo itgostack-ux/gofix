@@ -460,44 +460,98 @@
 	display: block;
 }
 
-/* ── Timeline ────────────────────────────────────────────────────────────── */
-.goh-timeline {
-	position: relative;
-	padding-left: 24px;
-}
-.goh-tl-item {
-	position: relative;
-	padding-bottom: 16px;
-	padding-left: 12px;
-}
-.goh-tl-item::before {
-	content: "";
-	position: absolute;
-	left: -18px;
-	top: 8px;
-	bottom: -8px;
-	width: 2px;
+/* ── Timeline ────────────────────────────────────────────────────────────
+   A vertical list of badges made every transition look equally important and
+   buried the one thing anyone reads a timeline for: where the time went. Two
+   tables instead — time per stage first, then the chronological log. */
+
+.goh-tl-stats {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+	gap: 1px;
 	background: var(--goh-border);
+	border: 1px solid var(--goh-border);
+	border-radius: 6px;
+	overflow: hidden;
+	margin-bottom: 14px;
 }
-.goh-tl-item:last-child::before { display: none; }
-.goh-tl-dot {
-	position: absolute;
-	left: -22px;
-	top: 6px;
-	width: 10px;
-	height: 10px;
-	border-radius: 50%;
-	background: #3b82f6;
-	border: 2px solid var(--goh-card-bg);
-	box-shadow: 0 0 0 2px var(--goh-border);
-}
-.goh-tl-header {
+.goh-tl-stats > div {
+	background: var(--goh-card-bg);
+	padding: 10px 12px;
 	display: flex;
-	align-items: center;
-	gap: 6px;
-	flex-wrap: wrap;
+	flex-direction: column;
+	gap: 2px;
 }
-.goh-tl-meta { margin-top: 2px; }
+.goh-tl-stats .k {
+	font-size: 11px;
+	text-transform: uppercase;
+	letter-spacing: .06em;
+	color: var(--goh-text-muted);
+}
+.goh-tl-stats .v {
+	font-size: 18px;
+	font-weight: 600;
+	font-variant-numeric: tabular-nums;
+}
+
+/* Wide content scrolls inside its own box so the page never slides sideways. */
+.goh-tl-scroll { overflow-x: auto; }
+
+.goh-tl-table {
+	width: 100%;
+	border-collapse: collapse;
+	font-size: 13px;
+}
+.goh-tl-table th {
+	text-align: left;
+	font-size: 11px;
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: .06em;
+	color: var(--goh-text-muted);
+	padding: 6px 10px;
+	border-bottom: 1px solid var(--goh-border);
+	white-space: nowrap;
+}
+.goh-tl-table td {
+	padding: 7px 10px;
+	border-bottom: 1px solid var(--goh-border-soft, var(--goh-border));
+	vertical-align: middle;
+}
+.goh-tl-table tbody tr:last-child td { border-bottom: 0; }
+.goh-tl-table tbody tr:hover { background: var(--goh-hover-bg, rgba(127,127,127,.06)); }
+.goh-tl-table .text-right { text-align: right; }
+.goh-tl-table .goh-num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* Share-of-total bar. Width is the datum; the track keeps short bars readable. */
+.goh-bar {
+	background: var(--goh-border);
+	border-radius: 3px;
+	height: 6px;
+	overflow: hidden;
+	min-width: 60px;
+}
+.goh-bar > span {
+	display: block;
+	height: 100%;
+	background: #3b82f6;
+	border-radius: 3px;
+}
+
+/* A ticket that comes back to a stage it already left is worth seeing. */
+.goh-repeat {
+	display: inline-block;
+	margin-left: 6px;
+	font-size: 10px;
+	text-transform: uppercase;
+	letter-spacing: .05em;
+	padding: 1px 5px;
+	border-radius: 3px;
+	background: rgba(217, 119, 6, .14);
+	color: #b45309;
+	white-space: nowrap;
+}
+[data-theme="dark"] .goh-repeat { color: #f0b429; background: rgba(240, 180, 41, .15); }
 
 /* ── Repair Cards ────────────────────────────────────────────────────────── */
 .goh-repair-cards { display: flex; flex-direction: column; gap: 8px; }

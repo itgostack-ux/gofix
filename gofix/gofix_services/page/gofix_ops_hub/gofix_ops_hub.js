@@ -647,37 +647,117 @@ class GoFixOpsHub {
 	/* ═══════════════════════════════════════════════════════════════════════ */
 	_html_timeline_tab(d) {
 		const esc = frappe.utils.escape_html;
-		const log = d.status_log || [];
+		const log = (d.status_log || []).filter(e => e.to_status);
 
 		if (!log.length) {
 			return `<div class="goh-section"><p class="text-muted">${__("No status changes recorded yet")}</p></div>`;
 		}
 
-		const items = log.slice().reverse().map(entry => {
-			const dt = entry.changed_at ? frappe.datetime.str_to_user(entry.changed_at) : "";
-			const dur = entry.hours_in_prev ? `<span class="text-muted small">(${entry.hours_in_prev}h in ${esc(entry.from_status)})</span>` : "";
+		const fmtHours = (h) => {
+			const v = parseFloat(h) || 0;
+			if (!v) return "—";
+			if (v < 1) return `${Math.round(v * 60)}m`;
+			if (v < 24) return `${v.toFixed(1)}h`;
+			return `${(v / 24).toFixed(1)}d`;
+		};
+
+		/* ── Where the time actually went ──────────────────────────────
+		   The chronological list answers "what happened"; this answers the
+		   question people are usually asking, which is "what is this ticket
+		   waiting on". Hours are attributed to the stage being LEFT, which is
+		   where they were spent. */
+		const perStage = {};
+		let totalHours = 0;
+		log.forEach(e => {
+			const h = parseFloat(e.hours_in_prev) || 0;
+			const stage = e.from_status || "—";
+			if (!perStage[stage]) perStage[stage] = { hours: 0, visits: 0 };
+			perStage[stage].hours += h;
+			perStage[stage].visits += 1;
+			totalHours += h;
+		});
+		const stageRows = Object.entries(perStage)
+			.sort((a, b) => b[1].hours - a[1].hours)
+			.map(([stage, v]) => {
+				const share = totalHours ? (v.hours / totalHours) * 100 : 0;
+				return `
+					<tr>
+						<td>${esc(stage)}</td>
+						<td class="text-right goh-num">${fmtHours(v.hours)}</td>
+						<td class="text-right goh-num">${v.visits > 1 ? v.visits + "&times;" : "1&times;"}</td>
+						<td style="width:34%">
+							<div class="goh-bar"><span style="width:${share.toFixed(1)}%"></span></div>
+						</td>
+						<td class="text-right goh-num">${share.toFixed(0)}%</td>
+					</tr>`;
+			}).join("");
+
+		/* ── Chronological log, oldest first so it reads as a story ───── */
+		const seenStage = {};
+		const rows = log.map((e, i) => {
+			const when = e.changed_at ? frappe.datetime.str_to_user(e.changed_at) : "—";
+			const to = e.to_status || "—";
+			seenStage[to] = (seenStage[to] || 0) + 1;
+			const repeat = seenStage[to] > 1
+				? ` <span class="goh-repeat" title="${__("Ticket returned to this stage")}">${__("revisit")} ${seenStage[to]}</span>`
+				: "";
 			return `
-				<div class="goh-tl-item">
-					<div class="goh-tl-dot"></div>
-					<div class="goh-tl-content">
-						<div class="goh-tl-header">
-							<span class="goh-badge badge-muted">${esc(entry.from_status)}</span>
-							<i class="fa fa-arrow-right text-muted mx-1"></i>
-							<span class="goh-badge badge-blue">${esc(entry.to_status)}</span>
-							${dur}
-						</div>
-						<div class="goh-tl-meta text-muted small">
-							${esc(entry.changed_by_name || entry.changed_by || "")} &middot; ${dt}
-						</div>
-					</div>
-				</div>
-			`;
+				<tr>
+					<td class="goh-num text-muted">${i + 1}</td>
+					<td class="text-muted">${esc(e.from_status || "—")}</td>
+					<td><b>${esc(to)}</b>${repeat}</td>
+					<td class="text-right goh-num">${fmtHours(e.hours_in_prev)}</td>
+					<td>${esc(e.changed_by_name || e.changed_by || "—")}</td>
+					<td class="text-muted">${when}</td>
+				</tr>`;
 		}).join("");
+
+		const first = log[0], last = log[log.length - 1];
+		const span = (first && last && first.changed_at && last.changed_at)
+			? frappe.datetime.get_hour_diff(last.changed_at, first.changed_at) : 0;
 
 		return `
 			<div class="goh-section">
+				<div class="goh-section-title"><i class="fa fa-hourglass-half"></i> ${__("Where the time went")}</div>
+				<div class="goh-tl-stats">
+					<div><span class="k">${__("Transitions")}</span><span class="v">${log.length}</span></div>
+					<div><span class="k">${__("Stages touched")}</span><span class="v">${Object.keys(perStage).length}</span></div>
+					<div><span class="k">${__("Tracked time")}</span><span class="v">${fmtHours(totalHours)}</span></div>
+					<div><span class="k">${__("Open since first move")}</span><span class="v">${fmtHours(span)}</span></div>
+				</div>
+				<div class="goh-tl-scroll">
+					<table class="goh-tl-table">
+						<thead>
+							<tr>
+								<th>${__("Stage")}</th>
+								<th class="text-right">${__("Time in stage")}</th>
+								<th class="text-right">${__("Visits")}</th>
+								<th>${__("Share of total")}</th>
+								<th class="text-right">%</th>
+							</tr>
+						</thead>
+						<tbody>${stageRows}</tbody>
+					</table>
+				</div>
+			</div>
+
+			<div class="goh-section">
 				<div class="goh-section-title"><i class="fa fa-clock-o"></i> ${__("Status Timeline")}</div>
-				<div class="goh-timeline">${items}</div>
+				<div class="goh-tl-scroll">
+					<table class="goh-tl-table">
+						<thead>
+							<tr>
+								<th style="width:2.5rem">#</th>
+								<th>${__("From")}</th>
+								<th>${__("To")}</th>
+								<th class="text-right">${__("Time in previous")}</th>
+								<th>${__("By")}</th>
+								<th>${__("When")}</th>
+							</tr>
+						</thead>
+						<tbody>${rows}</tbody>
+					</table>
+				</div>
 			</div>
 		`;
 	}

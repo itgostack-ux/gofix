@@ -4012,6 +4012,11 @@ def mark_not_repairable(sr_name, status="Not Repairable", reason="") -> dict:
 	# 1) Update SR
 	sr.flags.ignore_validate_update_after_submit = True
 	sr.flags.ignore_mandatory = True
+	# Fitted parts come back out before the device does.
+	from gofix.spare_lifecycle import assert_spares_recovered
+
+	assert_spares_recovered(sr_name, _("mark this device {0}").format(status))
+
 	sr.set("repairability_status", status)
 	sr.set("repairability_reason", reason)
 	sr.set("repairability_decided_by", frappe.session.user)

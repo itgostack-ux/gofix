@@ -1953,7 +1953,13 @@ def reject_service_request(service_request, rejection_reason) -> bool:
 	"""
 	doc = frappe.get_doc("Service Request", service_request)
 	doc.check_permission("write")
-	
+
+	# Anything already fitted has to be taken back out and accounted for before
+	# the device leaves — see gofix.spare_lifecycle.assert_spares_recovered.
+	from gofix.spare_lifecycle import assert_spares_recovered
+
+	assert_spares_recovered(service_request, _("reject this ticket"))
+
 	# Update decision using db_set to work with submitted docs
 	doc.db_set("decision", "Rejected", update_modified=True)
 	doc.db_set("rejection_reason", rejection_reason, update_modified=False)

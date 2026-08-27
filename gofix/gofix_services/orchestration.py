@@ -310,28 +310,18 @@ def set_repairability(service_request, status, reason=None) -> dict:
 			create_estimate_version(service_request, reason="Initial estimate after diagnosis")
 			return {"message": _("Marked as Repairable. Initial estimate created.")}
 	elif status in ("Not Repairable", "BER"):
+		# Parts already fitted must come back out first. This used to be a
+		# msgprint the operator could click straight past, which let a device go
+		# home with our stock inside it.
+		from gofix.spare_lifecycle import assert_spares_recovered
+
+		assert_spares_recovered(service_request, _("mark this device {0}").format(status))
 		sr.set("decision", "Rejected")
 		sr.set("rejection_reason", reason or f"Device is {status}")
-
-		# Check if there are consumed spares that need recovery
-		pending = frappe.get_all("Spare Parts Usage", filters={
-			"service_request": service_request,
-			"part_status": "Consumed",
-			"deleted": 0,
-			"status": "Active",
-		}, fields=["name", "spare_part_item", "item_name", "qty_used"])
-		if pending:
-			items_str = ", ".join(f"{p.item_name or p.spare_part_item} (x{p.qty_used})" for p in pending)
-			frappe.msgprint(
-				_("<b>⚠ {0} consumed spare(s) need recovery before device return:</b><br>{1}<br><br>"
-				  "Use the Spare Recovery panel to disposition each part as:<br>"
-				  "• Good → Back to Stock<br>"
-				  "• Faulty → Supplier Return<br>"
-				  "• Damaged by Technician → Damaged Stock").format(len(pending), items_str),
-				title=_("Spare Recovery Required"),
-				indicator="orange",
-			)
 	elif status == "Customer Declined":
+		from gofix.spare_lifecycle import assert_spares_recovered
+
+		assert_spares_recovered(service_request, _("cancel this ticket"))
 		sr.set("decision", "Cancelled")
 
 	sr.save()

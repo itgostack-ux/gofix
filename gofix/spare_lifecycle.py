@@ -42,6 +42,15 @@ DEAD_DECISIONS = ("Cancelled", "Rejected", "Withdrawn", "Expired")
 # Holds that mean "this part is promised to me" and can be given up untouched.
 RELEASABLE = ("Reserved", "Pending", "Awaiting Procurement", "In Transit")
 
+# What a technician can do with a part pulled back out of a device. These are
+# SPARE_DISPOSITION_CHOICES on Spare Parts Usage; each one posts its own stock
+# movement, which is why the part cannot simply be "un-consumed".
+DISPOSITION_HELP = (
+	("Good - Back to Stock", "returns it to the shelf it came from"),
+	("Faulty - Supplier Return", "sends it to the supplier-return warehouse"),
+	("Damaged by Technician", "writes it off to damaged stock"),
+)
+
 
 def settle_spares_for_invoice(invoice_name: str) -> int:
 	"""Mark this invoice's fitted spares Sold once it is submitted and paid.
@@ -122,14 +131,74 @@ def on_payment_entry(doc, method=None):
 			settle_spares_for_invoice(ref.reference_name)
 
 
+def spares_awaiting_recovery(sr_name: str) -> list:
+	"""Parts that are physically inside the device and not yet accounted for.
+
+	A ``Consumed`` spare has left stock through a Material Issue and is fitted.
+	Closing the ticket does not undo that: the part is either taken back out and
+	dispositioned, or it walks out of the building with the customer and nobody
+	knows where it went. These are the rows still waiting for that decision.
+	"""
+	return frappe.get_all(
+		"Spare Parts Usage",
+		filters={
+			"service_request": sr_name,
+			"part_status": CONSUMED,
+			"deleted": 0,
+			"status": "Active",
+		},
+		fields=["name", "spare_part_item", "item_name", "qty_used", "uom"],
+	)
+
+
+def assert_spares_recovered(sr_name: str, action: str) -> None:
+	"""Refuse to close a ticket while fitted parts are unaccounted for.
+
+	This was previously a msgprint in ``mark_repairability`` — a warning the
+	operator could click straight past, on one of the several paths that close a
+	ticket, while the others said nothing at all. A part fitted into a device
+	that is then handed back is a real stock loss, so it is a gate now.
+
+	The way through is the Spare Recovery panel, not a flag: each part is taken
+	out and dispositioned, and each disposition posts the stock movement that
+	matches what actually happened to it.
+	"""
+	pending = spares_awaiting_recovery(sr_name)
+	if not pending:
+		return
+
+	items = "".join(
+		f"<li>{frappe.utils.escape_html(p.item_name or p.spare_part_item)} "
+		f"&times; {p.qty_used:g}</li>"
+		for p in pending
+	)
+	options = "".join(f"<li><b>{d}</b> — {why}</li>" for d, why in DISPOSITION_HELP)
+	frappe.throw(
+		_("Cannot {0}: {1} fitted spare(s) are still inside the device.").format(
+			action, len(pending)
+		)
+		+ f"<ul>{items}</ul>"
+		+ _("Remove each part and record what happened to it in the Spare Recovery panel:")
+		+ f"<ul>{options}</ul>"
+		+ _("If a part is staying in the device, the repair was delivered — "
+		    "complete and invoice the ticket instead of closing it."),
+		title=_("Spare Recovery Required"),
+	)
+
+
 def release_holds_on_dead_ticket(doc, method=None):
 	"""Give back what a cancelled / rejected / withdrawn ticket was holding.
 
-	Only un-fitted holds are released. A Consumed or Sold line is history and
-	stays exactly as it is — the part is gone and its cost is already posted.
+	Only un-fitted holds are released. A fitted part is not a hold — it is
+	inside the device, and :func:`assert_spares_recovered` blocks the close
+	until someone takes it out and says what became of it. A Consumed or Sold
+	line that survives to here is history and stays exactly as it is.
 	"""
 	if doc.get("decision") not in DEAD_DECISIONS:
 		return
+
+	# Backstop for save() paths that did not go through a close API.
+	assert_spares_recovered(doc.name, _("close this ticket"))
 
 	rows = [r for r in (doc.get("spare_lines") or []) if r.status in RELEASABLE]
 	if not rows:

@@ -762,7 +762,27 @@ class SparePartsUsage(Document):
 		self._unsync_from_service_request()
 		self._log_parts_consumption()
 
-		frappe.msgprint(_("Spare {0} recovered: {1}").format(self.spare_part_item, disposition))
+		# A part that failed in service is money owed back by whoever sold it.
+		# Moving it into the supplier-return warehouse tidied the stock and lost
+		# the money; this opens the claim that recovers it.
+		claim = None
+		if disposition == "Faulty - Supplier Return":
+			from gofix.supplier_claims import raise_claim_for_recovered_spare
+
+			claim = raise_claim_for_recovered_spare(self, remarks)
+
+		if claim:
+			frappe.msgprint(
+				_("Spare {0} recovered: {1}. Supplier claim {2} opened as a draft for the "
+				  "purchase team.").format(
+					self.spare_part_item, disposition,
+					f'<a href="/app/ch-supplier-return/{claim}">{claim}</a>',
+				),
+				title=_("Spare Recovered"),
+				indicator="green",
+			)
+		else:
+			frappe.msgprint(_("Spare {0} recovered: {1}").format(self.spare_part_item, disposition))
 
 	def _recover_to_stock(self, company, source_wh):
 		"""Material Receipt — good condition spare back to original warehouse."""

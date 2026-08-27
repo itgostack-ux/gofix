@@ -1071,6 +1071,12 @@ class ServiceRequest(Document):
 		if not self.is_completed_status():
 			frappe.throw(_("Service Invoice can only be created for Completed requests"), title=_("Service Request Error"))
 
+		# Last stop before the device goes home: if this repair touched the
+		# customer's data, the ticket has to say what happened to it.
+		from gofix.compliance import assert_safe_to_hand_back
+
+		assert_safe_to_hand_back(self, _("invoice this repair"))
+
 		# Billing is the last gate, so it re-checks rather than trusting the
 		# stage it was reached from. Two conditions, both required: QC actually
 		# passed, and every identified issue is closed — fixed or rejected with

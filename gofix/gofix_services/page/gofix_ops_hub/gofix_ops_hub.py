@@ -1875,6 +1875,13 @@ def advance_to_repair(sr_name) -> dict:
 	_assert_sr_permission(sr_name, "write")
 
 	sr = frappe.get_doc("Service Request", sr_name)
+
+	# No bench time is spent on this device until the handset is known not to be
+	# reported stolen, the customer has agreed to any data access the repair
+	# needs, and the device can actually be booted for testing.
+	from gofix.compliance import assert_safe_to_start_work
+
+	assert_safe_to_start_work(sr, _("send this ticket to repair"))
 	# Skipped is not outstanding work — the same exclusion the Assign step and
 	# _solution_rows_for_assignment use. Counting it here made a ticket showing
 	# "1/1 assigned, 100%" refuse to advance.

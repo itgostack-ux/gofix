@@ -200,6 +200,11 @@ def release_holds_on_dead_ticket(doc, method=None):
 	# Backstop for save() paths that did not go through a close API.
 	assert_spares_recovered(doc.name, _("close this ticket"))
 
+	# Our courtesy device comes home too.
+	from gofix.service_maturity import assert_loaner_returned
+
+	assert_loaner_returned(doc, _("close this ticket"))
+
 	rows = [r for r in (doc.get("spare_lines") or []) if r.status in RELEASABLE]
 	if not rows:
 		return

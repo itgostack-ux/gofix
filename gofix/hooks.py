@@ -91,6 +91,8 @@ after_migrate = [
 	"gofix.setup.service_billing_setup.ensure_service_billing_setup",
 	"gofix.setup.pos_setup.ensure_gofix_business_dates",
     "gofix.setup.item_custom_fields.create_item_custom_fields",
+    "gofix.setup.compliance_fields.create_compliance_fields",
+    "gofix.setup.maturity_fields.create_maturity_fields",
     # Last: force-imports workspace JSON fixtures whose content changed, so it
     # must run after any other hook that wires links into those workspaces.
     "gofix.setup.workspace_sync.sync_workspaces",

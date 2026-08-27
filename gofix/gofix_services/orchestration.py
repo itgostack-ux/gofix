@@ -40,6 +40,17 @@ def create_estimate_version(service_request, reason=None, send_to_customer=False
 	# Calculate costs using pricing engine if available
 	labor_cost, spare_cost, estimate_total = _calculate_estimate(sr)
 
+	# A repair that comes back inside its own workmanship warranty is ours to
+	# carry, and a quote worth more than the device is worth saying out loud.
+	# Both were knowable from data already on the ticket and neither was checked.
+	from gofix.estimate_policy import apply_warranty_rework, flag_if_uneconomic
+
+	labor_cost, spare_cost, estimate_total, warranty_ctx = apply_warranty_rework(
+		sr, labor_cost, spare_cost, estimate_total
+	)
+	if not warranty_ctx["covered"]:
+		flag_if_uneconomic(sr, estimate_total)
+
 	# Determine version number
 	existing_versions = sr.get("estimate_versions") or []
 	new_version = len(existing_versions) + 1

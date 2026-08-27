@@ -1618,6 +1618,14 @@ def get_eligible_technicians(issue_categories, warehouse=None) -> list:
 		order_by="employee_name",
 		limit_page_length=row_limit,
 	)
+	# A lapsed authorisation is not a qualification. Skip technicians whose
+	# certification has run out, so routing cannot hand brand-authorised work
+	# to someone no longer approved to do it. A blank expiry means no
+	# time-limited authorisation applies and the technician stays eligible.
+	from gofix.service_maturity import certification_valid
+
+	rows = [r for r in rows if certification_valid(r.name)]
+
 	if warehouse and frappe.db.has_column("Employee", "gofix_service_warehouse"):
 		local = [r for r in rows if r.get("gofix_service_warehouse") == warehouse]
 		if local:

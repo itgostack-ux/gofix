@@ -1114,6 +1114,103 @@ def _assert_device_movement_landed(sr) -> None:
 	)
 
 
+# Transit states a dispatch can still be called back from. Once the consignment
+# has been picked up it is with a driver and out of the store's hands — recalling
+# it then is a logistics operation, not a click, which is why the cut-off sits
+# here rather than at delivery.
+_CANCELLABLE_MANIFEST_STATES = ("Draft", "Packed", "Assigned")
+
+
+@frappe.whitelist(methods=["POST"])
+def cancel_service_transfer(service_request, reason=None) -> dict:
+	"""Call back a dispatch that has not been picked up yet.
+
+	A transfer raised in error — wrong destination, wrong ticket, changed mind —
+	had no way back. The only route was to receive the device at a hub it never
+	reached and then return it, which puts two false movements in the record to
+	undo one mistake.
+
+	The cut-off is pickup, as it is for any consignment: while the device is
+	still on the origin shelf the dispatch is just paperwork and can be torn up.
+	Once a driver has it, the way back is a return leg, because something
+	physically has to bring it home.
+	"""
+	_require_store_operation_role()
+	sr = assert_service_request_access(service_request, permission_type="write")
+
+	if sr.transfer_status != "In Transit":
+		frappe.throw(
+			_("Only a dispatch still in transit can be cancelled (status: {0}). "
+			  "A device already received has to be returned instead.").format(
+				sr.transfer_status or _("not in transfer")),
+			title=_("Nothing to Cancel"),
+		)
+
+	if not (reason or "").strip():
+		frappe.throw(
+			_("Give a reason — it is written to the ticket as the record of why "
+			  "the dispatch was called back."),
+			title=_("Reason Required"),
+		)
+
+	# If a stock leg was posted, it may only be undone while the goods are still
+	# on the origin shelf.
+	reference = sr.get("last_transfer_reference")
+	if reference and frappe.db.exists("Stock Entry", reference):
+		status = (frappe.db.get_value("Stock Entry", reference, "custom_status") or "Draft").strip()
+		if status not in _CANCELLABLE_MANIFEST_STATES:
+			frappe.throw(
+				_("Transfer {0} is already <b>{1}</b> — the device has left the store. "
+				  "Receive it at the destination and send it back instead.").format(
+					reference, status),
+				title=_("Already Picked Up"),
+			)
+		try:
+			from ch_erp15.ch_erp15.custom.stock_entry import revert_transit_entry
+
+			doc = frappe.get_doc("Stock Entry", reference)
+			revert_transit_entry(doc)
+			doc.db_set("custom_status", "Cancelled", update_modified=False)
+		except Exception:
+			frappe.log_error(
+				frappe.get_traceback(), f"GoFix: could not revert transit for {reference}"
+			)
+			frappe.throw(
+				_("The stock movement for {0} could not be reversed, so the dispatch "
+				  "was left as it is. Resolve it in Stock before cancelling.").format(reference),
+				title=_("Stock Not Reversed"),
+			)
+
+	destination = sr.transferred_to_store
+	sr.db_set({
+		"transfer_status": None,
+		"transferred_to_store": None,
+		"transfer_date": None,
+		"transfer_reason": None,
+		"last_transfer_reference": None,
+		# The device never left, so it is where it always was.
+		"current_location": sr.source_warehouse,
+	}, update_modified=True)
+
+	# Parts were redirected to the destination when the dispatch was raised;
+	# they have to come back with it.
+	from gofix.purchase_api import reroute_open_spare_procurement
+
+	reroute_open_spare_procurement(sr, sr.source_warehouse)
+
+	sr.add_comment(
+		"Info",
+		_("Dispatch to {0} cancelled before pickup — {1}").format(destination or "—", reason),
+	)
+	frappe.msgprint(
+		_("Dispatch cancelled. The device stays at {0}.").format(
+			(sr.source_warehouse or "").split(" - ")[0]
+		),
+		indicator="green",
+	)
+	return {"ok": True, "status": "", "current_location": sr.source_warehouse}
+
+
 @frappe.whitelist(methods=["POST"])
 def return_service_transfer(service_request) -> dict:
 	"""Initiate return of device from service center back to origin store."""

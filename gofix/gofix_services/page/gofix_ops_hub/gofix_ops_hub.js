@@ -1115,6 +1115,11 @@ class GoFixOpsHub {
 					<button class="btn btn-xs btn-default" id="goh-return-store"
 						title="${__("Send the device back to the store that raised the ticket")}">
 						<i class="fa fa-undo"></i> ${__("Return to Store")}
+					</button>` : ""}
+				${d.transfer_status === "In Transit" ? `
+					<button class="btn btn-xs btn-default" id="goh-cancel-transfer"
+						title="${__("Call the dispatch back — only while the device has not been picked up")}">
+						<i class="fa fa-times"></i> ${__("Cancel Dispatch")}
 					</button>` : ""}`;
 		}
 		return `
@@ -2170,6 +2175,35 @@ class GoFixOpsHub {
 				);
 			});
 
+			// Call back a dispatch that has not left the shelf yet.
+			content.find("#goh-cancel-transfer").on("click", () => {
+				const dlg = new frappe.ui.Dialog({
+					title: __("Cancel dispatch of {0}", [d.name]),
+					fields: [
+						{ fieldname: "note", fieldtype: "HTML",
+						  options: `<p class="text-muted small">${__("Only possible while the device has not been picked up. It stays at {0} and any redirected spares come back with it.", [(d.source_warehouse || "").split(" - ")[0]])}</p>` },
+						{ fieldname: "reason", fieldtype: "Small Text", reqd: 1,
+						  label: __("Why is it being called back?") },
+					],
+					primary_action_label: __("Cancel Dispatch"),
+					primary_action: (v) => {
+						dlg.get_primary_btn().prop("disabled", true);
+						frappe.xcall("gofix.gofix_services.api.cancel_service_transfer", {
+							service_request: d.name, reason: v.reason,
+						}).then(() => {
+							dlg.hide();
+							frappe.show_alert({ message: __("Dispatch cancelled."), indicator: "green" });
+							self._refresh_all();
+						}).catch((err) => {
+							dlg.get_primary_btn().prop("disabled", false);
+							frappe.msgprint({ title: __("Could not cancel"),
+								message: err.message || String(err), indicator: "red" });
+						});
+					},
+				});
+				dlg.show();
+			});
+
 			// Device handover — custody moves, solution assignments stay
 			content.find("#goh-device-handover").on("click", () => {
 				const holder = d.device_holder || "";
@@ -2443,7 +2477,7 @@ class GoFixOpsHub {
 				"#goh-back-to-analysis", "#goh-save-solutions", "#goh-back-to-confirm",
 				"#goh-back-to-solutions", "#goh-submit-qc",
 				"#goh-back-to-assign", "#goh-rework-assign", "#goh-device-handover",
-				"#goh-send-hub", "#goh-return-store",
+				"#goh-send-hub", "#goh-return-store", "#goh-cancel-transfer",
 			];
 			// Assigning MORE technicians mid-repair is legitimate (a ticket can be
 			// split across L1/L2/L4) — keep the Assign action live while the

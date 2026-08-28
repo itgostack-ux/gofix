@@ -1,6 +1,13 @@
 // Copyright (c) 2026, GoStack and contributors
 // For license information, please see license.txt
 
+const gofix_ticket_stage_time_store_query = () => ({
+	query: "gofix.gofix_services.store_context.warehouse_query",
+	filters: {
+		company: frappe.query_report.get_filter_value("company"),
+	},
+});
+
 frappe.query_reports["GoFix Ticket Stage Time"] = {
 	filters: [
 		{
@@ -21,7 +28,7 @@ frappe.query_reports["GoFix Ticket Stage Time"] = {
 			label: __("Store / Location"),
 			fieldtype: "Link",
 			options: "Warehouse",
-			get_query: () => ({ filters: { is_group: 0, disabled: 0 } }),
+			get_query: gofix_ticket_stage_time_store_query,
 		},
 		{
 			fieldname: "from_date",

@@ -12,17 +12,17 @@ except (ImportError, ModuleNotFoundError):
         if is_privileged_user(user):
             return None
         companies = set()
-        if frappe.db.exists("DocType", "POS Executive"):
-            try:
-                companies.update(filter(None, frappe.get_all(
-                    "POS Executive",
-                    filters={"user": user, "is_active": 1},
-                    pluck="company")))
-            except Exception:
-                frappe.log_error(
-                    frappe.get_traceback(),
-                    "GoFix fallback company-scope resolution failed")
-                return []
+        try:
+            from ch_erp15.ch_erp15.scope import resolve_scope_from_sources
+
+            companies.update(resolve_scope_from_sources(user)["companies"])
+        except (ImportError, ModuleNotFoundError):
+            pass
+        except Exception:
+            frappe.log_error(
+                frappe.get_traceback(),
+                "GoFix fallback company-scope resolution failed")
+            return []
         return sorted(companies)
 
 
@@ -80,27 +80,23 @@ def _get_user_service_scope(user=None):
                 "GoFix authoritative user-scope resolution failed")
             return {"companies": set(), "warehouses": set()}
 
+    # Which records grant a user a store is configuration, not something this
+    # module gets to decide — see CH ERP Settings > Additional Scope Sources.
+    # Naming the doctype here meant four apps each carried their own copy of the
+    # answer, and the one that drifted failed open.
     store_names = set()
-    # CH POS User Allocation retired into CH User Scope (ch_erp15 v34); it only
-    # ever added stores on top of POS Executive, which is still read here.
-    # Trailing comma is load-bearing: without it this is a string, and the loop
-    # walks it letter by letter — "P", "O", "S" — finding no such DocType and
-    # silently resolving every user's store scope to nothing.
-    for doctype in ("POS Executive",):
-        if not frappe.db.exists("DocType", doctype):
-            continue
-        try:
-            rows = frappe.get_all(
-                doctype,
-                filters={"user": user, "is_active": 1},
-                fields=["company", "store"])
-        except Exception:
-            frappe.log_error(
-                frappe.get_traceback(),
-                f"GoFix {doctype} scope resolution failed")
-            return {"companies": set(), "warehouses": set()}
-        companies.update(row.company for row in rows if row.company)
-        store_names.update(row.store for row in rows if row.store)
+    try:
+        from ch_erp15.ch_erp15.scope import resolve_scope_from_sources
+
+        sourced = resolve_scope_from_sources(user)
+        companies.update(sourced["companies"])
+        store_names.update(sourced["stores"])
+    except (ImportError, ModuleNotFoundError):
+        pass
+    except Exception:
+        frappe.log_error(
+            frappe.get_traceback(), "GoFix configured scope-source resolution failed")
+        return {"companies": set(), "warehouses": set()}
 
     if store_names and frappe.db.exists("DocType", "CH Store"):
         warehouses.update(filter(None, frappe.get_all(

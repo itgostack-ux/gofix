@@ -1467,7 +1467,7 @@ class GoFixOpsHub {
 						<option value="">${__("—")}</option>
 						<option value="Pass" ${row.result === "Pass" ? "selected" : ""}>${__("Pass")}</option>
 						<option value="Fail" ${row.result === "Fail" ? "selected" : ""}>${__("Fail")}</option>
-						<option value="N/A" ${row.result === "N/A" ? "selected" : ""}>${__("N/A")}</option>
+						<option value="NA" ${row.result === "NA" ? "selected" : ""}>${__("N/A")}</option>
 					</select>
 				</td>
 				<td><input class="form-control input-xs goh-qc-remarks" data-name="${esc(row.name)}" data-check="${esc(row.check_name)}" value="${esc(row.remarks || "")}" placeholder="${__("Remarks")}"></td>
@@ -1495,8 +1495,6 @@ class GoFixOpsHub {
 				<div class="goh-section-title" style="display:flex;align-items:center;gap:8px">
 					<span><i class="fa fa-check-square-o"></i> ${__("QC Checklist")}</span>
 					<span class="goh-badge ${qc_status === "Pass" ? "badge-green" : qc_status === "Fail" ? "badge-red" : "badge-indigo"}">${esc(qc_status)}</span>
-					<span style="flex:1"></span>
-					${this._transfer_button(d)}
 				</div>
 
 				${checklist.length ? `

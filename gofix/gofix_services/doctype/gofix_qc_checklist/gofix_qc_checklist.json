@@ -24,7 +24,8 @@
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "Result",
-   "options": "\nPass\nFail\nNA"
+   "options": "\nPass\nFail\nNA",
+   "allow_on_submit": 1
   },
   {
    "default": "1",
@@ -44,19 +45,21 @@
   {
    "fieldname": "photo",
    "fieldtype": "Attach Image",
-   "label": "Photo"
+   "label": "Photo",
+   "allow_on_submit": 1
   },
   {
    "fieldname": "remarks",
    "fieldtype": "Small Text",
    "in_list_view": 1,
-   "label": "Remarks"
+   "label": "Remarks",
+   "allow_on_submit": 1
   }
  ],
  "index_web_pages_for_search": 0,
  "istable": 1,
  "links": [],
- "modified": "2025-01-15 00:00:00.000000",
+ "modified": "2026-08-28 09:30:00.000000",
  "modified_by": "Administrator",
  "module": "GoFix Services",
  "name": "GoFix QC Checklist",

@@ -1,5 +1,12 @@
 // Copyright (c) 2026, GoStack and contributors
 
+const gofix_first_time_fix_rate_store_query = () => ({
+	query: "gofix.gofix_services.store_context.warehouse_query",
+	filters: {
+		company: frappe.query_report.get_filter_value("company"),
+	},
+});
+
 frappe.query_reports["GoFix First Time Fix Rate"] = {
 	filters: [
 		{
@@ -26,6 +33,7 @@ frappe.query_reports["GoFix First Time Fix Rate"] = {
 			label: __("Store"),
 			fieldtype: "Link",
 			options: "Warehouse",
+			get_query: gofix_first_time_fix_rate_store_query,
 		},
 		{
 			fieldname: "group_by",

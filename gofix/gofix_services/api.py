@@ -1114,11 +1114,16 @@ def _assert_device_movement_landed(sr) -> None:
 	)
 
 
-# Transit states a dispatch can still be called back from. Once the consignment
-# has been picked up it is with a driver and out of the store's hands — recalling
-# it then is a logistics operation, not a click, which is why the cut-off sits
-# here rather than at delivery.
-_CANCELLABLE_MANIFEST_STATES = ("Draft", "Packed", "Assigned")
+# Transit states a dispatch can still be called back from, in the Stock Entry's
+# own vocabulary — TRANSIT_STATUS_TRANSITIONS lets exactly these fall back to
+# Draft, and "In Transit" onwards only moves forward. That is the real cut-off:
+# once a driver has the consignment, recalling it is a logistics operation, not
+# a click.
+#
+# These are NOT manifest statuses. An earlier version used Draft/Packed/Assigned
+# from CH Transfer Manifest against this field, which no dispatch ever carries —
+# every one starts at Pending With Goods — so cancel refused every single time.
+_CANCELLABLE_TRANSIT_STATES = ("", "Draft", "Pending With Goods", "Ready For Pickup")
 
 
 @frappe.whitelist(methods=["POST"])
@@ -1158,7 +1163,7 @@ def cancel_service_transfer(service_request, reason=None) -> dict:
 	reference = sr.get("last_transfer_reference")
 	if reference and frappe.db.exists("Stock Entry", reference):
 		status = (frappe.db.get_value("Stock Entry", reference, "custom_status") or "Draft").strip()
-		if status not in _CANCELLABLE_MANIFEST_STATES:
+		if status not in _CANCELLABLE_TRANSIT_STATES:
 			frappe.throw(
 				_("Transfer {0} is already <b>{1}</b> — the device has left the store. "
 				  "Receive it at the destination and send it back instead.").format(

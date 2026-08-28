@@ -459,7 +459,6 @@ def _auto_create_device_transfer(sr, from_location, to_location, reason=None):
 		frappe.throw(_("A device item is required before its location can be transferred."))
 
 	frappe.has_permission("Stock Entry", "create", throw=True)
-	frappe.has_permission("Stock Entry", "submit", throw=True)
 	se = frappe.new_doc("Stock Entry")
 	se.stock_entry_type = "Material Transfer"
 	se.company = sr.company
@@ -474,9 +473,25 @@ def _auto_create_device_transfer(sr, from_location, to_location, reason=None):
 		"s_warehouse": from_location,
 		"t_warehouse": to_location,
 		"serial_no": serial_no or "",
+		# custom_quantity is what the transit machine counts against; without it
+		# the dispatch leg moves nothing.
+		"custom_quantity": 1,
+		"custom_original_serials": serial_no or "",
 	})
 	se.insert()
-	se.submit()
+
+	# A customer's device does not teleport between sites. It goes out through
+	# the same two-step transfer every other movement uses — source to transit on
+	# dispatch, transit to destination on receipt — which is the standard
+	# stock-transport pattern (SAP's 313/315) and the reason direct Material
+	# Transfer submit is blocked here at all.
+	#
+	# Submitting straight through would have jumped the stock from store to hub
+	# with no transit visibility, and the guardrail correctly refused it, which
+	# left device transfer failing outright.
+	from ch_erp15.ch_erp15.custom.stock_entry import set_pending_qty
+
+	set_pending_qty(se.name)
 	return se.name
 
 

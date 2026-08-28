@@ -1026,6 +1026,13 @@ def receive_service_transfer(service_request) -> dict:
 	if sr.transfer_status != "In Transit":
 		frappe.throw(_("Device is not in transit (status: {0})").format(sr.transfer_status), title=_("API Error"))
 
+	# Goods receipt is a logistics act, not a service-desk one. The device's
+	# stock sits in transit until someone at the destination actually takes
+	# custody of it, so this refuses to claim receipt before that happened —
+	# otherwise the ticket says "at the hub" while the ledger still says
+	# "in transit", and the difference is a device nobody can find.
+	_assert_device_movement_landed(sr)
+
 	sr.db_set("transfer_status", "Received at Service Center", update_modified=True)
 	sr.db_set("transfer_received_date", today(), update_modified=False)
 	sr.db_set("current_location", sr.transferred_to_store, update_modified=False)
@@ -1036,6 +1043,33 @@ def receive_service_transfer(service_request) -> dict:
 
 	frappe.msgprint(_("Device received at service center"), indicator="green")
 	return {"status": "Received at Service Center"}
+
+
+def _assert_device_movement_landed(sr) -> None:
+	"""Refuse to mark a device received while its stock is still in transit.
+
+	The dispatch leg moved the device out of the origin store into transit. The
+	destination owns it only once the transit entry reaches Transferred, which
+	is what the pickup/delivery flow produces. A ticket that skipped ahead would
+	report the device at a bench it has not reached.
+
+	Sites not running the transit states for service moves are left alone: with
+	no transfer document to check, there is nothing to contradict.
+	"""
+	reference = sr.get("last_transfer_reference")
+	if not reference or not frappe.db.exists("Stock Entry", reference):
+		return
+
+	status = (frappe.db.get_value("Stock Entry", reference, "custom_status") or "").strip()
+	if status in ("Transferred", "Partially Transferred"):
+		return
+
+	frappe.throw(
+		_("The device has not arrived yet — transfer {0} is at <b>{1}</b>. "
+		  "Complete the pickup and delivery, and receive it at the destination, "
+		  "before marking the ticket received.").format(reference, status or _("Draft")),
+		title=_("Device Still In Transit"),
+	)
 
 
 @frappe.whitelist(methods=["POST"])

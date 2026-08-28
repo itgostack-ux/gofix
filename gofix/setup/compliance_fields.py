@@ -32,6 +32,36 @@ def create_compliance_fields():
 	_service_request_intake_controls()
 	_customer_device_custody_fields()
 	_reopen_traceability_fields()
+	_close_outcome_field()
+
+
+def _close_outcome_field():
+	"""Why a job ended without a working device, in one countable field.
+
+	decision says Rejected or Cancelled and repairability_status says the
+	technical verdict, but neither separates "we could not fix it" from "it was
+	not worth fixing" from "the customer said no". That separation is the whole
+	point of measuring failed jobs, so it gets its own field rather than being
+	inferred from two others.
+	"""
+	if not frappe.db.exists("DocType", "Service Request"):
+		return
+
+	create_custom_fields({
+		"Service Request": [
+			{
+				"fieldname": "close_outcome",
+				"label": "Closed Without Repair As",
+				"fieldtype": "Select",
+				"options": "\nNot Repairable\nBER\nCustomer Declined\nCustomer Cancelled",
+				"insert_after": "repairability_reason",
+				"read_only": 1,
+				"allow_on_submit": 1,
+				"in_standard_filter": 1,
+				"description": "Set by the closing action; the coded reason is on Withdrawal Reason.",
+			},
+		]
+	}, ignore_validate=True)
 
 
 def _reopen_traceability_fields():

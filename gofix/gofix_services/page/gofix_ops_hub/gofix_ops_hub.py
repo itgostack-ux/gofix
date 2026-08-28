@@ -4203,7 +4203,7 @@ def go_back_to_stage(sr_name, target_stage) -> dict:
 # ── Not Repairable Flow ───────────────────────────────────────────────────────
 
 @frappe.whitelist(methods=["POST"])
-def mark_not_repairable(sr_name, status="Not Repairable", reason="") -> dict:
+def mark_not_repairable(sr_name, status="Not Repairable", reason="", reason_code=None) -> dict:
 	"""Mark a Service Request as Not Repairable / BER from the Ops Hub.
 
 	Orchestrates:
@@ -4215,6 +4215,20 @@ def mark_not_repairable(sr_name, status="Not Repairable", reason="") -> dict:
 	_assert_sr_permission(sr_name, "write")
 	if status not in ("Not Repairable", "BER"):
 		frappe.throw(_("Status must be 'Not Repairable' or 'BER'"))
+
+	# A coded reason turns this into something countable. Where the caller gives
+	# one, the shared closure path owns the whole decision — ticket, order,
+	# custody and comment — so the counter and the workshop record it
+	# identically. The older free-text call still works for anything not yet
+	# passing a code.
+	if reason_code:
+		from gofix.repair_closure import close_without_repair
+
+		result = close_without_repair(sr_name, status, reason_code, note=reason)
+		result["pending_spares"] = []
+		result["needs_spare_recovery"] = False
+		result["message"] = _("Marked as {0}").format(status)
+		return result
 
 	sr = frappe.get_doc("Service Request", sr_name)
 	if sr.decision in ("Delivered", "Withdrawn", "Cancelled"):

@@ -1756,6 +1756,29 @@ def add_ticket_note(service_request, note, visibility="Internal") -> dict:
 
 
 @frappe.whitelist()
+def get_repair_close_options(service_request=None) -> dict:
+	"""What the counter needs to close a job that will not be repaired.
+
+	Outcomes and their coded reasons in one call, so POS and the Ops Hub put the
+	same words in front of whoever is closing the ticket.
+	"""
+	from gofix.repair_closure import CLOSE_OUTCOMES, get_close_reasons
+
+	if service_request:
+		assert_service_request_access(service_request, permission_type="read")
+	return {
+		"outcomes": [
+			{
+				"outcome": name,
+				"decision": spec["decision"],
+				"reasons": get_close_reasons(name),
+			}
+			for name, spec in CLOSE_OUTCOMES.items()
+		]
+	}
+
+
+@frappe.whitelist()
 def get_device_movement_options(service_request) -> dict:
 	"""The same answer for one ticket, for a screen that holds a single card."""
 	sr = assert_service_request_access(service_request, permission_type="read")

@@ -119,14 +119,40 @@ _WALKIN_SOURCES = [
 	{"source_name": "POS Counter", "description": "Walk-in logged from POS counter"},
 ]
 
+# ``applies_to`` decides which closing outcome offers the reason. Leaving them
+# all on "Any" would put "Parts Not Available" in front of a counter hand
+# recording that the customer changed their mind — which is how a coded reason
+# turns back into noise.
 _WITHDRAWAL_REASONS = [
-	{"reason_name": "Too Expensive", "reason_type": "Financial Constraint", "description": "Customer found repair cost too high"},
-	{"reason_name": "Fixed Elsewhere", "reason_type": "Customer Decision", "description": "Customer got it repaired somewhere else"},
-	{"reason_name": "Not Repairable", "reason_type": "Technical Limitation", "description": "Device cannot be repaired"},
-	{"reason_name": "Customer Changed Mind", "reason_type": "Customer Decision", "description": "Customer decided not to proceed"},
-	{"reason_name": "Buying New Device", "reason_type": "Customer Decision", "description": "Customer decided to buy new device instead"},
-	{"reason_name": "Parts Not Available", "reason_type": "Technical Limitation", "description": "Required spare parts not available"},
-	{"reason_name": "Takes Too Long", "reason_type": "Customer Decision", "description": "Repair time too long for customer"},
+	{"reason_name": "Too Expensive", "reason_type": "Financial Constraint",
+	 "applies_to": "Customer Declined", "description": "Customer found repair cost too high"},
+	{"reason_name": "Fixed Elsewhere", "reason_type": "Customer Decision",
+	 "applies_to": "Customer Cancelled", "description": "Customer got it repaired somewhere else"},
+	{"reason_name": "Not Repairable", "reason_type": "Technical Limitation",
+	 "applies_to": "Not Repairable", "description": "Device cannot be repaired"},
+	{"reason_name": "Customer Changed Mind", "reason_type": "Customer Decision",
+	 "applies_to": "Customer Cancelled", "description": "Customer decided not to proceed"},
+	{"reason_name": "Buying New Device", "reason_type": "Customer Decision",
+	 "applies_to": "Customer Cancelled", "description": "Customer decided to buy new device instead"},
+	{"reason_name": "Parts Not Available", "reason_type": "Technical Limitation",
+	 "applies_to": "Not Repairable", "description": "Required spare parts not available"},
+	{"reason_name": "Takes Too Long", "reason_type": "Customer Decision",
+	 "applies_to": "Customer Cancelled", "description": "Repair time too long for customer"},
+
+	# The outcomes the list could not express at all. BER had no reason of its
+	# own, so "not worth fixing" was being recorded as "cannot be fixed".
+	{"reason_name": "Repair Cost Exceeds Device Value", "reason_type": "Financial Constraint",
+	 "applies_to": "BER", "description": "Beyond economic repair — quote is worth more than the handset"},
+	{"reason_name": "Water Damage Beyond Recovery", "reason_type": "Technical Limitation",
+	 "applies_to": "Not Repairable", "description": "Corrosion or board damage past recovery"},
+	{"reason_name": "Physical Damage Beyond Recovery", "reason_type": "Technical Limitation",
+	 "applies_to": "Not Repairable", "description": "Housing or board damage past recovery"},
+	{"reason_name": "No Fault Found", "reason_type": "Technical Limitation",
+	 "applies_to": "Customer Cancelled", "description": "Reported fault could not be reproduced"},
+	{"reason_name": "Estimate Not Approved In Time", "reason_type": "Customer Decision",
+	 "applies_to": "Customer Declined", "description": "Estimate lapsed without a decision"},
+	{"reason_name": "Other", "reason_type": "Customer Decision", "applies_to": "Any",
+	 "requires_note": 1, "description": "Anything the list does not cover — say what happened"},
 ]
 
 

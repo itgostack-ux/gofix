@@ -63,6 +63,11 @@ def get_close_reasons(outcome: str | None = None) -> list[dict]:
 	)
 	if outcome:
 		rows = [r for r in rows if (r.applies_to or "Any") in ("Any", outcome)]
+		# Reasons written for this outcome first, catch-alls last. Otherwise
+		# "Other" sorts to the top and becomes the default — and the default
+		# should never be the one that demands a note.
+		rows.sort(key=lambda r: ((r.applies_to or "Any") == "Any",
+		                         (r.reason_name or r.name or "").lower()))
 	return rows
 
 

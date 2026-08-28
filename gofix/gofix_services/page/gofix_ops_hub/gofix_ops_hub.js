@@ -2701,38 +2701,80 @@ class GoFixOpsHub {
 			return;
 		}
 		this.parent.find(".goh-not-repairable-btn").on("click", () => {
-			const dlg = new frappe.ui.Dialog({
-				title: __("Mark Not Repairable"),
-				fields: [
-					{
-						fieldname: "status", label: __("Status"), fieldtype: "Select",
-						options: "Not Repairable\nBER", default: "Not Repairable", reqd: 1,
-						description: __("BER = Beyond Economical Repair (repair cost exceeds device value)")
-					},
-					{
-						fieldname: "reason", label: __("Reason"), fieldtype: "Small Text", reqd: 1,
-						description: __("Why is the device not repairable? This will be shown on the customer receipt.")
-					},
-				],
-				primary_action_label: __("Confirm — Not Repairable"),
-				primary_action: v => {
-					dlg.disable_primary_action();
-					frappe.xcall(`${API}.mark_not_repairable`, {
-						sr_name: d.name, status: v.status, reason: v.reason,
-					}).then(r => {
-						dlg.hide();
-						frappe.show_alert({
-							message: __("Marked as {0}", [v.status]), indicator: "orange",
+			// All four ways a job ends without a repair, with the coded reasons
+			// the counter sees. The workshop closing a job and the counter
+			// closing the same job must record it identically, so both read the
+			// one list from the server rather than carrying their own.
+			frappe.xcall("gofix.gofix_services.api.get_repair_close_options",
+				{ service_request: d.name })
+				.then((opts) => {
+					const outcomes = (opts && opts.outcomes) || [];
+					if (!outcomes.length) {
+						frappe.msgprint({
+							title: __("Nothing configured"), indicator: "orange",
+							message: __("No closing reasons are set up. Add them under Withdrawal Reason."),
 						});
-						if (r.needs_spare_recovery && r.pending_spares.length) {
-							self._show_spare_recovery_dialog(d.name, r.pending_spares);
-						} else {
-							self._refresh_all();
-						}
-					}).catch(() => dlg.enable_primary_action());
-				},
-			});
-			dlg.show();
+						return;
+					}
+					const by_outcome = {};
+					outcomes.forEach((o) => { by_outcome[o.outcome] = o.reasons || []; });
+
+					const refresh_reasons = () => {
+						const rows = by_outcome[dlg.get_value("outcome")] || [];
+						dlg.set_df_property("reason", "options",
+							rows.map((r) => ({ value: r.name, label: r.reason_name || r.name })));
+						dlg.set_value("reason", rows.length ? rows[0].name : "");
+						dlg.set_df_property("note", "reqd",
+							rows.length && rows[0].requires_note ? 1 : 0);
+					};
+
+					const dlg = new frappe.ui.Dialog({
+						title: __("Close without repair"),
+						fields: [
+							{
+								fieldname: "outcome", label: __("How did it end?"),
+								fieldtype: "Select", reqd: 1,
+								options: outcomes.map((o) => o.outcome),
+								default: outcomes[0].outcome,
+								description: __("BER = beyond economic repair: fixable, but not for what the device is worth."),
+								onchange: () => refresh_reasons(),
+							},
+							{
+								fieldname: "reason", label: __("Reason"),
+								fieldtype: "Select", reqd: 1,
+								description: __("Coded, so it can be counted later."),
+							},
+							{
+								fieldname: "note", label: __("What happened?"),
+								fieldtype: "Small Text",
+								description: __("Shown on the customer receipt. Required for reasons that mean nothing on their own."),
+							},
+						],
+						primary_action_label: __("Close Job"),
+						primary_action: (v) => {
+							dlg.disable_primary_action();
+							frappe.xcall(`${API}.mark_not_repairable`, {
+								sr_name: d.name, status: v.outcome,
+								reason: v.note, reason_code: v.reason,
+							}).then((r) => {
+								dlg.hide();
+								frappe.show_alert({
+									message: r.handback_entry
+										? __("Closed as {0}. Device issued back to the customer.", [v.outcome])
+										: __("Closed as {0}", [v.outcome]),
+									indicator: "orange",
+								});
+								if (r.needs_spare_recovery && (r.pending_spares || []).length) {
+									self._show_spare_recovery_dialog(d.name, r.pending_spares);
+								} else {
+									self._refresh_all();
+								}
+							}).catch(() => dlg.enable_primary_action());
+						},
+					});
+					dlg.show();
+					refresh_reasons();
+				});
 		});
 	}
 

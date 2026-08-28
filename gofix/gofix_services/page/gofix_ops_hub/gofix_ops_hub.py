@@ -4213,8 +4213,6 @@ def mark_not_repairable(sr_name, status="Not Repairable", reason="", reason_code
 	  4) Return list of consumed spares needing recovery
 	"""
 	_assert_sr_permission(sr_name, "write")
-	if status not in ("Not Repairable", "BER"):
-		frappe.throw(_("Status must be 'Not Repairable' or 'BER'"))
 
 	# A coded reason turns this into something countable. Where the caller gives
 	# one, the shared closure path owns the whole decision — ticket, order,
@@ -4229,6 +4227,15 @@ def mark_not_repairable(sr_name, status="Not Repairable", reason="", reason_code
 		result["needs_spare_recovery"] = False
 		result["message"] = _("Marked as {0}").format(status)
 		return result
+
+	# Without a code this stays the old two-outcome path: the customer-decision
+	# outcomes only exist in the coded flow, because recording one of those as
+	# free text is exactly what this replaced.
+	if status not in ("Not Repairable", "BER"):
+		frappe.throw(
+			_("{0} can only be recorded with a coded reason.").format(status),
+			title=_("Reason Required"),
+		)
 
 	sr = frappe.get_doc("Service Request", sr_name)
 	if sr.decision in ("Delivered", "Withdrawn", "Cancelled"):

@@ -48,7 +48,14 @@ def get_columns(filters):
 		{"label": _("Fixed First Time"), "fieldname": "clean", "fieldtype": "Int", "width": 130},
 		{"label": _("FTFR %"), "fieldname": "ftfr", "fieldtype": "Percent", "width": 100},
 		{"label": _("QC Failures"), "fieldname": "qc_failed", "fieldtype": "Int", "width": 110},
-		{"label": _("Came Back"), "fieldname": "returned", "fieldtype": "Int", "width": 110},
+		{"label": _("Came Back"), "fieldname": "returned", "fieldtype": "Int", "width": 110,
+		 "description": _("Repairs the customer returned about at least once.")},
+		{"label": _("Repeat Visits"), "fieldname": "reopens", "fieldtype": "Int", "width": 120,
+		 "description": _("Every return visit counted. A device back three times counts three.")},
+		{"label": _("Repeat Rate %"), "fieldname": "reopen_rate", "fieldtype": "Percent", "width": 120,
+		 "description": _("Return visits per repair. Above 100% means devices coming back more than once.")},
+		{"label": _("Worst Repeat"), "fieldname": "worst_repeat", "fieldtype": "Int", "width": 110,
+		 "description": _("The most times any single repair here came back.")},
 		{"label": _("Avg Days to Close"), "fieldname": "avg_days", "fieldtype": "Float",
 		 "width": 140, "precision": 1},
 	]
@@ -60,6 +67,70 @@ def _group_expression(group_by: str) -> str:
 	if group_by == "Issue Category":
 		return "COALESCE(NULLIF(sr.issue_category, ''), 'Uncategorised')"
 	return "COALESCE(NULLIF(sr.current_location, ''), sr.source_warehouse, 'Unknown')"
+
+
+def _technician_rows(conditions, params):
+	"""Technician view, at the grain a technician is actually accountable for.
+
+	Grouping by ``sr.service_engineer`` asked the wrong question. It is one
+	field on the ticket, so a repair carried out by two people is credited
+	entirely to one of them, and a return visit lands on whoever that field
+	happened to hold — not on the person whose work failed.
+
+	A technician owns SOLUTION LINES, so that is the grain here: one row of work,
+	one owner. And since a return visit now names the exact line it came back
+	on, a repeat is charged to the line that failed rather than smeared across
+	everything on the ticket. That is what makes "who has the most repeats" a
+	fair question to ask.
+	"""
+	return frappe.db.sql(
+		f"""
+		SELECT
+			COALESCE(NULLIF(emp.employee_name, ''), NULLIF(sl.technician, ''), 'Unassigned') AS grp,
+			COUNT(DISTINCT sl.name) AS total,
+			COUNT(DISTINCT CASE WHEN qc.failures > 0 OR qcl.fails > 0
+			                    THEN sr.name END) AS qc_failed,
+			COUNT(DISTINCT CASE WHEN back.hits > 0 THEN sl.name END) AS returned,
+			SUM(IFNULL(back.hits, 0)) AS reopens,
+			MAX(IFNULL(back.hits, 0)) AS worst_repeat,
+			AVG(CASE
+				WHEN sr.actual_completion_date IS NOT NULL AND sr.service_date IS NOT NULL
+				THEN DATEDIFF(sr.actual_completion_date, sr.service_date)
+			END) AS avg_days
+		FROM `tabService Request` sr
+		JOIN `tabSR Solution Line` sl
+		  ON sl.parent = sr.name AND sl.parenttype = 'Service Request'
+		LEFT JOIN `tabEmployee` emp ON emp.name = sl.technician
+
+		/* Return visits charged to the line they came back on. */
+		LEFT JOIN (
+			SELECT il.reopened_from_solution AS line, COUNT(*) AS hits
+			FROM `tabSR Issue Line` il
+			WHERE IFNULL(il.reopened_from_solution, '') != ''
+			GROUP BY il.reopened_from_solution
+		) back ON back.line = sl.name
+
+		LEFT JOIN (
+			SELECT sl2.parent, COUNT(*) AS failures
+			FROM `tabGoFix Status Log` sl2
+			WHERE sl2.parenttype = 'Service Request' AND sl2.to_status = 'Rework'
+			GROUP BY sl2.parent
+		) qc ON qc.parent = sr.name
+		LEFT JOIN (
+			SELECT so.service_request AS parent, COUNT(*) AS fails
+			FROM `tabGoFix QC Checklist` cl
+			JOIN `tabSales Order` so ON so.name = cl.parent
+			WHERE cl.parenttype = 'Sales Order' AND cl.result = 'Fail'
+			  AND IFNULL(so.service_request, '') != ''
+			GROUP BY so.service_request
+		) qcl ON qcl.parent = sr.name
+
+		WHERE {' AND '.join(conditions)}
+		GROUP BY grp
+		ORDER BY total DESC
+		""",
+		params, as_dict=True,
+	)
 
 
 def get_data(filters):
@@ -90,7 +161,12 @@ def get_data(filters):
 	if scope is not None:
 		conditions.append(scope)
 
-	grp = _group_expression(filters.get("group_by") or "Store")
+	group_by = filters.get("group_by") or "Store"
+	if group_by == "Technician":
+		rows = _technician_rows(conditions, params)
+		return _finalise(rows)
+
+	grp = _group_expression(group_by)
 
 	rows = frappe.db.sql(
 		f"""
@@ -104,6 +180,16 @@ def get_data(filters):
 			/* The customer came back about this device afterwards. */
 			SUM(CASE WHEN rep.returns > 0 OR IFNULL(sr.repeat_complaint_count, 0) > 0
 			         THEN 1 ELSE 0 END) AS returned,
+
+			/* "Came Back" answers how many repairs failed. It cannot answer how
+			   BADLY: a device returned three times reads the same as one
+			   returned once. These two say how often, and how bad the worst
+			   case was — which is the pair that identifies a systemic fault
+			   rather than an unlucky ticket. */
+			SUM(GREATEST(IFNULL(rep.returns, 0),
+			             IFNULL(sr.repeat_complaint_count, 0))) AS reopens,
+			MAX(GREATEST(IFNULL(rep.returns, 0),
+			             IFNULL(sr.repeat_complaint_count, 0))) AS worst_repeat,
 
 			AVG(CASE
 				WHEN sr.actual_completion_date IS NOT NULL AND sr.service_date IS NOT NULL
@@ -149,6 +235,10 @@ def get_data(filters):
 		params, as_dict=True,
 	)
 
+	return _finalise(rows)
+
+
+def _finalise(rows):
 	for row in rows:
 		total = cint(row.total)
 		# A repair is counted once however many ways it went wrong — a ticket
@@ -156,6 +246,9 @@ def get_data(filters):
 		# could read below zero.
 		row.qc_failed = cint(row.qc_failed)
 		row.returned = cint(row.returned)
+		row.reopens = cint(row.reopens)
+		row.worst_repeat = cint(row.worst_repeat)
+		row.reopen_rate = (row.reopens / total * 100) if total else 0
 		row.clean = max(0, total - _distinct_failures(row))
 		row.ftfr = (row.clean / total * 100) if total else 0
 		row.avg_days = flt(row.avg_days)

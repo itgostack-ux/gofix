@@ -185,21 +185,44 @@ def _build_status_timeline(sr) -> list:
 			key=lambda r: (get_datetime(r.changed_at) if r.changed_at else opened, cint(r.idx)),
 		)
 		prev = opened
+		last_landed = None
 		for r in track_rows:
 			at = get_datetime(r.changed_at) if r.changed_at else None
 			hours = 0.0
 			if at and prev and at >= prev:
 				hours = round(time_diff_in_hours(at, prev), 2)
-			out.append({
-				"track": track,
-				"event_type": event_type,
-				"from_status": label(r.from_status) if event_type == "Operations Stage" else r.from_status,
-				"to_status": label(r.to_status) if event_type == "Operations Stage" else r.to_status,
-				"changed_by": r.changed_by,
-				"changed_by_name": names.get(r.changed_by, r.changed_by or ""),
-				"changed_at": str(r.changed_at) if r.changed_at else "",
-				"hours_in_prev": hours,
-			})
+			frm = label(r.from_status) if event_type == "Operations Stage" else r.from_status
+			to = label(r.to_status) if event_type == "Operations Stage" else r.to_status
+
+			def row(from_status, to_status, hrs, inferred=False):
+				return {
+					"track": track,
+					"event_type": event_type,
+					"from_status": from_status,
+					"to_status": to_status,
+					"changed_by": r.changed_by,
+					"changed_by_name": names.get(r.changed_by, r.changed_by or ""),
+					"changed_at": str(r.changed_at) if r.changed_at else "",
+					"hours_in_prev": hrs,
+					"inferred": inferred,
+				}
+
+			# A hub action that skipped a step wrote a row leaving a stage the
+			# ticket had never been recorded as entering, and the dwell since the
+			# last move then landed on that stage's name. On SR-260828-16218 the
+			# device sat in Repair for seven hours and the log charged them to
+			# Quality Control, which the technician had passed in seconds.
+			#
+			# The gap is reconstructed rather than papered over: the ticket did
+			# pass through the stage in between, and the hours belong to the one
+			# it demonstrably sat in — the last stage it was recorded as
+			# reaching. The hop that follows takes none.
+			if last_landed and frm and frm != last_landed:
+				out.append(row(last_landed, frm, hours, inferred=True))
+				hours = 0.0
+
+			out.append(row(frm, to, hours))
+			last_landed = to
 			if at:
 				prev = at
 
@@ -3765,7 +3788,11 @@ def get_service_billing_line(sr_name) -> dict:
 		pass
 	except Exception as e:
 		at_home_store = False
-		custody_message = str(e)
+		# The throw is written for Desk, where frappe.bold() renders. This value
+		# is JSON for the POS dialog, which escapes what it is given — so the
+		# markup arrived on screen as literal <strong> tags. Strip it here and
+		# let each surface do its own emphasis.
+		custody_message = frappe.utils.strip_html(str(e)).strip()
 
 	s = get_invoice_summary(sr_name)
 

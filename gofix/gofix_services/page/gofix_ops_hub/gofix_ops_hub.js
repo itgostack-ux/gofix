@@ -765,12 +765,15 @@ class GoFixOpsHub {
 				? ` <span class="goh-repeat" title="${__("Ticket returned to this stage")}">${__("revisit")} ${seenStage[key]}</span>`
 				: "";
 			const isOps = (e.track || "") === "Operations";
+			const inferred = e.inferred
+				? ` <span class="goh-inferred" title="${__("No move was logged for this step. It is reconstructed from the stage the ticket had actually reached, so the waiting time is charged where it was spent.")}">${__("reconstructed")}</span>`
+				: "";
 			return `
 				<tr>
 					<td class="goh-num text-muted">${i + 1}</td>
 					<td><span class="goh-track goh-track-${isOps ? "ops" : "life"}">${esc(e.track || "—")}</span></td>
 					<td class="text-muted">${esc(e.from_status || __("Intake"))}</td>
-					<td><b>${esc(to)}</b>${repeat}</td>
+					<td><b>${esc(to)}</b>${repeat}${inferred}</td>
 					<td class="text-right goh-num">${fmtHours(e.hours_in_prev)}</td>
 					<td>${esc(e.changed_by_name || e.changed_by || "—")}</td>
 					<td class="text-muted">${when}</td>

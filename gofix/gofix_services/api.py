@@ -1584,7 +1584,7 @@ def get_store_service_board(warehouse, tab=None, search=None) -> dict:
 			"contact_number", "serial_no", "actual_imei", "device_item_name",
 			"issue_category", "service_date", "estimated_cost", "final_cost",
 			"service_invoice", "transfer_status", "current_location",
-			"transferred_to_store", "source_warehouse",
+			"transferred_to_store", "source_warehouse", "last_transfer_reference",
 		],
 		order_by="modified desc",
 		limit_page_length=row_limit,
@@ -1600,6 +1600,7 @@ def get_store_service_board(warehouse, tab=None, search=None) -> dict:
 			device_at = r.get("current_location") or r.get("transferred_to_store")
 		r["device_at"] = device_at
 		r["at_home_store"] = bool(device_at == warehouse)
+		r.update(device_movement_options(r, warehouse))
 
 	decision_counts = {
 		row.decision: cint(row.count)
@@ -1624,6 +1625,71 @@ def get_store_service_board(warehouse, tab=None, search=None) -> dict:
 	))
 
 	return {"rows": rows, "counts": counts}
+
+
+# Landed states in the Stock Entry's own transit vocabulary: the consignment
+# is at the destination and can be taken into stock there.
+_LANDED_TRANSIT_STATES = ("Ready For Receive", "Receive At Transit", "Transferred",
+                          "Partially Transferred")
+
+
+def device_movement_options(row, home_warehouse=None) -> dict:
+	"""Which device movements this ticket can actually perform right now.
+
+	The tracker offered Send to Hub and Cancel Dispatch and nothing else, so a
+	device that had left its store had no way back: cancel stops being legal the
+	moment a driver picks it up, receive lives only in the Ops Hub, and the
+	return leg was reachable only from a status the ticket could not get to
+	without receiving first. The device could go out and not come home.
+
+	Both halves of the answer are needed, because the ticket and the ledger
+	disagree more often than they agree — a ticket reads "In Transit" from the
+	moment it is dispatched, while the goods sit on the origin's dock until
+	somebody drives them. So the ticket's transfer_status says which leg we are
+	on, and the transfer document says how far that leg has actually got.
+	"""
+	transfer = (row.get("transfer_status") or "").strip()
+	reference = row.get("last_transfer_reference")
+	movement = ""
+	if reference:
+		movement = (frappe.db.get_value("Stock Entry", reference, "custom_status") or "").strip()
+
+	# No transfer document means nothing contradicts the ticket, so trust it.
+	landed = (not reference) or movement in _LANDED_TRANSIT_STATES
+	actions = []
+	if transfer in ("", "Not Transferred", "Returned to Store"):
+		actions.append("dispatch")
+	elif transfer == "In Transit":
+		if movement in _CANCELLABLE_TRANSIT_STATES:
+			actions.append("cancel")
+		if landed:
+			actions.append("receive")
+	elif transfer in ("Received at Service Center", "Repair Complete"):
+		actions.append("return")
+	elif transfer == "Return In Transit":
+		if landed:
+			actions.append("confirm_return")
+
+	return {
+		"movement_status": movement,
+		"transfer_actions": actions,
+		"awaiting_pickup": transfer == "In Transit" and movement in _CANCELLABLE_TRANSIT_STATES,
+		"home_warehouse": home_warehouse or row.get("source_warehouse"),
+	}
+
+
+@frappe.whitelist()
+def get_device_movement_options(service_request) -> dict:
+	"""The same answer for one ticket, for a screen that holds a single card."""
+	sr = assert_service_request_access(service_request, permission_type="read")
+	return device_movement_options(
+		{
+			"transfer_status": sr.get("transfer_status"),
+			"last_transfer_reference": sr.get("last_transfer_reference"),
+			"source_warehouse": sr.get("source_warehouse"),
+		},
+		sr.get("source_warehouse"),
+	)
 
 
 # ── Issue → Solution → Spare Cascade APIs ────────────────────────────

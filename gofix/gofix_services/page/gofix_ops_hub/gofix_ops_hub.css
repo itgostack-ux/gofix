@@ -572,6 +572,22 @@
 
 .goh-track-name { color: var(--text-muted); font-weight: 600; }
 
+/* A step nobody logged, rebuilt from where the ticket had actually reached.
+   Says so, rather than presenting a reconstruction as a record. */
+.goh-inferred {
+	display: inline-block;
+	margin-left: 6px;
+	font-size: 10px;
+	text-transform: uppercase;
+	letter-spacing: .05em;
+	padding: 1px 5px;
+	border-radius: 3px;
+	background: rgba(100, 116, 139, .14);
+	color: #475569;
+	white-space: nowrap;
+}
+[data-theme="dark"] .goh-inferred { background: rgba(148, 163, 184, .16); color: #cbd5e1; }
+
 /* ── Repair Cards ────────────────────────────────────────────────────────── */
 .goh-repair-cards { display: flex; flex-direction: column; gap: 8px; }
 .goh-repair-card {

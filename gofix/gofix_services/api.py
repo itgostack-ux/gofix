@@ -1816,11 +1816,62 @@ def get_eligible_technicians(issue_categories, warehouse=None) -> list:
 
 	rows = [r for r in rows if certification_valid(r.name)]
 
+	# Same roster rule as the picker — one answer to "who works here".
+	rostered = technicians_mapped_to_location(warehouse)
+	if rostered:
+		on_roster = [r for r in rows if r.name in rostered]
+		if on_roster:
+			return on_roster
+
 	if warehouse and frappe.db.has_column("Employee", "gofix_service_warehouse"):
 		local = [r for r in rows if r.get("gofix_service_warehouse") == warehouse]
 		if local:
 			return local
 	return rows
+
+
+def technicians_mapped_to_location(warehouse: str) -> set:
+	"""Employees whose USER is rostered to this store in CH User Scope.
+
+	POS already answers "who works here" from CH User Scope Store, and that
+	roster is what an administrator actually maintains. GoFix was answering the
+	same question from Employee.gofix_service_warehouse — a second, parallel
+	mapping nobody keeps in step, which is how the Ops Hub ended up offering
+	technicians from other stores.
+
+	Returns an empty set when the store has no roster, which callers treat as
+	"no opinion" and fall back to the old field. Better an unfiltered picker
+	than an empty one: a site that has not adopted CH User Scope must still be
+	able to assign work.
+	"""
+	if not warehouse:
+		return set()
+	try:
+		from ch_erp15.ch_erp15.scope import get_store_users
+	except ImportError:
+		return set()
+
+	store = frappe.db.get_value("CH Store", {"warehouse": warehouse}, "name")
+	if not store:
+		node, seen = warehouse, set()
+		while node and node not in seen:
+			seen.add(node)
+			store = frappe.db.get_value("CH Store", {"warehouse_group": node}, "name")
+			if store:
+				break
+			node = frappe.db.get_value("Warehouse", node, "parent_warehouse")
+	if not store:
+		return set()
+
+	users = [row["user"] for row in (get_store_users(store) or []) if row.get("user")]
+	if not users:
+		return set()
+
+	return set(frappe.get_all(
+		"Employee",
+		filters={"user_id": ("in", users), "status": "Active"},
+		pluck="name",
+	))
 
 
 @frappe.whitelist()
@@ -1884,7 +1935,17 @@ def technician_query(doctype, txt, searchfield, start, page_len, filters) -> lis
 		""",
 		values,
 	)
-	# When the location has dedicated technicians, hide other stores' staff.
+	# The store roster wins where one exists: a technician offered for this
+	# location must be somebody actually rostered to it, not merely tagged to it
+	# on a second field.
+	rostered = technicians_mapped_to_location(warehouse)
+	if rostered:
+		on_roster = [r for r in rows if r[0] in rostered]
+		if on_roster:
+			return [r[:3] for r in on_roster]
+
+	# No roster, or nobody on it holds a technician grade — fall back to the
+	# warehouse tag rather than returning nothing.
 	if has_wh_col and warehouse and any(r[3] == 0 for r in rows):
 		rows = [r for r in rows if r[3] == 0]
 	return [r[:3] for r in rows]

@@ -221,6 +221,15 @@ def release_holds_on_dead_ticket(doc, method=None):
 		# Only a DRAFT usage is a mere hold. A submitted one has already moved
 		# stock and must be recovered deliberately, not cancelled from here.
 		if usage and frappe.db.get_value("Spare Parts Usage", usage, "docstatus") == 0:
+			# Drop the pointer BEFORE the record it points at. A submitted
+			# Service Request may not link to something that no longer exists,
+			# so leaving it behind made the very next save of the ticket fail
+			# with "Could not find Spare Parts Usage" — which is what blocked
+			# closing a ticket as Not Repairable.
+			if row.get("spare_usage"):
+				frappe.db.set_value(
+					"SR Spare Line", row.name, "spare_usage", None, update_modified=False
+				)
 			frappe.delete_doc("Spare Parts Usage", usage, force=1, ignore_permissions=True)
 
 	doc.add_comment(

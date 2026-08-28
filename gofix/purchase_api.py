@@ -197,6 +197,83 @@ def mark_spares_in_transit(doc, method=None):
 		frappe.log_error(frappe.get_traceback(), f"GoFix: in-transit update failed for {doc.name}")
 
 
+def reserve_waiting_spares(item_code: str, warehouse: str) -> list[dict]:
+	"""Give newly-arrived stock to the tickets that have been waiting for it.
+
+	A ticket whose part is not on the shelf raises a requisition and its line
+	sits at Awaiting Procurement. Until now only stock that arrived *against
+	that requisition* could release it — so a part that turned up any other way,
+	bought separately, transferred in from another store, corrected on a count,
+	sat on the shelf while the ticket still read "not ordered yet". The
+	technician had no way to know it was there.
+
+	This is what a goods receipt does everywhere else: allocate against the open
+	demand for that item at that location. Oldest ticket first, because the one
+	that has waited longest has the better claim, and only as far as the free
+	stock goes — the rest keep waiting, honestly.
+	"""
+	if not (item_code and warehouse):
+		return []
+
+	from gofix.spare_sourcing import get_spare_availability
+
+	free = flt(get_spare_availability(item_code, warehouse)["available_qty"])
+	if free <= 0:
+		return []
+
+	waiting = frappe.db.sql(
+		"""
+		SELECT sl.name, sl.parent, sl.qty, sl.item_name, sl.spare_item
+		FROM `tabSR Spare Line` sl
+		JOIN `tabService Request` sr ON sr.name = sl.parent
+		WHERE sl.parenttype = 'Service Request'
+		  AND sl.spare_item = %(item)s
+		  AND sl.status = 'Awaiting Procurement'
+		  AND sr.docstatus = 1
+		  AND (
+			CASE
+				WHEN sr.transfer_status IN ('In Transit', 'Received at Service Center')
+					AND COALESCE(sr.transferred_to_store, '') != ''
+				THEN sr.transferred_to_store
+				ELSE COALESCE(NULLIF(sr.current_location, ''), sr.source_warehouse)
+			END
+		  ) = %(wh)s
+		ORDER BY sl.creation
+		""",
+		{"item": item_code, "wh": warehouse},
+		as_dict=True,
+	)
+
+	reserved = []
+	for line in waiting:
+		qty = flt(line.qty)
+		if qty <= 0 or qty > free:
+			continue
+		frappe.db.set_value(
+			"SR Spare Line", line.name,
+			{"status": "Reserved", "expected_date": None},
+			update_modified=False,
+		)
+		free -= qty
+		reserved.append(line)
+		if free <= 0:
+			break
+
+	for line in reserved:
+		try:
+			frappe.get_doc("Service Request", line.parent).add_comment(
+				"Comment",
+				_("{0} × {1:g} arrived at {2} and is now reserved for this ticket.").format(
+					line.item_name or line.spare_item, flt(line.qty),
+					(warehouse or "").split(" - ")[0],
+				),
+			)
+		except Exception:
+			frappe.log_error(frappe.get_traceback(),
+			                 f"GoFix: could not annotate {line.parent} after allocation")
+	return reserved
+
+
 def allocate_received_spares_to_tickets(doc, method=None):
 	"""Purchase Receipt on_submit hook — close the GRN → ticket loop.
 
@@ -209,8 +286,9 @@ def allocate_received_spares_to_tickets(doc, method=None):
 	try:
 		item_rows = doc.get("items") or []
 		mr_names = {row.get("material_request") for row in item_rows if row.get("material_request")}
-		if not mr_names:
-			return
+		# No requisition behind this receipt is not a reason to stop: the open-
+		# demand pass below still has work to do. Returning here made that pass
+		# unreachable for exactly the receipts it exists to handle.
 		for mr_name in mr_names:
 			sr_name = frappe.db.get_value("Material Request", mr_name, "service_request")
 			if not sr_name:
@@ -269,6 +347,42 @@ def allocate_received_spares_to_tickets(doc, method=None):
 				)
 	except Exception:
 		frappe.log_error(frappe.get_traceback(), f"Spare allocation on {doc.name} failed")
+
+	# Second pass, for stock that arrived without a requisition behind it. The
+	# pass above can only match a receipt back to the ticket that asked for it;
+	# a part bought separately, or received for the shelf, would otherwise land
+	# beside a ticket still reading "not ordered yet".
+	try:
+		seen = set()
+		for row in (doc.get("items") or []):
+			key = (row.get("item_code"), row.get("warehouse"))
+			if not all(key) or key in seen:
+				continue
+			seen.add(key)
+			reserve_waiting_spares(*key)
+	except Exception:
+		frappe.log_error(frappe.get_traceback(),
+		                 f"GoFix: open-demand allocation on {doc.name} failed")
+
+
+def allocate_transferred_spares_to_tickets(doc, method=None):
+	"""Stock Entry on_submit — the same allocation, for stock that was moved.
+
+	A part transferred in from another store is on the shelf exactly as much as
+	one that was bought, and a ticket waiting for it should be released either
+	way.
+	"""
+	try:
+		seen = set()
+		for row in (doc.get("items") or []):
+			key = (row.get("item_code"), row.get("t_warehouse"))
+			if not all(key) or key in seen:
+				continue
+			seen.add(key)
+			reserve_waiting_spares(*key)
+	except Exception:
+		frappe.log_error(frappe.get_traceback(),
+		                 f"GoFix: open-demand allocation on {doc.name} failed")
 
 
 @frappe.whitelist(methods=["POST"])

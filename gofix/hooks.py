@@ -163,6 +163,11 @@ doc_events = {
 		"on_cancel": "gofix.purchase_api.unmark_spares_delivered",
 		"on_trash": "gofix.purchase_api.unmark_spares_delivered",
 	},
+	"Stock Entry": {
+		# A part transferred in is on the shelf as surely as one that was bought,
+		# so a ticket waiting for it is released either way.
+		"on_submit": "gofix.purchase_api.allocate_transferred_spares_to_tickets",
+	},
 	"Service Request": {
 		"on_update": "gofix.gofix_services.whatsapp_notifications.on_service_request_update",
 		"on_update_after_submit": [

@@ -256,10 +256,16 @@ def create_sales_order_custom_fields():
 				"fieldname": "repair_outcome",
 				"label": "Repair Outcome",
 				"fieldtype": "Select",
-				"options": "\nRepaired\nNot Repairable\nCustomer Cancelled",
+				# Must carry every value the code actually writes. set_repairability
+				# and mark_not_repairable both copy the SR's repairability_status
+				# straight in, and that field has BER — so a device marked Beyond
+				# Economic Repair put a value here the Select rejected. db_set
+				# skipped validation on the way in, and every later save of the
+				# order then failed, which is what blocked QC on SR-260828-16220.
+				"options": "\nRepaired\nNot Repairable\nBER\nCustomer Cancelled",
 				"insert_after": "qc_status",
 				"allow_on_submit": 1,
-				"description": "Mark as Not Repairable or Customer Cancelled to close without QC"
+				"description": "Mark as Not Repairable, BER or Customer Cancelled to close without QC"
 			},
 			{
 				"fieldname": "qc_checked_by",

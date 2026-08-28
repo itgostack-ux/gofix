@@ -4265,21 +4265,55 @@ def mark_not_repairable(sr_name, status="Not Repairable", reason="") -> dict:
 
 	_log_ops_stage(sr_name, current_stage, "closed")
 
-	# 4) Update serial lifecycle
+	# 4) Serial lifecycle — but only for stock we own.
+	#
+	# "Not Repairable" is not a state on CH Serial Lifecycle at all; its states
+	# are inventory states (In Stock, In Service, Scrapped...). Asking for one
+	# that does not exist threw "Cannot move from In Stock to Not Repairable" at
+	# the operator, and the except below swallowed the exception without
+	# clearing the message, so the dialog appeared anyway.
+	#
+	# A customer's handset is not our inventory. It sits in a Customer Device
+	# custody bin at nil valuation and goes home to its owner; none of the
+	# inventory states describe that, so it is left alone rather than given a
+	# meaningless one. Our own stock that cannot be repaired is Scrapped, which
+	# is a legal move from every state a device in for repair can be in.
 	serial_no = sr.get("serial_no")
-	if serial_no:
+	if serial_no and not sr.get("customer_device_warehouse"):
+		messages = len(frappe.message_log)
 		try:
 			from ch_item_master.ch_item_master.doctype.ch_serial_lifecycle.ch_serial_lifecycle import (
 				update_lifecycle_status_for_document as update_lifecycle_status,
 			)
 			update_lifecycle_status(
 				serial_no=serial_no,
-				new_status="Not Repairable",
+				new_status="Scrapped",
 				company=sr.company,
 				remarks=_("{0} — {1}").format(status, reason or ""),
 			)
-		except (ImportError, Exception):
+		except Exception:
+			# Catching a frappe.throw does not un-queue its message, so a
+			# swallowed failure would still pop a dialog. Drop what this block
+			# queued; the log is where the detail belongs.
+			del frappe.message_log[messages:]
 			frappe.log_error(frappe.get_traceback(), f"Not Repairable: lifecycle update failed for {sr_name}")
+
+	# 5) The device leaves our custody. A ticket that ends Not Repairable still
+	# has the customer's handset on a shelf, and nothing was issuing it back
+	# out — the custody bin only ever grew. Issue it, and hand the customer the
+	# receipt for it.
+	handback_entry = None
+	try:
+		from gofix.customer_device_stock import release_customer_device
+
+		handback_entry = release_customer_device(
+			sr, reason=_("Closed {0}: {1}").format(status, reason or _("no reason given"))
+		)
+		if handback_entry:
+			sr.db_set("customer_device_released_entry", handback_entry, update_modified=False)
+	except Exception:
+		frappe.log_error(frappe.get_traceback(),
+		                 f"Not Repairable: custody release failed for {sr_name}")
 
 	# 4) Check for consumed spares that need recovery
 	pending_spares = frappe.get_all("Spare Parts Usage",
@@ -4292,6 +4326,10 @@ def mark_not_repairable(sr_name, status="Not Repairable", reason="") -> dict:
 		"message": _("Marked as {0}").format(status),
 		"pending_spares": pending_spares,
 		"needs_spare_recovery": len(pending_spares) > 0,
+		# The document that says the customer has their device back. The counter
+		# prints it at handover; without it the only record of the device leaving
+		# is a stock movement nobody sees.
+		"handback_entry": handback_entry,
 	}
 
 

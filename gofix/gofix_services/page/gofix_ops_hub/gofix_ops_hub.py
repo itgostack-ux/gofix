@@ -3312,7 +3312,7 @@ def complete_qc(sr_name, qc_result) -> dict:
 	_assert_removed_part_details_complete(sr)
 
 	so = frappe.get_doc("Sales Order", sr.service_order)
-	# A pass is a sign-off, so it needs the checklist actually answered. The hub
+	# A pass is a sign-off. Where a checklist exists it must be answered — the hub
 	# offers Pass/Fail as soon as the QC step opens, which let a ticket be
 	# certified with the checklist still reading "No QC checklist found".
 	# A Fail stays open — a technician must be able to reject a device without
@@ -3323,11 +3323,20 @@ def complete_qc(sr_name, qc_result) -> dict:
 			filters={"parent": sr.service_order},
 			fields=["check_name", "result", "is_mandatory"],
 		)
+		# No checklist at all is not a failure to inspect — it means no QC
+		# template matched this ticket's solutions, so there is nothing to
+		# answer. Blocking the pass there strands the repair: the checklist can
+		# never appear, and the invoice can never be raised. The sign-off is
+		# recorded on the ticket either way.
+		#
+		# A checklist that DOES exist is a different matter, and the rules below
+		# still hold: every check answered, and no Fail among them.
 		if not checks:
-			frappe.throw(
-				_("No QC checklist on this ticket. Submit it for QC from the Repair "
-				  "step so the checklist is raised, then record the results."),
-				title=_("QC Checklist Missing"),
+			frappe.msgprint(
+				_("No QC checklist applies to this ticket, so the pass is recorded "
+				  "on your sign-off alone."),
+				indicator="orange",
+				alert=True,
 			)
 		unanswered = [c.check_name for c in checks if not (c.result or "").strip()]
 		if unanswered:

@@ -1,0 +1,20 @@
+{
+ "align_labels_right": 0,
+ "creation": "2026-08-28 00:00:00.000000",
+ "css": "",
+ "disabled": 0,
+ "doc_type": "Service Request",
+ "docstatus": 0,
+ "doctype": "Print Format",
+ "font": "Default",
+ "html": "",
+ "idx": 0,
+ "line_breaks": 0,
+ "modified": "2026-08-28 00:00:00.000000",
+ "module": "GoFix Services",
+ "name": "GoFix Intake Receipt",
+ "print_format_builder": 0,
+ "print_format_type": "Jinja",
+ "show_section_headings": 0,
+ "standard": "Yes"
+}

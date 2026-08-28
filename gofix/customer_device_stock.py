@@ -243,3 +243,87 @@ def release_customer_device(sr, reason: str | None = None) -> str | None:
 			frappe.get_traceback(), f"GoFix: could not release the device on {sr.name}"
 		)
 		return None
+
+
+# Tickets whose device is still in the building. A delivered or abandoned repair
+# has nothing left to take custody of.
+OPEN_DECISIONS = ("Draft", "Accepted", "In Service", "In Progress", "On Hold", "Completed")
+
+
+@frappe.whitelist(methods=["POST"])
+def backfill_customer_device_custody(company=None, limit: int = 500, dry_run: int = 1) -> dict:
+    """Take custody of devices on tickets that predate the setting.
+
+    Custody is posted at intake, so every ticket opened before tracking was
+    switched on is holding a device the stock system knows nothing about — it
+    cannot be moved, cannot go on a manifest, and cannot be dispatched. Those
+    tickets do not heal themselves; somebody has to receive what is already on
+    the shelf.
+
+    Defaults to a DRY RUN, because this posts real stock entries against live
+    tickets and the count should be looked at before it happens.
+
+    Devices are received where the ticket says they are, which for an open
+    repair is its current location or the store that raised it.
+    """
+    frappe.has_permission("Service Request", "write", throw=True)
+    frappe.has_permission("Stock Entry", "create", throw=True)
+
+    if not cint(frappe.db.get_single_value("GoFix Settings", "track_customer_devices")):
+        frappe.throw(
+            _("Customer device tracking is switched off, so there is nothing to back-fill. "
+              "Turn it on in GoFix Settings first."),
+            title=_("Tracking Disabled"),
+        )
+
+    filters = {
+        "docstatus": 1,
+        "decision": ("in", list(OPEN_DECISIONS)),
+        "customer_device_entry": ("is", "not set"),
+    }
+    if company:
+        filters["company"] = company
+
+    rows = frappe.get_all(
+        "Service Request",
+        filters=filters,
+        fields=["name", "device_item", "device_item_name", "serial_no", "company",
+                "source_warehouse", "current_location", "decision"],
+        limit_page_length=cint(limit) or 500,
+        order_by="creation asc",
+    )
+
+    done, skipped = [], []
+    for row in rows:
+        if not row.device_item:
+            skipped.append((row.name, _("no device on the ticket")))
+            continue
+        if not cint(frappe.db.get_value("Item", row.device_item, "is_stock_item")):
+            skipped.append((row.name, _("device is not a stock item")))
+            continue
+
+        where = row.current_location or row.source_warehouse
+        target = customer_device_bin(where, row.company)
+        if not target:
+            skipped.append((row.name, _("no custody bin for {0}").format(where)))
+            continue
+
+        if cint(dry_run):
+            done.append((row.name, target))
+            continue
+
+        sr = frappe.get_doc("Service Request", row.name)
+        entry = receive_customer_device(sr, warehouse=where)
+        (done if entry else skipped).append(
+            (row.name, target if entry else _("custody posting failed — see the error log"))
+        )
+
+    return {
+        "dry_run": bool(cint(dry_run)),
+        "considered": len(rows),
+        "taken_into_custody": len(done),
+        "skipped": len(skipped),
+        "detail": [{"service_request": n, "note": str(w)} for n, w in done[:50]],
+        "skipped_detail": [{"service_request": n, "reason": str(w)} for n, w in skipped[:50]],
+    }
+

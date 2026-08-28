@@ -1426,6 +1426,12 @@ _SERVICE_BOARD_TABS = {
 	"delivered": ["Delivered"],
 }
 
+# A device that has left the store for repair elsewhere is not simply "in
+# progress" — nobody at this counter can act on it, and the customer asking
+# after it needs a different answer. It is tracked by transfer_status rather
+# than decision, so it is a filter in its own right rather than a tab entry.
+_OUT_FOR_REPAIR_STATUSES = ("In Transit", "Received at Service Center", "Return In Transit")
+
 
 @frappe.whitelist()
 def get_store_service_board(warehouse, tab=None, search=None) -> dict:
@@ -1446,7 +1452,9 @@ def get_store_service_board(warehouse, tab=None, search=None) -> dict:
 	assert_warehouse(warehouse=warehouse)
 
 	filters = {"source_warehouse": warehouse}
-	if tab and tab in _SERVICE_BOARD_TABS:
+	if tab == "out_for_repair":
+		filters["transfer_status"] = ["in", list(_OUT_FOR_REPAIR_STATUSES)]
+	elif tab and tab in _SERVICE_BOARD_TABS:
 		filters["decision"] = ["in", _SERVICE_BOARD_TABS[tab]]
 	if tab == "ready":
 		# "Ready to Bill" means billable — a Completed SR that already
@@ -1508,6 +1516,10 @@ def get_store_service_board(warehouse, tab=None, search=None) -> dict:
 		for key, statuses in _SERVICE_BOARD_TABS.items()
 	}
 	counts["all"] = sum(cint(v) for v in decision_counts.values())
+	counts["out_for_repair"] = cint(frappe.db.count(
+		"Service Request",
+		{"source_warehouse": warehouse, "transfer_status": ["in", list(_OUT_FOR_REPAIR_STATUSES)]},
+	))
 
 	return {"rows": rows, "counts": counts}
 

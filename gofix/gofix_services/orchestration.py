@@ -14,7 +14,7 @@ import json
 
 import frappe
 from frappe import _
-from frappe.utils import flt, now_datetime, nowdate, today
+from frappe.utils import cint, flt, now_datetime, nowdate, today
 
 from gofix.config import get_float_setting, require_role_setting
 from gofix.security import assert_service_request_access
@@ -448,8 +448,46 @@ def confirm_return_at_source(service_request) -> dict:
 	return {"message": _("Device returned to source store. Ready for billing.")}
 
 
+def _device_is_company_stock(sr, from_location) -> bool:
+	"""Is this device ours to post a stock movement for?
+
+	A customer's handset booked in for repair is NOT inventory. We never bought
+	it, never received it, and it carries no valuation — its serial sits with no
+	warehouse at all. Posting a Material Transfer for it asks the ledger to move
+	stock that was never there, which is why the transit check refused with
+	"Serial ... is in warehouse None".
+
+	Company-owned devices — a demo unit, a refurbished handset, a buyback going
+	out for repair — genuinely are stock and must move through the ledger like
+	anything else. The difference is ownership, so that is what is tested:
+	a stock item whose serial is actually standing in the source warehouse.
+	"""
+	device_item = sr.get("device_item")
+	if not device_item:
+		return False
+	if not cint(frappe.db.get_value("Item", device_item, "is_stock_item")):
+		return False
+
+	serial_no = (sr.get("serial_no") or "").strip()
+	if serial_no:
+		if not frappe.db.exists("Serial No", serial_no):
+			return False
+		return frappe.db.get_value("Serial No", serial_no, "warehouse") == from_location
+
+	# Unserialised company stock: trust the bin.
+	return flt(frappe.db.get_value(
+		"Bin", {"item_code": device_item, "warehouse": from_location}, "actual_qty"
+	)) > 0
+
+
 def _auto_create_device_transfer(sr, from_location, to_location, reason=None):
-	"""Create a Stock Entry (Material Transfer) to move the device."""
+	"""Move the device, and post a stock movement only if the device is ours.
+
+	Returns the Stock Entry name when one was raised, or None when the device is
+	customer-owned — in which case custody is tracked on the ticket and in the
+	custody log, which is what a repair chain actually does with a phone it does
+	not own.
+	"""
 	_validate_transfer_warehouse(sr, from_location, _("source"))
 	_validate_transfer_warehouse(sr, to_location, _("destination"))
 	serial_no = sr.get("serial_no")
@@ -457,6 +495,17 @@ def _auto_create_device_transfer(sr, from_location, to_location, reason=None):
 
 	if not device_item:
 		frappe.throw(_("A device item is required before its location can be transferred."))
+
+	if not _device_is_company_stock(sr, from_location):
+		frappe.msgprint(
+			_("{0} belongs to the customer, so no stock movement is posted — the ticket "
+			  "and its custody log carry the handover.").format(
+				sr.get("device_item_name") or device_item
+			),
+			indicator="blue",
+			alert=True,
+		)
+		return None
 
 	frappe.has_permission("Stock Entry", "create", throw=True)
 	se = frappe.new_doc("Stock Entry")

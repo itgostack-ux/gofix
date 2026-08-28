@@ -569,7 +569,66 @@ def _auto_create_device_transfer(sr, from_location, to_location, reason=None):
 	from ch_erp15.ch_erp15.custom.stock_entry import set_pending_qty
 
 	set_pending_qty(se.name)
+
+	# A dispatched device only reaches logistics through a manifest. Every
+	# Command Center view — the pipeline, the packing queue, the unassigned
+	# list, the trip planner — reads CH Transfer Manifest; a Stock Entry sitting
+	# at Pending With Goods with no manifest is invisible to all of them, which
+	# is exactly how a repair could leave a store and appear nowhere.
+	#
+	# Bulk stock moves are bundled into manifests by hand, because logistics
+	# decides what travels together. A customer's device is not that: it is one
+	# consignment with one destination, known the moment it is dispatched, so it
+	# gets its own manifest rather than waiting for someone to notice it.
+	_create_device_manifest(sr, se.name, from_location, to_location)
 	return se.name
+
+
+def _create_device_manifest(sr, stock_entry: str, from_location: str, to_location: str):
+	"""Put the dispatched device on its own manifest so logistics can see it.
+
+	Built directly rather than through transfer_manifest_api.create_manifest,
+	which requires a submitted Stock Entry — the transit flow deliberately keeps
+	its entry in draft and drives the ledger through custom_status instead, so
+	that API can never accept one. The manifest is created as a Draft, which is
+	where the packing queue picks it up.
+
+	Never raises: the device has already left the shelf, and a missing manifest
+	is a visibility problem to fix, not a reason to fail the dispatch.
+	"""
+	if not frappe.db.exists("DocType", "CH Transfer Manifest"):
+		return None
+	try:
+		store_of = lambda wh: frappe.db.get_value(  # noqa: E731
+			"CH Store", {"warehouse": wh}, "name"
+		)
+		doc = frappe.new_doc("CH Transfer Manifest")
+		doc.manifest_date = nowdate()
+		doc.company = sr.company
+		doc.source_warehouse = from_location
+		doc.destination_warehouse = to_location
+		doc.source_store = store_of(from_location) or store_of(sr.get("source_warehouse"))
+		doc.destination_store = store_of(to_location)
+		if doc.meta.has_field("notes"):
+			doc.notes = _("Customer device for repair {0} — {1}").format(
+				sr.name, sr.get("device_item_name") or sr.get("device_item") or ""
+			)
+		doc.append("transfers", {"stock_entry": stock_entry})
+		doc.flags.ignore_permissions = True
+		doc.insert(ignore_mandatory=True, ignore_permissions=True)
+
+		sr.add_comment(
+			"Info",
+			_("Device handed to logistics on manifest {0}.").format(
+				f'<a href="/app/ch-transfer-manifest/{doc.name}">{doc.name}</a>'
+			),
+		)
+		return doc.name
+	except Exception:
+		frappe.log_error(
+			frappe.get_traceback(), f"GoFix: could not raise a manifest for {sr.name}"
+		)
+		return None
 
 
 def _validate_transfer_warehouse(sr, warehouse, label):

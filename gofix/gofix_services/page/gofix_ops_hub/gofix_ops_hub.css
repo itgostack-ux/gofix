@@ -855,3 +855,18 @@
    which is how a dark popup ended up on a light page. */
 .goh-root { color-scheme: light; }
 [data-theme="dark"] .goh-root { color-scheme: dark; }
+
+/* ── Access explanation ──────────────────────────────────────────────────
+   Store scoping is fail-closed, so a user with no scope sees an empty hub
+   that looks broken. This is the difference between "nothing here" and
+   "nothing here, and here is why". */
+.goh-access-note {
+	background: var(--goh-card-bg);
+	border: 1px solid var(--goh-border);
+	border-left: 3px solid #d97706;
+	border-radius: 6px;
+	padding: 12px 14px;
+	margin-bottom: 14px;
+}
+.goh-access-title { font-weight: 600; margin-bottom: 3px; }
+.goh-access-detail { color: var(--goh-text-muted); font-size: 13px; }

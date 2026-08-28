@@ -151,6 +151,51 @@ def get_ops_context(company=None) -> dict:
 		"stores": stores,
 		"warehouses": [store["warehouse"] for store in stores],
 		"is_manager": is_manager,
+		"access": _access_diagnosis(user, company, stores),
+	}
+
+
+def _access_diagnosis(user, company, stores) -> dict:
+	"""Why this user can or cannot see anything, in words.
+
+	Store scoping is fail-closed: a user with no scope row sees no stores, which
+	is correct but indistinguishable from a broken page. Somebody with the right
+	roles would open the hub, find it blank, and have nothing to act on. This
+	says which of the three things is missing — the company, the scope, or just
+	the tickets — so the answer is on screen instead of in a server log.
+	"""
+	if stores:
+		return {"ok": True}
+
+	from gofix.scope_guard import user_scope
+
+	try:
+		allowed_wh, allowed_co, bypass = user_scope()
+	except Exception:
+		allowed_wh, allowed_co, bypass = set(), set(), False
+
+	if not company:
+		return {
+			"ok": False,
+			"title": _("No company selected"),
+			"detail": _("Your login has no default company set, so there is nothing to load. "
+			            "Set one on your User record, or pick a company from the switcher."),
+		}
+
+	if not bypass and not allowed_wh:
+		return {
+			"ok": False,
+			"title": _("No stores assigned to you"),
+			"detail": _("You have service roles but no store access, so the hub has nothing to "
+			            "show. Ask an administrator to add you to a CH User Scope with the "
+			            "stores you cover — access is deliberately closed until then."),
+		}
+
+	return {
+		"ok": False,
+		"title": _("No stores found for {0}").format(company),
+		"detail": _("Your access covers stores, but none of them belong to this company. "
+		            "Switch company, or check that your scope lists stores in {0}.").format(company),
 	}
 
 

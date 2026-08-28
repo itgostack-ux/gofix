@@ -154,6 +154,19 @@ class GoFixOpsHub {
 			});
 		}
 
+		// A blank hub and a broken hub look identical. When the server says the
+		// user can see nothing, say so where they are looking.
+		const access = this.ctx.access;
+		if (access && access.ok === false) {
+			this.page.set_indicator(__("No store access"), "orange");
+			this.parent.prepend(`
+				<div class="goh-access-note">
+					<div class="goh-access-title">${esc(access.title || __("Nothing to show"))}</div>
+					<div class="goh-access-detail">${esc(access.detail || "")}</div>
+				</div>
+			`);
+		}
+
 		this.page.set_secondary_action(__("Refresh"), () => this._refresh_all(), "refresh");
 
 		// Custom toolbar fields

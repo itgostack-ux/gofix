@@ -488,6 +488,13 @@ def open_walkin_job(sr_name) -> dict:
 	sr.db_set(updates, update_modified=False)
 	_log_ops_stage(sr_name, "draft", "analysis")
 
+	# Take the handset into custody as customer special stock, so it becomes a
+	# thing the system can move and scan rather than a note on a ticket.
+	from gofix.customer_device_stock import receive_customer_device
+
+	sr.reload()
+	receive_customer_device(sr)
+
 	return {"ok": True, "stage": "analysis", "service_order": ""}
 
 

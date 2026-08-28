@@ -30,6 +30,84 @@ WIPE_METHODS = "Not Wiped\nFactory Reset\nSecure Erase\nCustomer Declined Wipe\n
 
 def create_compliance_fields():
 	_service_request_intake_controls()
+	_customer_device_custody_fields()
+
+
+def _customer_device_custody_fields():
+	"""Where the customer's device is being held, and under which postings.
+
+	A handset in for repair is customer special stock: received at zero
+	valuation so it can be tracked, moved and scanned without ever touching the
+	balance sheet. These fields are the ticket's link to those postings — see
+	gofix.customer_device_stock.
+	"""
+	if not frappe.db.exists("DocType", "Service Request"):
+		return
+
+	create_custom_fields({
+		"Service Request": [
+			{
+				"fieldname": "customer_device_section",
+				"label": "Device Custody",
+				"fieldtype": "Section Break",
+				"insert_after": "intake_condition_photos",
+				"collapsible": 1,
+			},
+			{
+				"fieldname": "customer_device_warehouse",
+				"label": "Held In",
+				"fieldtype": "Link",
+				"options": "Warehouse",
+				"insert_after": "customer_device_section",
+				"read_only": 1,
+				"allow_on_submit": 1,
+				"description": "The Customer Device bin currently holding this handset.",
+			},
+			{
+				"fieldname": "customer_device_entry",
+				"label": "Custody Receipt",
+				"fieldtype": "Link",
+				"options": "Stock Entry",
+				"insert_after": "customer_device_warehouse",
+				"read_only": 1,
+				"allow_on_submit": 1,
+			},
+			{
+				"fieldname": "column_break_customer_device",
+				"fieldtype": "Column Break",
+				"insert_after": "customer_device_entry",
+			},
+			{
+				"fieldname": "customer_device_released_entry",
+				"label": "Handback Issue",
+				"fieldtype": "Link",
+				"options": "Stock Entry",
+				"insert_after": "column_break_customer_device",
+				"read_only": 1,
+				"allow_on_submit": 1,
+			},
+		]
+	}, ignore_validate=True)
+
+	if frappe.db.exists("DocType", "GoFix Settings"):
+		create_custom_fields({
+			"GoFix Settings": [
+				{
+					"fieldname": "track_customer_devices",
+					"label": "Track Customer Devices as Special Stock",
+					"fieldtype": "Check",
+					"default": "0",
+					"insert_after": "capacity_warning_ratio",
+					"description": (
+						"Receive a customer's handset into a zero-valuation Customer Device "
+						"bin at intake, so it can be moved on a manifest, scanned by a driver "
+						"and counted. Valuation stays nil, so no financial statement moves. "
+						"Off by default: switching it on mid-flight only affects tickets "
+						"opened afterwards."
+					),
+				},
+			]
+		}, ignore_validate=True)
 
 
 def _service_request_intake_controls():

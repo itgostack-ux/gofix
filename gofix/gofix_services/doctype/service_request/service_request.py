@@ -621,6 +621,14 @@ class ServiceRequest(Document):
 			# INT-2 fix: Update serial lifecycle status to "Repaired"
 			self._update_serial_lifecycle_on_completion()
 
+		# The handset goes home to its owner, so it leaves our custody. Without
+		# this the Customer Device bin only ever grows and a count of what we
+		# are holding stops meaning anything.
+		if self.decision == "Delivered":
+			from gofix.customer_device_stock import release_customer_device
+
+			release_customer_device(self)
+
 	def is_completed_status(self):
 		return self.decision == "Completed"
 

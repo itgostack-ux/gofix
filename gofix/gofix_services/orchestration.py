@@ -465,16 +465,25 @@ def _device_is_company_stock(sr, from_location) -> bool:
 	device_item = sr.get("device_item")
 	if not device_item:
 		return False
-	if not cint(frappe.db.get_value("Item", device_item, "is_stock_item")):
+
+	item = frappe.db.get_value(
+		"Item", device_item, ["is_stock_item", "has_serial_no"], as_dict=True
+	) or {}
+	if not cint(item.get("is_stock_item")):
 		return False
 
+	# Only consult the Serial No ledger when the ITEM is actually serial
+	# tracked. A ticket carries a serial label for any device — GoFix mints one
+	# at intake so the handset can be identified — but stock never files that
+	# label against a warehouse unless the item is serialised, so reading its
+	# warehouse would say "nowhere" for a device sitting on a shelf.
 	serial_no = (sr.get("serial_no") or "").strip()
-	if serial_no:
+	if serial_no and cint(item.get("has_serial_no")):
 		if not frappe.db.exists("Serial No", serial_no):
 			return False
 		return frappe.db.get_value("Serial No", serial_no, "warehouse") == from_location
 
-	# Unserialised company stock: trust the bin.
+	# Otherwise the bin is the authority on whether the device is standing here.
 	return flt(frappe.db.get_value(
 		"Bin", {"item_code": device_item, "warehouse": from_location}, "actual_qty"
 	)) > 0
@@ -495,6 +504,25 @@ def _auto_create_device_transfer(sr, from_location, to_location, reason=None):
 
 	if not device_item:
 		frappe.throw(_("A device item is required before its location can be transferred."))
+
+	# A customer's handset held as special stock moves between the Customer
+	# Device bins of the two stores — same two-step transit as any other
+	# movement, so it appears on a manifest with a driver.
+	from gofix.customer_device_stock import customer_device_bin
+
+	held_at = sr.get("customer_device_warehouse")
+	if held_at:
+		target_bin = customer_device_bin(to_location, sr.get("company"))
+		if target_bin:
+			from_location, to_location = held_at, target_bin
+		else:
+			frappe.msgprint(
+				_("{0} has no Customer Device bin, so the handset cannot be moved into "
+				  "custody there. The ticket records the move without a stock leg.").format(
+					to_location),
+				indicator="orange",
+			)
+			return None
 
 	if not _device_is_company_stock(sr, from_location):
 		frappe.msgprint(

@@ -1096,6 +1096,34 @@ class GoFixOpsHub {
 	/* ═══════════════════════════════════════════════════════════════════════ */
 	/*  STEP 5 — Repair Execution                                            */
 	/* ═══════════════════════════════════════════════════════════════════════ */
+	/* ── Device transfer control ─────────────────────────────────────────
+	   Shown wherever the device is being worked. A repair that turns out to be
+	   beyond this bench should not have to go back to the counter to be moved,
+	   and a device that has been sent away has to be able to come home. The two
+	   directions are deliberately different actions: sending needs a
+	   destination and a reason, returning has neither — it goes back to the
+	   store that sent it. */
+	_transfer_button(d) {
+		const away = d.transfer_status && d.transfer_status !== "Returned";
+		if (away) {
+			const at = d.transferred_to_store ? String(d.transferred_to_store).split(" - ")[0] : "";
+			return `
+				<span class="goh-badge badge-orange" title="${__("Device is away from its origin store")}">
+					<i class="fa fa-truck"></i> ${frappe.utils.escape_html(d.transfer_status)}${at ? " · " + frappe.utils.escape_html(at) : ""}
+				</span>
+				${d.transfer_status === "Received at Service Center" ? `
+					<button class="btn btn-xs btn-default" id="goh-return-store"
+						title="${__("Send the device back to the store that raised the ticket")}">
+						<i class="fa fa-undo"></i> ${__("Return to Store")}
+					</button>` : ""}`;
+		}
+		return `
+			<button class="btn btn-xs btn-default" id="goh-send-hub"
+				title="${__("This bench cannot finish the repair — send the device to another location")}">
+				<i class="fa fa-truck"></i> ${__("Transfer for Repair")}
+			</button>`;
+	}
+
 	_html_repair(d) {
 		const esc = frappe.utils.escape_html;
 		const sols = d.solution_lines || [];
@@ -1317,6 +1345,7 @@ class GoFixOpsHub {
 					${totalHeld ? `<span class="goh-badge badge-blue" title="${__("Total hands-on time across every technician who held this device")}"><i class="fa fa-clock-o"></i> ${totalHeld.toFixed(1)}h ${__("hands-on")}</span>` : ""}
 					<span style="flex:1"></span>
 					${activeAssigns.length ? `<button class="btn btn-xs btn-default" id="goh-device-handover" title="${__("Move the physical device to another technician on this ticket (⇄ on a card moves the solution instead)")}"><i class="fa fa-mobile"></i> ${__("Hand Over Device")}</button>` : ""}
+					${this._transfer_button(d)}
 				</div>
 				<div class="goh-tech-chips">${techInfo || `<span class="text-muted">${__("None assigned")}</span>`}</div>
 				${custodyRows ? `
@@ -1425,9 +1454,11 @@ class GoFixOpsHub {
 			</div>
 
 			<div class="goh-section">
-				<div class="goh-section-title">
-					<i class="fa fa-check-square-o"></i> ${__("QC Checklist")}
+				<div class="goh-section-title" style="display:flex;align-items:center;gap:8px">
+					<span><i class="fa fa-check-square-o"></i> ${__("QC Checklist")}</span>
 					<span class="goh-badge ${qc_status === "Pass" ? "badge-green" : qc_status === "Fail" ? "badge-red" : "badge-indigo"}">${esc(qc_status)}</span>
+					<span style="flex:1"></span>
+					${this._transfer_button(d)}
 				</div>
 
 				${checklist.length ? `
@@ -2067,6 +2098,78 @@ class GoFixOpsHub {
 				);
 			});
 
+			// Send the device somewhere that can finish the repair. Destinations
+			// come from the location hierarchy, not the warehouse tree, so a
+			// Damaged bin is never a place to send a customer's phone.
+			content.find("#goh-send-hub").on("click", () => {
+				frappe.xcall("gofix.gofix_services.api.get_repair_destinations", { service_request: d.name })
+					.then((dests) => {
+						if (!(dests || []).length) {
+							frappe.msgprint({
+								title: __("Nowhere to send it"),
+								message: __("No other service-enabled store is available in this company."),
+								indicator: "orange",
+							});
+							return;
+						}
+						const opts = dests.map((x) =>
+							`${x.label}${x.is_hub ? " — " + __("Hub") : ""}${x.city ? " · " + x.city : ""}`);
+						const dlg = new frappe.ui.Dialog({
+							title: __("Transfer {0} for repair", [d.name]),
+							fields: [
+								{ fieldname: "dest", fieldtype: "Select", label: __("Send to"), reqd: 1, options: opts },
+								{ fieldname: "reason", fieldtype: "Small Text", reqd: 1,
+								  label: __("Why can this location not finish it?") },
+							],
+							primary_action_label: __("Dispatch"),
+							primary_action: (v) => {
+								const picked = dests[opts.indexOf(v.dest)];
+								if (!picked) return;
+								dlg.get_primary_btn().prop("disabled", true);
+								frappe.xcall("gofix.gofix_services.api.create_service_transfer", {
+									service_request: d.name, to_store: picked.warehouse, reason: v.reason,
+								}).then(() => {
+									dlg.hide();
+									frappe.show_alert({
+										message: __("{0} dispatched to {1}.", [d.name, picked.label]),
+										indicator: "green",
+									});
+									self._refresh_all();
+								}).catch((err) => {
+									dlg.get_primary_btn().prop("disabled", false);
+									frappe.msgprint({ title: __("Could not dispatch"),
+										message: err.message || String(err), indicator: "red" });
+								});
+							},
+						});
+						dlg.show();
+					});
+			});
+
+			// Send it home. No destination to choose — it goes back to the store
+			// that raised the ticket, which is where the customer will collect it
+			// and where the invoice is raised.
+			content.find("#goh-return-store").on("click", () => {
+				const home = d.source_warehouse ? String(d.source_warehouse).split(" - ")[0] : __("the origin store");
+				frappe.confirm(
+					__("Send this device back to {0} for handover and invoicing?", [home]),
+					() => {
+						frappe.xcall("gofix.gofix_services.api.return_service_transfer", {
+							service_request: d.name,
+						}).then(() => {
+							frappe.show_alert({
+								message: __("{0} is on its way back to {1}.", [d.name, home]),
+								indicator: "green",
+							});
+							self._refresh_all();
+						}).catch((err) => {
+							frappe.msgprint({ title: __("Could not return the device"),
+								message: err.message || String(err), indicator: "red" });
+						});
+					}
+				);
+			});
+
 			// Device handover — custody moves, solution assignments stay
 			content.find("#goh-device-handover").on("click", () => {
 				const holder = d.device_holder || "";
@@ -2340,6 +2443,7 @@ class GoFixOpsHub {
 				"#goh-back-to-analysis", "#goh-save-solutions", "#goh-back-to-confirm",
 				"#goh-back-to-solutions", "#goh-submit-qc",
 				"#goh-back-to-assign", "#goh-rework-assign", "#goh-device-handover",
+				"#goh-send-hub", "#goh-return-store",
 			];
 			// Assigning MORE technicians mid-repair is legitimate (a ticket can be
 			// split across L1/L2/L4) — keep the Assign action live while the

@@ -916,6 +916,11 @@ def get_ticket_detail(sr_name) -> dict:
 		"expected_completion_date": str(sr.expected_completion_date) if sr.expected_completion_date else "",
 		"actual_completion_date": str(sr.get("actual_completion_date") or ""),
 		"source_warehouse": sr.source_warehouse or "",
+		# Where the device physically is, so the hub can offer the right move:
+		# send it away, or send it home.
+		"transfer_status": sr.get("transfer_status") or "",
+		"transferred_to_store": sr.get("transferred_to_store") or "",
+		"current_location": sr.get("current_location") or "",
 		"estimated_cost": flt(sr.estimated_cost),
 		"total_estimated_cost": flt(sr.get("total_estimated_cost") or 0),
 		"analysis_confirmed": cint(sr.get("analysis_confirmed")),

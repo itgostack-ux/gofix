@@ -31,6 +31,42 @@ WIPE_METHODS = "Not Wiped\nFactory Reset\nSecure Erase\nCustomer Declined Wipe\n
 def create_compliance_fields():
 	_service_request_intake_controls()
 	_customer_device_custody_fields()
+	_reopen_traceability_fields()
+
+
+def _reopen_traceability_fields():
+	"""Which repair, and which part of it, the customer came back about.
+
+	Repeat detection already links the previous ticket, but a ticket can carry
+	several solutions and only one of them usually failed. Naming the specific
+	line is what turns "this device came back" into "the screen we replaced
+	came back" — which is the difference between a statistic and a fault you
+	can act on, and it is what a supplier claim or a technician review needs.
+	"""
+	if not frappe.db.exists("DocType", "SR Issue Line"):
+		return
+
+	create_custom_fields({
+		"SR Issue Line": [
+			{
+				"fieldname": "reopened_from_solution",
+				"label": "Came Back On",
+				"fieldtype": "Link",
+				"options": "SR Solution Line",
+				"insert_after": "status",
+				"read_only": 1,
+				"description": "The earlier repair line this complaint is a return visit for.",
+			},
+			{
+				"fieldname": "reopened_from_request",
+				"label": "Original Repair",
+				"fieldtype": "Link",
+				"options": "Service Request",
+				"insert_after": "reopened_from_solution",
+				"read_only": 1,
+			},
+		]
+	}, ignore_validate=True)
 
 
 def _customer_device_custody_fields():

@@ -817,7 +817,7 @@ def qc_fail_with_issues(service_request, failed_checks_json, new_issues_json=Non
 	for sol in (sr.get("solution_lines") or []):
 		if sol.repair_solution in failed_solutions:
 			sol.status = "In Progress"
-			sol.technician_remarks = (sol.technician_remarks or "") + f"\nRework required after QC fail"
+			sol.technician_remarks = (sol.technician_remarks or "") + "\nRework required after QC fail"
 
 	# 3. Add new issues discovered during QC
 	has_new_chargeable = False

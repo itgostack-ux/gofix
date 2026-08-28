@@ -3,7 +3,7 @@
 
 import frappe
 from frappe import _
-from frappe.utils import add_days, add_to_date, cint, flt, getdate, get_datetime, now, now_datetime, random_string, today
+from frappe.utils import add_days, add_to_date, cint, flt, getdate, get_datetime, now, now_datetime, nowdate, random_string, today
 import json
 import secrets
 
@@ -1830,6 +1830,139 @@ def get_eligible_technicians(issue_categories, warehouse=None) -> list:
 	return rows
 
 
+@frappe.whitelist()
+def get_reopenable_repairs(serial_no=None, service_request=None, company=None) -> list:
+	"""Past repairs on a device, with the individual work lines that can fail.
+
+	A returning customer says "it's doing it again", not "solution line 3 of
+	SR-260828-16218". This gives the counter the list to point at: each
+	delivered repair, what was done on it, and whether the workmanship warranty
+	on that repair is still live.
+	"""
+	serial_no = (serial_no or "").strip()
+	if not serial_no and service_request:
+		serial_no = frappe.db.get_value("Service Request", service_request, "serial_no")
+	if not serial_no:
+		return []
+
+	filters = {
+		"serial_no": serial_no,
+		"docstatus": 1,
+		"decision": ("in", ("Completed", "Invoiced", "Delivered")),
+	}
+	if company:
+		filters["company"] = company
+
+	today_ = getdate(nowdate())
+	out = []
+	for sr in frappe.get_all(
+		"Service Request", filters=filters,
+		fields=["name", "service_date", "repair_warranty_expiry", "customer_name"],
+		order_by="service_date desc", limit_page_length=10,
+	):
+		covered = bool(sr.repair_warranty_expiry and getdate(sr.repair_warranty_expiry) >= today_)
+		lines = frappe.get_all(
+			"SR Solution Line",
+			filters={"parent": sr.name, "parenttype": "Service Request",
+			         "status": ("in", ("Completed", "Skipped"))},
+			fields=["name", "repair_solution", "issue_category", "status", "technician"],
+		)
+		if not lines:
+			continue
+		out.append({
+			"service_request": sr.name,
+			"service_date": str(sr.service_date or ""),
+			"under_warranty": covered,
+			"warranty_expiry": str(sr.repair_warranty_expiry or ""),
+			"solutions": [
+				{
+					"solution_line": l.name,
+					"repair_solution": l.repair_solution,
+					"issue_category": l.issue_category,
+					"technician": l.technician,
+					"status": l.status,
+				}
+				for l in lines
+			],
+		})
+	return out
+
+
+@frappe.whitelist(methods=["POST"])
+def reopen_repair(solution_line, description=None, company=None) -> dict:
+	"""Raise a return visit against the exact repair line that failed.
+
+	A new ticket rather than reviving the old one: the first repair was
+	delivered and invoiced, and rewriting a closed job loses what actually
+	happened. The link back is what carries the meaning — the new ticket knows
+	which repair and which line it is a comeback for, so warranty pricing,
+	first-time-fix and any supplier claim all resolve to the right thing.
+	"""
+	_require_store_operation_role()
+
+	line = frappe.db.get_value(
+		"SR Solution Line", solution_line,
+		["name", "parent", "repair_solution", "issue_category"], as_dict=True,
+	)
+	if not line:
+		frappe.throw(_("That repair line no longer exists."), title=_("Nothing to Reopen"))
+
+	old = assert_service_request_access(line.parent, permission_type="read")
+
+	sr = frappe.new_doc("Service Request")
+	for field in ("customer", "customer_name", "contact_number", "device_item",
+	              "device_item_name", "serial_no", "actual_imei", "brand", "company",
+	              "source_warehouse", "email", "accessories_received",
+	              "product_condition_desc", "backup_info"):
+		if old.get(field):
+			sr.set(field, old.get(field))
+	sr.issue_category = line.issue_category
+	sr.issue_description = description or _(
+		"Return visit — {0} carried out on {1} has not held."
+	).format(line.repair_solution, old.name)
+	sr.service_date = nowdate()
+	sr.decision = "Draft"
+	sr.warranty_status = old.get("warranty_status") or "Out of Warranty"
+	sr.device_condition = old.get("device_condition") or "Damaged"
+	sr.data_backup_disclaimer = 1
+	# Submission gates on these two, and a return visit that cannot be submitted
+	# is a return visit the counter cannot log. Carry the original's words over;
+	# fall back to a statement of fact rather than leaving them blank.
+	sr.product_condition_desc = sr.product_condition_desc or _(
+		"Returned by customer after repair {0}."
+	).format(old.name)
+	sr.backup_info = sr.backup_info or _("Carried over from {0}.").format(old.name)
+	sr.previous_service_request = old.name
+	if sr.meta.get_field("is_repeat_complaint"):
+		sr.is_repeat_complaint = 1
+
+	sr.append("issue_lines", {
+		"issue_category": line.issue_category,
+		"reported_by": "Customer",
+		"status": "Open",
+		"description": sr.issue_description,
+		"reopened_from_solution": line.name,
+		"reopened_from_request": old.name,
+	})
+	sr.flags.ignore_mandatory = True
+	sr.insert(ignore_permissions=True)
+	sr.submit()
+
+	frappe.get_doc("Service Request", old.name).add_comment(
+		"Info",
+		_("Customer returned about {0}; reopened as {1}.").format(
+			line.repair_solution,
+			f'<a href="/app/service-request/{sr.name}">{sr.name}</a>',
+		),
+	)
+	return {
+		"ok": True,
+		"service_request": sr.name,
+		"reopened_from": old.name,
+		"solution": line.repair_solution,
+	}
+
+
 def technicians_mapped_to_location(warehouse: str) -> set:
 	"""Employees whose USER is rostered to this store in CH User Scope.
 
@@ -1863,7 +1996,24 @@ def technicians_mapped_to_location(warehouse: str) -> set:
 	if not store:
 		return set()
 
-	users = [row["user"] for row in (get_store_users(store) or []) if row.get("user")]
+	# POS Profile is where a store's staff are actually maintained, and it is
+	# company-scoped by construction: GoFix's profiles carry 2 users, GoGizmo's
+	# carry 59, and no user appears on both. That separation is the point — a
+	# GoGizmo counter hand must never show up as a GoFix technician.
+	users = frappe.db.sql_list(
+		"""
+		SELECT DISTINCT pu.user
+		FROM `tabPOS Profile User` pu
+		JOIN `tabPOS Profile` p ON p.name = pu.parent
+		WHERE p.warehouse = %s AND IFNULL(p.disabled, 0) = 0
+		""",
+		warehouse,
+	)
+
+	# CH User Scope is the authorisation roster and covers people who work a
+	# store without holding a till, so it is added rather than substituted.
+	users += [row["user"] for row in (get_store_users(store) or []) if row.get("user")]
+	users = list(dict.fromkeys(users))
 	if not users:
 		return set()
 

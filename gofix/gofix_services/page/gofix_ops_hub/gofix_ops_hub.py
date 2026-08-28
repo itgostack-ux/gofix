@@ -14,7 +14,7 @@ import json
 
 import frappe
 from frappe import _
-from frappe.utils import add_days, cint, flt, now_datetime, nowdate
+from frappe.utils import add_days, cint, flt, get_datetime, now_datetime, nowdate, time_diff_in_hours
 
 from gofix.config import get_int_setting, get_user_roles, has_role_setting, require_role_setting
 from gofix.gofix_services.store_context import (
@@ -25,6 +25,8 @@ from gofix.gofix_services.store_context import (
 no_cache = 1
 
 STAGE_LABELS = {
+	"draft": "Intake",
+	"closed": "Closed",
 	"analysis": "Analysis",
 	"confirm": "Customer Confirmation",
 	"solutions": "Solution Assignment",
@@ -85,18 +87,124 @@ def _log_ops_stage(sr_name, from_stage, to_stage):
 		last = stage_rows[-1]
 		if last.from_status == from_label and last.to_status == to_label:
 			return
+		if to_label == last.to_status:
+			# Already there. Recording it again as a move out of somewhere else
+			# would invent a transition that never happened.
+			return
 
-	elapsed = round(time_diff_in_hours(now_datetime(), prev_at), 2) if prev_at else 0
+	now_ = now_datetime()
+	elapsed = round(time_diff_in_hours(now_, prev_at), 2) if prev_at else 0
 
-	sr.append("status_log", {
-		"event_type": "Operations Stage",
-		"from_status": from_label,
-		"to_status": to_label,
-		"changed_by": frappe.session.user,
-		"changed_at": now_datetime(),
-		"time_in_previous_status_hours": elapsed,
-	})
+	def record(from_status, to_status, hours):
+		sr.append("status_log", {
+			"event_type": "Operations Stage",
+			"from_status": from_status,
+			"to_status": to_status,
+			"changed_by": frappe.session.user,
+			"changed_at": now_,
+			"time_in_previous_status_hours": hours,
+		})
+
+	# Each caller names the stage it believes the ticket is leaving, and a hub
+	# action that skips a step made that a lie — the history showed Repair
+	# entered and never left, then QC left and never entered, so the chain broke
+	# in two places. Bridge the gap explicitly rather than rewriting either end:
+	# the ticket really did pass through the stage in between, and dropping it
+	# would lose that. The waiting time belongs to the stage actually sat in, so
+	# the bridge carries it and the hop that follows carries none.
+	if stage_rows and stage_rows[-1].to_status and stage_rows[-1].to_status != from_label:
+		record(stage_rows[-1].to_status, from_label, elapsed)
+		elapsed = 0
+
+	record(from_label, to_label, elapsed)
 	sr.save()
+
+
+# A ticket carries two independent status histories, and they are not
+# interchangeable — the same distinction SAP draws between a service order's
+# system status and its user status:
+#
+#   Lifecycle         the document's own `decision` — Draft, Accepted,
+#                     In Service, Completed, Invoiced. The commercial state.
+#   Operations Stage  where the work actually is on the bench — Analysis,
+#                     Solution Assignment, Repair, QC. The shop-floor state.
+#
+# Both are appended to the same child table, each timing itself against its own
+# previous row. Reading them as one list therefore counted every wall-clock hour
+# twice — which is how a ticket open for 7 hours reported 14 hours of tracked
+# time. Durations are only ever summed WITHIN a track.
+TIMELINE_TRACKS = {
+	"Lifecycle": "Lifecycle",
+	"Operations Stage": "Operations",
+}
+
+
+def _build_status_timeline(sr) -> list:
+	"""The ticket's status history, per track, in the order things happened.
+
+	Two things are fixed here that the stored rows cannot express on their own:
+
+	* Rows are ordered by when they happened, not by the order the two tracks
+	  happened to append them. Interleaved writes had the log showing a
+	  13:21 transition above an 06:22 one.
+	* Dwell time is recomputed from the timestamps of the SAME track, anchored
+	  at the ticket's creation. The first row of a track previously recorded
+	  zero, so the wait before the first move vanished; and any row written out
+	  of order carried a duration measured against the wrong predecessor.
+
+	The result is arithmetically closed: within a track, the dwell times sum to
+	exactly the elapsed time from intake to the last move.
+	"""
+	rows = list(sr.get("status_log") or [])
+	if not rows:
+		return []
+
+	users = tuple({r.changed_by for r in rows if r.changed_by})
+	names = {
+		u.name: u.full_name or u.name
+		for u in frappe.get_all(
+			"User", filters={"name": ("in", users)},
+			fields=["name", "full_name"], limit_page_length=len(users),
+		)
+	} if users else {}
+
+	# Rows written before every stage key had a label kept the raw key, so an
+	# old ticket shows "draft" beside the lifecycle's "Draft" and reads as two
+	# of the same thing. Labelling on read fixes the tickets already on file
+	# without touching a single stored row.
+	def label(value):
+		if not value:
+			return value
+		return STAGE_LABELS.get(value, STAGE_LABELS.get(str(value).lower(), value))
+
+	opened = get_datetime(sr.creation) if sr.get("creation") else None
+	out = []
+	for event_type, track in TIMELINE_TRACKS.items():
+		track_rows = sorted(
+			(r for r in rows if (r.get("event_type") or "Lifecycle") == event_type),
+			key=lambda r: (get_datetime(r.changed_at) if r.changed_at else opened, cint(r.idx)),
+		)
+		prev = opened
+		for r in track_rows:
+			at = get_datetime(r.changed_at) if r.changed_at else None
+			hours = 0.0
+			if at and prev and at >= prev:
+				hours = round(time_diff_in_hours(at, prev), 2)
+			out.append({
+				"track": track,
+				"event_type": event_type,
+				"from_status": label(r.from_status) if event_type == "Operations Stage" else r.from_status,
+				"to_status": label(r.to_status) if event_type == "Operations Stage" else r.to_status,
+				"changed_by": r.changed_by,
+				"changed_by_name": names.get(r.changed_by, r.changed_by or ""),
+				"changed_at": str(r.changed_at) if r.changed_at else "",
+				"hours_in_prev": hours,
+			})
+			if at:
+				prev = at
+
+	out.sort(key=lambda e: (e["changed_at"] or "", e["track"]))
+	return out
 
 
 def get_context(context):
@@ -853,29 +961,7 @@ def get_ticket_detail(sr_name) -> dict:
 			)
 		qc_checklist = qc_rows
 
-	# Fetch status log (timeline)
-	status_rows = sr.get("status_log") or []
-	changed_users = tuple({row.changed_by for row in status_rows if row.changed_by})
-	changed_user_names = {
-		row.name: row.full_name or row.name
-		for row in frappe.get_all(
-			"User",
-			filters={"name": ("in", changed_users)},
-			fields=["name", "full_name"],
-			limit_page_length=len(changed_users),
-		)
-	} if changed_users else {}
-	status_log = [
-		{
-			"from_status": row.from_status,
-			"to_status": row.to_status,
-			"changed_by": row.changed_by,
-			"changed_by_name": changed_user_names.get(row.changed_by, row.changed_by or ""),
-			"changed_at": str(row.changed_at) if row.changed_at else "",
-			"hours_in_prev": flt(row.get("time_in_previous_status_hours")),
-		}
-		for row in status_rows
-	]
+	status_log = _build_status_timeline(sr)
 
 	all_solutions_done = (
 		len(solution_lines) > 0

@@ -553,6 +553,25 @@
 }
 [data-theme="dark"] .goh-repeat { color: #f0b429; background: rgba(240, 180, 41, .15); }
 
+/* Which of the ticket's two status histories a row belongs to. The colour is
+   the only thing stopping the reader adding the two columns together. */
+.goh-track {
+	display: inline-block;
+	font-size: 10px;
+	text-transform: uppercase;
+	letter-spacing: .05em;
+	padding: 1px 6px;
+	border-radius: 3px;
+	white-space: nowrap;
+	font-weight: 600;
+}
+.goh-track-ops  { background: rgba(59, 130, 246, .13); color: #1d4ed8; }
+.goh-track-life { background: rgba(100, 116, 139, .16); color: #475569; }
+[data-theme="dark"] .goh-track-ops  { background: rgba(96, 165, 250, .17); color: #93c5fd; }
+[data-theme="dark"] .goh-track-life { background: rgba(148, 163, 184, .17); color: #cbd5e1; }
+
+.goh-track-name { color: var(--text-muted); font-weight: 600; }
+
 /* ── Repair Cards ────────────────────────────────────────────────────────── */
 .goh-repair-cards { display: flex; flex-direction: column; gap: 8px; }
 .goh-repair-card {

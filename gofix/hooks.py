@@ -156,7 +156,12 @@ doc_events = {
 		"on_submit": "gofix.purchase_api.mark_spares_in_transit",
 	},
 	"Purchase Receipt": {
-		"on_submit": "gofix.purchase_api.allocate_received_spares_to_tickets"
+		# A draft receipt means the parts are AT the store; submitting it is what
+		# puts them in stock. The ticket distinguishes the two.
+		"after_insert": "gofix.purchase_api.mark_spares_delivered",
+		"on_submit": "gofix.purchase_api.allocate_received_spares_to_tickets",
+		"on_cancel": "gofix.purchase_api.unmark_spares_delivered",
+		"on_trash": "gofix.purchase_api.unmark_spares_delivered",
 	},
 	"Service Request": {
 		"on_update": "gofix.gofix_services.whatsapp_notifications.on_service_request_update",

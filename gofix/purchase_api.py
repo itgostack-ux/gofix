@@ -226,7 +226,9 @@ def allocate_received_spares_to_tickets(doc, method=None):
 					# In Transit as well as Awaiting Procurement: once a purchase
 					# order exists the line has already moved on, and matching only
 					# the older status would leave it stuck showing a stale ETA.
-					"status": ("in", ("Awaiting Procurement", "In Transit")),
+					# Delivered too: the goods reached the counter as a draft
+					# receipt, and submitting it is what books them into stock.
+					"status": ("in", ("Awaiting Procurement", "In Transit", "Delivered")),
 					"spare_item": ("in", list(received_items)),
 				},
 				fields=["name", "spare_item", "item_name", "qty"],
@@ -367,3 +369,80 @@ def create_pos_from_material_request(material_request: str) -> dict:
             ", ".join(no_supplier)
         )
     return result
+
+
+def mark_spares_delivered(doc, method=None):
+    """A draft Purchase Receipt means the parts are AT the store, not in stock.
+
+    "In Transit" and "sitting on the counter waiting to be booked in" are
+    different problems: one is a wait, the other is a task. The POS inbound flow
+    creates the receipt as a draft and submits it once counted, so the draft is
+    the exact moment the goods arrived — and the ticket now says Delivered
+    instead of implying the van is still out.
+
+    The count on the ticket does NOT move here. Stock is not stock until the
+    receipt is submitted, which is what allocate_received_spares_to_tickets
+    reacts to.
+    """
+    if doc.docstatus != 0:
+        return
+    _set_spare_status_for_receipt(doc, ("Awaiting Procurement", "In Transit"), "Delivered")
+
+
+def unmark_spares_delivered(doc, method=None):
+    """A cancelled or deleted draft receipt puts the parts back on the road."""
+    _set_spare_status_for_receipt(doc, ("Delivered",), "In Transit")
+
+
+def _set_spare_status_for_receipt(doc, from_statuses, to_status) -> None:
+    """Move this receipt's spare lines between sourcing states.
+
+    Matched through the Material Request the line was requisitioned against,
+    which is the only link that survives: the receipt itself knows nothing about
+    Service Requests. Never raises — a status nicety must not block goods
+    receipt.
+    """
+    try:
+        pairs = {
+            (row.item_code, row.material_request)
+            for row in (doc.get("items") or [])
+            if row.get("material_request")
+        }
+        if not pairs:
+            return
+
+        touched = {}
+        for item_code, mr in pairs:
+            sr_name = frappe.db.get_value("Material Request", mr, "service_request")
+            if not sr_name:
+                continue
+            lines = frappe.get_all(
+                "SR Spare Line",
+                filters={
+                    "parent": sr_name,
+                    "parenttype": "Service Request",
+                    "spare_item": item_code,
+                    "material_request": mr,
+                    "status": ("in", list(from_statuses)),
+                },
+                fields=["name", "item_name", "spare_item", "qty"],
+            )
+            for line in lines:
+                frappe.db.set_value(
+                    "SR Spare Line", line.name, "status", to_status, update_modified=False
+                )
+                touched.setdefault(sr_name, []).append(line)
+
+        for sr_name, lines in touched.items():
+            items = ", ".join(
+                f"{l.item_name or l.spare_item} × {l.qty:g}" for l in lines
+            )
+            frappe.get_doc("Service Request", sr_name).add_comment(
+                "Info",
+                _("{0} spare(s) marked {1} — {2}.").format(len(lines), _(to_status), items),
+            )
+    except Exception:
+        frappe.log_error(
+            frappe.get_traceback(), f"GoFix: could not mark spares {to_status}"
+        )
+

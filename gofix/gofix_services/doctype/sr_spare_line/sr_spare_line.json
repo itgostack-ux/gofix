@@ -133,7 +133,7 @@
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "Status",
-   "options": "Pending\nReserved\nIssued\nConsumed\nReturned\nDamaged\nAwaiting Procurement\nIn Transit\nSold",
+   "options": "Pending\nReserved\nIssued\nConsumed\nReturned\nDamaged\nAwaiting Procurement\nIn Transit\nDelivered\nSold",
    "read_only": 1
   },
   {

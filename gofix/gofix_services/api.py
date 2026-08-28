@@ -2123,7 +2123,7 @@ def technicians_mapped_to_location(warehouse: str) -> set:
 	if not warehouse:
 		return set()
 	try:
-		from ch_erp15.ch_erp15.scope import get_store_users
+		from ch_erp15.ch_erp15.scope import get_store_roster
 	except ImportError:
 		return set()
 
@@ -2139,11 +2139,16 @@ def technicians_mapped_to_location(warehouse: str) -> set:
 	if not store:
 		return set()
 
-	# POS Profile is where a store's staff are actually maintained, and it is
-	# company-scoped by construction: GoFix's profiles carry 2 users, GoGizmo's
-	# carry 59, and no user appears on both. That separation is the point — a
-	# GoGizmo counter hand must never show up as a GoFix technician.
-	users = frappe.db.sql_list(
+	# One roster for the whole bench — the same list the POS closure screen
+	# reads, which is the point: the two must never disagree about who works
+	# here. It unions CH User Scope with the configured assignment records.
+	users = [row["user"] for row in (get_store_roster(store) or []) if row.get("user")]
+
+	# POS Profile users are staff on a till at this warehouse. Kept as a second
+	# read because a profile can point at a warehouse whose CH Store is not the
+	# one resolved above, and a technician missing from the picker is worse than
+	# one extra name in it.
+	users += frappe.db.sql_list(
 		"""
 		SELECT DISTINCT pu.user
 		FROM `tabPOS Profile User` pu
@@ -2152,10 +2157,6 @@ def technicians_mapped_to_location(warehouse: str) -> set:
 		""",
 		warehouse,
 	)
-
-	# CH User Scope is the authorisation roster and covers people who work a
-	# store without holding a till, so it is added rather than substituted.
-	users += [row["user"] for row in (get_store_users(store) or []) if row.get("user")]
 	users = list(dict.fromkeys(users))
 	if not users:
 		return set()

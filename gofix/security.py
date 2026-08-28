@@ -83,7 +83,10 @@ def _get_user_service_scope(user=None):
     store_names = set()
     # CH POS User Allocation retired into CH User Scope (ch_erp15 v34); it only
     # ever added stores on top of POS Executive, which is still read here.
-    for doctype in ("POS Executive"):
+    # Trailing comma is load-bearing: without it this is a string, and the loop
+    # walks it letter by letter — "P", "O", "S" — finding no such DocType and
+    # silently resolving every user's store scope to nothing.
+    for doctype in ("POS Executive",):
         if not frappe.db.exists("DocType", doctype):
             continue
         try:
@@ -152,14 +155,32 @@ def _scope_clauses(user=None) -> list[str] | None:
     ]
 
 
-def assert_service_request_access(service_request, permission_type="read", user=None):
-    """Load and authorize one named Service Request, including store scope."""
+#: Permission types that change the ticket. Custody is only checked for these —
+#: reading a ticket from anywhere is fine, and often necessary.
+_WRITE_PERMISSIONS = ("write", "create", "submit", "cancel", "delete")
+
+
+def assert_service_request_access(service_request, permission_type="read", user=None, action=None):
+    """Load and authorize one named Service Request, including store scope.
+
+    ``action`` names what the caller is about to do, which decides whether the
+    custody rules in ``gofix.custody`` let it through: nothing may be recorded
+    about a device while it is on a van, and once it lands only the people
+    holding it can say what is happening to it. Callers that legitimately act
+    from elsewhere — adding a note, receiving the device, calling a dispatch
+    back — declare themselves by name.
+    """
     user = user or frappe.session.user
     doc = service_request if hasattr(service_request, "get") else frappe.get_doc("Service Request", service_request)
     if not frappe.has_permission("Service Request", ptype=permission_type, doc=doc, user=user):
         frappe.throw(_("You do not have permission to access this Service Request."), frappe.PermissionError)
     if not has_service_request_permission(doc=doc, user=user, permission_type=permission_type):
         frappe.throw(_("This Service Request is outside your company or store scope."), frappe.PermissionError)
+
+    if permission_type in _WRITE_PERMISSIONS:
+        from gofix.custody import assert_custody_allows_write
+
+        assert_custody_allows_write(doc, action=action, user=user)
     return doc
 
 

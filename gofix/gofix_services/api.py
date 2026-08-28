@@ -1020,7 +1020,7 @@ def create_service_transfer(service_request, to_store, reason=None) -> dict:
 	The submitted Stock Entry and logical movement are one database transaction.
 	"""
 	_require_store_operation_role()
-	sr = assert_service_request_access(service_request, permission_type="write")
+	sr = assert_service_request_access(service_request, permission_type="write", action="dispatch")
 
 	if sr.transfer_status in ("In Transit", "Received at Service Center"):
 		frappe.throw(_("Device is already in transfer (status: {0})").format(sr.transfer_status), title=_("API Error"))
@@ -1063,7 +1063,7 @@ def create_service_transfer(service_request, to_store, reason=None) -> dict:
 def receive_service_transfer(service_request) -> dict:
 	"""Mark device as received at the destination service center."""
 	_require_store_operation_role()
-	sr = assert_service_request_access(service_request, permission_type="write")
+	sr = assert_service_request_access(service_request, permission_type="write", action="receive")
 
 	if sr.transfer_status != "In Transit":
 		frappe.throw(_("Device is not in transit (status: {0})").format(sr.transfer_status), title=_("API Error"))
@@ -1128,26 +1128,26 @@ _CANCELLABLE_TRANSIT_STATES = ("", "Draft", "Pending With Goods", "Ready For Pic
 
 @frappe.whitelist(methods=["POST"])
 def cancel_service_transfer(service_request, reason=None) -> dict:
-	"""Call back a dispatch that has not been picked up yet.
+	"""Call back a dispatch, any time before the destination takes the device on.
 
-	A transfer raised in error — wrong destination, wrong ticket, changed mind —
-	had no way back. The only route was to receive the device at a hub it never
-	reached and then return it, which puts two false movements in the record to
-	undo one mistake.
+	The cut-off is physical receipt, not pickup. Until somebody at the far end
+	has the device in their hands and has said so on the ticket, the origin
+	still owns the decision — and a wrong destination is usually noticed while
+	the van is moving, not before it leaves.
 
-	The cut-off is pickup, as it is for any consignment: while the device is
-	still on the origin shelf the dispatch is just paperwork and can be torn up.
-	Once a driver has it, the way back is a return leg, because something
-	physically has to bring it home.
+	What happens next depends on where the goods are, because the ledger has to
+	match the world: a device still on the origin shelf never left, so the
+	dispatch is torn up; a device already moving has to be physically brought
+	back, so a return leg is raised and the ticket says it is coming home.
 	"""
 	_require_store_operation_role()
-	sr = assert_service_request_access(service_request, permission_type="write")
+	sr = assert_service_request_access(service_request, permission_type="write", action="cancel")
 
 	if sr.transfer_status != "In Transit":
 		frappe.throw(
-			_("Only a dispatch still in transit can be cancelled (status: {0}). "
-			  "A device already received has to be returned instead.").format(
-				sr.transfer_status or _("not in transfer")),
+			_("Only a dispatch the destination has not received yet can be cancelled "
+			  "(status: {0}). Once the device has been taken on there, it comes back "
+			  "as a return instead.").format(sr.transfer_status or _("not in transfer")),
 			title=_("Nothing to Cancel"),
 		)
 
@@ -1158,18 +1158,51 @@ def cancel_service_transfer(service_request, reason=None) -> dict:
 			title=_("Reason Required"),
 		)
 
-	# If a stock leg was posted, it may only be undone while the goods are still
-	# on the origin shelf.
+	# The cut-off is physical receipt at the destination, not pickup. Up to that
+	# moment nobody at the far end has taken the device on, so calling it back is
+	# still a decision the origin gets to make. What the cancel DOES depends on
+	# where the goods actually are:
+	#
+	#   still on the origin shelf  the dispatch is paperwork; tear it up
+	#   already moving             something has to physically bring it home,
+	#                              so raise the return leg and say so
+	#
+	# Pretending the second case never happened would put a movement in the
+	# ledger that contradicts where the device is.
 	reference = sr.get("last_transfer_reference")
+	movement = ""
 	if reference and frappe.db.exists("Stock Entry", reference):
-		status = (frappe.db.get_value("Stock Entry", reference, "custom_status") or "Draft").strip()
-		if status not in _CANCELLABLE_TRANSIT_STATES:
-			frappe.throw(
-				_("Transfer {0} is already <b>{1}</b> — the device has left the store. "
-				  "Receive it at the destination and send it back instead.").format(
-					reference, status),
-				title=_("Already Picked Up"),
-			)
+		movement = (frappe.db.get_value("Stock Entry", reference, "custom_status") or "Draft").strip()
+
+	if movement and movement not in _CANCELLABLE_TRANSIT_STATES:
+		from gofix.gofix_services.orchestration import _auto_create_device_transfer
+
+		return_ref = _auto_create_device_transfer(
+			sr,
+			sr.transferred_to_store,
+			sr.source_warehouse,
+			_("Dispatch called back: {0}").format(reason.strip()),
+		)
+		sr.db_set({
+			"transfer_status": "Return In Transit",
+			"current_location": None,
+			"last_transfer_reference": return_ref,
+			"transfer_reason": _("Called back — {0}").format(reason.strip()),
+		}, update_modified=True)
+
+		from gofix.purchase_api import reroute_open_spare_procurement
+
+		reroute_open_spare_procurement(sr, sr.source_warehouse)
+		sr.add_comment("Info", _("Dispatch called back mid-route: {0}").format(reason.strip()))
+		frappe.msgprint(
+			_("The device had already left, so it is being brought back on {0}. "
+			  "Confirm its arrival at the store to close the loop.").format(return_ref),
+			indicator="orange", title=_("Coming Back"),
+		)
+		return {"ok": True, "status": "Return In Transit", "transfer": return_ref,
+		        "recalled_in_flight": True}
+
+	if reference and movement:
 		try:
 			from ch_erp15.ch_erp15.custom.stock_entry import revert_transit_entry
 
@@ -1220,7 +1253,7 @@ def cancel_service_transfer(service_request, reason=None) -> dict:
 def return_service_transfer(service_request) -> dict:
 	"""Initiate return of device from service center back to origin store."""
 	_require_store_operation_role()
-	sr = assert_service_request_access(service_request, permission_type="write")
+	sr = assert_service_request_access(service_request, permission_type="write", action="movement")
 
 	if sr.transfer_status not in ("Received at Service Center", "Repair Complete"):
 		frappe.throw(_("Device must be at service center to initiate return (status: {0})").format(
@@ -1253,7 +1286,7 @@ def return_service_transfer(service_request) -> dict:
 def complete_service_transfer_return(service_request) -> dict:
 	"""Mark device as returned to the origin store."""
 	_require_store_operation_role()
-	sr = assert_service_request_access(service_request, permission_type="write")
+	sr = assert_service_request_access(service_request, permission_type="write", action="movement")
 
 	if sr.transfer_status != "Return In Transit":
 		frappe.throw(_("Device is not in return transit (status: {0})").format(sr.transfer_status), title=_("API Error"))
@@ -1660,8 +1693,9 @@ def device_movement_options(row, home_warehouse=None) -> dict:
 	if transfer in ("", "Not Transferred", "Returned to Store"):
 		actions.append("dispatch")
 	elif transfer == "In Transit":
-		if movement in _CANCELLABLE_TRANSIT_STATES:
-			actions.append("cancel")
+		# Callable back right up to physical receipt: until somebody at the far
+		# end takes the device on, the origin still gets to change its mind.
+		actions.append("cancel")
 		if landed:
 			actions.append("receive")
 	elif transfer in ("Received at Service Center", "Repair Complete"):
@@ -1676,6 +1710,49 @@ def device_movement_options(row, home_warehouse=None) -> dict:
 		"awaiting_pickup": transfer == "In Transit" and movement in _CANCELLABLE_TRANSIT_STATES,
 		"home_warehouse": home_warehouse or row.get("source_warehouse"),
 	}
+
+
+@frappe.whitelist(methods=["POST"])
+def add_ticket_note(service_request, note, visibility="Internal") -> dict:
+	"""Add a note to a ticket — from anywhere, at any point in its life.
+
+	The one thing custody does not gate. A note claims nothing about where the
+	device is or what has been done to it; it is somebody writing down what they
+	know, and the moments you most want that written down are exactly the ones
+	the rest of the ticket is frozen for — the customer rang while the phone was
+	on a van, the hub called about a part.
+
+	Appended rather than assigned, and stamped with who and when, because "any
+	time by anyone" means two people will eventually write at once and neither
+	should silently overwrite the other.
+	"""
+	sr = assert_service_request_access(service_request, permission_type="write", action="note")
+
+	note = (note or "").strip()
+	if not note:
+		frappe.throw(_("Write something first."), title=_("Empty Note"))
+	limit = get_int_setting("ticket_note_max_chars", 2000)
+	if len(note) > limit:
+		frappe.throw(
+			_("Keep the note under {0} characters.").format(limit), title=_("Note Too Long")
+		)
+
+	field = "customer_remarks" if visibility == "Customer" else "internal_remarks"
+	if not sr.meta.get_field(field):
+		frappe.throw(_("This site has no {0} field.").format(field))
+
+	stamp = _("{0} · {1}").format(
+		frappe.utils.get_fullname(frappe.session.user),
+		frappe.utils.format_datetime(now_datetime(), "medium"),
+	)
+	existing = (sr.get(field) or "").strip()
+	updated = f"{existing}\n\n{stamp}\n{note}".strip() if existing else f"{stamp}\n{note}"
+	sr.db_set(field, updated, update_modified=True)
+
+	# The field holds the running text; the comment is the audit trail, which
+	# nobody can edit away.
+	sr.add_comment("Comment", note)
+	return {"ok": True, "field": field, "value": updated}
 
 
 @frappe.whitelist()

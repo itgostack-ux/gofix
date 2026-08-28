@@ -131,3 +131,66 @@ def ensure_default_permissions():
     })
 
     seed_operational_docperms()
+
+
+# Warehouse link fields on Service Request that must NOT be governed by
+# Warehouse User Permissions. Scope for this doctype is decided in one place —
+# gofix.security.get_service_request_query — and it deliberately ORs across
+# these fields, because a device transferred to a hub is still the origin
+# store's ticket.
+_SR_UNGOVERNED_WAREHOUSE_FIELDS = (
+    "source_warehouse",
+    "current_location",
+    "current_processing_location",
+    "billing_location",
+    "transferred_to_store",
+)
+
+
+def ignore_user_permissions_on_service_locations():
+    """Stop Warehouse User Permissions from hiding ordinary tickets.
+
+    A CH User Scope issues one Warehouse User Permission per store with
+    apply_to_all_doctypes set, and Frappe then ANDs a match condition for EVERY
+    Warehouse link field on the doctype. A Service Request carries five of them,
+    and `transferred_to_store` is empty on any ticket that was never moved — so
+    the AND failed and a scoped user saw nothing but transferred devices.
+
+    The custom permission query already implements the intended rule (an OR
+    across the same fields, inside the user's companies), so the User Permission
+    layer here is both redundant and wrong. Turning it off for these fields
+    leaves exactly one authority on who sees which ticket.
+
+    Property Setters, so this is configuration rather than a schema edit, and
+    re-running it is a no-op.
+    """
+    if not frappe.db.exists("DocType", "Service Request"):
+        return
+
+    meta = frappe.get_meta("Service Request")
+    changed = []
+    for fieldname in _SR_UNGOVERNED_WAREHOUSE_FIELDS:
+        df = meta.get_field(fieldname)
+        if not df or df.fieldtype != "Link":
+            continue
+        if cint(df.ignore_user_permissions):
+            continue
+        frappe.make_property_setter(
+            {
+                "doctype": "Service Request",
+                "fieldname": fieldname,
+                "property": "ignore_user_permissions",
+                "value": 1,
+                "property_type": "Check",
+            },
+            is_system_generated=True,
+        )
+        changed.append(fieldname)
+
+    if changed:
+        frappe.clear_cache(doctype="Service Request")
+        frappe.logger("gofix").info(
+            f"GoFix: user permissions no longer gate {', '.join(changed)}"
+        )
+    return changed
+

@@ -79,6 +79,7 @@ doctype_js = {
 after_install = "gofix.setup.install.after_install"
 after_migrate = [
 	"gofix.setup.permissions.ensure_default_permissions",
+	"gofix.setup.permissions.ignore_user_permissions_on_service_locations",
 	"gofix.setup.sales_order_custom_fields.create_sales_order_custom_fields",
     "gofix.setup.notifications.create_notifications",
     "gofix.setup.workflow.ensure_service_order_workflow",

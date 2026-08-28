@@ -971,6 +971,48 @@ def process_advance_refund(service_request, amount=None, reason=None) -> dict:
 
 # ── Inter-Store Service Transfer ─────────────────────────────────────
 
+@frappe.whitelist()
+def get_repair_destinations(service_request) -> list:
+	"""Where this ticket's device may legitimately be sent for repair.
+
+	Driven off the location hierarchy — CH Store — rather than the warehouse
+	tree. A raw warehouse list offers 111 leaf bins on this company alone,
+	including Damaged, Buyback, Demo and Supplier Returns, none of which is a
+	place a technician works. Sending a customer's phone to a returns bin
+	because it appeared in a dropdown is not a mistake worth allowing.
+
+	Hubs are listed first when any store is flagged ``is_hub``; until that flag
+	is configured every service-enabled store is offered, which is still correct
+	— a store CAN repair for another store — just unranked.
+	"""
+	sr = assert_service_request_access(service_request, permission_type="read")
+	current = sr.get("current_location") or sr.get("source_warehouse")
+
+	filters = {"company": sr.company, "disabled": 0}
+	if frappe.db.has_column("CH Store", "is_service_enabled"):
+		filters["is_service_enabled"] = 1
+
+	rows = frappe.get_all(
+		"CH Store",
+		filters=filters,
+		fields=["name", "store_name", "warehouse", "city", "zone", "is_hub"],
+		order_by="is_hub desc, store_name asc",
+		limit_page_length=500,
+	)
+	return [
+		{
+			"store": row.name,
+			"warehouse": row.warehouse,
+			"label": row.store_name or row.name,
+			"city": row.city,
+			"zone": row.zone,
+			"is_hub": cint(row.is_hub),
+		}
+		for row in rows
+		if row.warehouse and row.warehouse != current
+	]
+
+
 @frappe.whitelist(methods=["POST"])
 def create_service_transfer(service_request, to_store, reason=None) -> dict:
 	"""Transfer a device from source store to a zone service center for repair.

@@ -1587,12 +1587,23 @@ def save_solution_assignment(sr_name, solutions_json) -> dict:
 # ── Step 4: Technician Assignment ─────────────────────────────────────────────
 
 @frappe.whitelist()
-def get_technicians_for_grade(minimum_grade=None, issue_category=None) -> dict:
-	"""Return active technicians, filtered by minimum grade level, with workload."""
+def get_technicians_for_grade(minimum_grade=None, issue_category=None, company=None) -> dict:
+	"""Return active technicians, filtered by minimum grade level, with workload.
+
+	Company-scoped: staff belong to a payroll before they belong to a store,
+	and a GoGizmo employee is not a GoFix technician. Defaults to the caller's
+	own company so an unqualified call cannot enumerate the whole group.
+	"""
+	frappe.has_permission("Employee", "read", throw=True)
+
 	row_limit = get_int_setting("token_queue_limit", 200)
+	company = company or frappe.defaults.get_user_default("Company")
+	emp_filters = {"status": "Active"}
+	if company:
+		emp_filters["company"] = company
 	employees = frappe.get_all(
 		"Employee",
-		filters={"status": "Active"},
+		filters=emp_filters,
 		fields=["name", "employee_name", "technician_grade", "designation"],
 		order_by="employee_name",
 		limit_page_length=row_limit,

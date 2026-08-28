@@ -2044,17 +2044,20 @@ def technician_query(doctype, txt, searchfield, start, page_len, filters) -> lis
 	filters = filters or {}
 
 	warehouse = filters.get("warehouse")
+	company = filters.get("company")
 	if warehouse:
 		from gofix.scope_guard import assert_warehouse
 
 		assert_warehouse(warehouse=warehouse)
-	if not warehouse and filters.get("sr_name"):
+	if filters.get("sr_name"):
 		from gofix.gofix_services.page.gofix_ops_hub.gofix_ops_hub import (
 			_effective_repair_warehouse,
 		)
 
 		sr = assert_service_request_access(filters["sr_name"], permission_type="read")
-		warehouse = _effective_repair_warehouse(sr)
+		company = company or sr.company
+		if not warehouse:
+			warehouse = _effective_repair_warehouse(sr)
 
 	has_wh_col = frappe.db.has_column("Employee", "gofix_service_warehouse")
 	values = {
@@ -2066,6 +2069,13 @@ def technician_query(doctype, txt, searchfield, start, page_len, filters) -> lis
 		),
 		"warehouse": warehouse or "",
 	}
+	# A technician belongs to a company before they belong to a store. Without
+	# this the picker offered GoGizmo's staff on a GoFix ticket whenever the
+	# store had no roster — the two payrolls are separate and must stay so.
+	company_clause = ""
+	if company:
+		company_clause = "AND e.company = %(company)s"
+		values["company"] = company
 	wh_rank = (
 		"CASE WHEN e.gofix_service_warehouse = %(warehouse)s THEN 0 "
 		"WHEN IFNULL(e.gofix_service_warehouse, '') = '' THEN 1 ELSE 2 END"
@@ -2080,6 +2090,7 @@ def technician_query(doctype, txt, searchfield, start, page_len, filters) -> lis
 		WHERE e.status = 'Active'
 		  AND IFNULL(e.technician_grade, '') != ''
 		  AND (e.name LIKE %(txt)s OR e.employee_name LIKE %(txt)s)
+		  {company_clause}
 		ORDER BY wh_rank, e.employee_name
 		LIMIT %(start)s, %(page_len)s
 		""",

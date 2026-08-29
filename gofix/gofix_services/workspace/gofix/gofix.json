@@ -469,7 +469,7 @@
    "hidden": 0,
    "is_query_report": 0,
    "label": "GoFix Reports",
-   "link_count": 8,
+   "link_count": 12,
    "link_type": "Report",
    "onboard": 0,
    "type": "Card Break"
@@ -500,6 +500,16 @@
    "label": "GoFix Daily Tokens",
    "link_count": 0,
    "link_to": "GoFix Daily Tokens",
+   "link_type": "Report",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 1,
+   "label": "GoFix First Time Fix Rate",
+   "link_count": 0,
+   "link_to": "GoFix First Time Fix Rate",
    "link_type": "Report",
    "onboard": 0,
    "type": "Link"
@@ -585,7 +595,7 @@
    "type": "Link"
   }
  ],
- "modified": "2026-07-18 15:42:09.568125",
+ "modified": "2026-08-28 09:05:00.000000",
  "modified_by": "Administrator",
  "module": "GoFix Services",
  "name": "GoFix",
@@ -653,7 +663,7 @@
    "format": "{} Open",
    "label": "Service Request",
    "link_to": "Service Request",
-   "stats_filter": "{\"status\": [\"=\", \"Open\"]}",
+   "stats_filter": "{\"decision\": [\"in\", [\"Draft\", \"Accepted\", \"In Service\"]]}",
    "type": "DocType"
   },
   {
@@ -662,7 +672,7 @@
    "format": "{} Active",
    "label": "Job Assignment",
    "link_to": "Job Assignment",
-   "stats_filter": "{\"assignment_status\": [\"=\", \"Assigned\"]}",
+   "stats_filter": "{\"assignment_status\": [\"in\", [\"Open\", \"In Progress\"]]}",
    "type": "DocType"
   },
   {

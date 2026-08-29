@@ -6,7 +6,7 @@ app_email = "contact@gostack.in"
 app_license = "custom"
 
 boot_session = "gofix.boot.boot_session"
-required_apps = ["frappe/erpnext"]
+required_apps = ["frappe/erpnext", "ch_erp15"]
 
 # Jinja helpers available to print formats (Repair Charge Sheet timeline)
 jinja = {
@@ -74,12 +74,12 @@ doctype_list_js = {
 
 doctype_js = {
     "Material Request": "public/js/material_request_gofix.js",
-    "Customer": "public/js/customer_gofix.js",
 }
 
 after_install = "gofix.setup.install.after_install"
 after_migrate = [
 	"gofix.setup.permissions.ensure_default_permissions",
+	"gofix.setup.permissions.ignore_user_permissions_on_service_locations",
 	"gofix.setup.sales_order_custom_fields.create_sales_order_custom_fields",
     "gofix.setup.notifications.create_notifications",
     "gofix.setup.workflow.ensure_service_order_workflow",
@@ -88,9 +88,15 @@ after_migrate = [
     "gofix.setup.sales_invoice_custom_fields.create_sales_invoice_custom_fields",
     "gofix.setup.competitive_ops_fields.create_competitive_ops_fields",
     "gofix.setup.material_request_custom_fields.create_material_request_custom_fields",
-    "gofix.setup.customer_address_fields.create_customer_address_fields",
-    "gofix.setup.company_custom_fields.create_company_custom_fields",
+	"gofix.setup.company_custom_fields.create_company_custom_fields",
+	"gofix.setup.service_billing_setup.ensure_service_billing_setup",
+	"gofix.setup.pos_setup.ensure_gofix_business_dates",
     "gofix.setup.item_custom_fields.create_item_custom_fields",
+    "gofix.setup.compliance_fields.create_compliance_fields",
+    "gofix.setup.maturity_fields.create_maturity_fields",
+    # Last: force-imports workspace JSON fixtures whose content changed, so it
+    # must run after any other hook that wires links into those workspaces.
+    "gofix.setup.workspace_sync.sync_workspaces",
 ]
 
 permission_query_conditions = {
@@ -110,6 +116,18 @@ override_doctype_class = {
 }
 
 doc_events = {
+	# Item is the master of the service catalogue; these mirror it into GoFix.
+	"Item": {
+		"on_update": "gofix.catalogue_sync.sync_spare_mappings_from_item",
+		"after_rename": "gofix.catalogue_sync.repoint_spare_mappings_on_rename",
+	},
+	"Repair Solution": {
+		"validate": "gofix.catalogue_sync.validate_repair_solution",
+		"on_update": "gofix.catalogue_sync.on_repair_solution_update",
+	},
+	"Solution Spare Mapping": {
+		"validate": "gofix.catalogue_sync.validate_solution_spare_mapping",
+	},
 	"Sales Order": {
 		"validate": "gofix.overrides.sales_order.validate_service_order_before_submit",
 		"on_update": "gofix.overrides.sales_order.update_service_request_on_qc",
@@ -119,26 +137,43 @@ doc_events = {
 	},
 	"Sales Invoice": {
 		"before_insert": "gofix.overrides.sales_invoice.resolve_gofix_links",
-		"on_submit": "gofix.overrides.sales_invoice.update_service_request_on_invoice",
+		"on_submit": [
+			"gofix.overrides.sales_invoice.update_service_request_on_invoice",
+			"gofix.spare_lifecycle.on_sales_invoice_update",
+		],
+		# Outstanding changes here when a payment is allocated against the bill.
+		"on_update_after_submit": "gofix.spare_lifecycle.on_sales_invoice_update",
 		"on_cancel": "gofix.overrides.sales_invoice.update_service_request_on_invoice"
+	},
+	"Payment Entry": {
+		"on_submit": "gofix.spare_lifecycle.on_payment_entry",
 	},
 	"Delivery Note": {
 		"on_submit": "gofix.overrides.delivery_note.update_service_request_on_delivery",
 		"on_cancel": "gofix.overrides.delivery_note.update_service_request_on_delivery"
 	},
+	"Purchase Order": {
+		"on_submit": "gofix.purchase_api.mark_spares_in_transit",
+	},
 	"Purchase Receipt": {
-		"on_submit": "gofix.purchase_api.allocate_received_spares_to_tickets"
+		# A draft receipt means the parts are AT the store; submitting it is what
+		# puts them in stock. The ticket distinguishes the two.
+		"after_insert": "gofix.purchase_api.mark_spares_delivered",
+		"on_submit": "gofix.purchase_api.allocate_received_spares_to_tickets",
+		"on_cancel": "gofix.purchase_api.unmark_spares_delivered",
+		"on_trash": "gofix.purchase_api.unmark_spares_delivered",
+	},
+	"Stock Entry": {
+		# A part transferred in is on the shelf as surely as one that was bought,
+		# so a ticket waiting for it is released either way.
+		"on_submit": "gofix.purchase_api.allocate_transferred_spares_to_tickets",
 	},
 	"Service Request": {
 		"on_update": "gofix.gofix_services.whatsapp_notifications.on_service_request_update",
-		"on_update_after_submit": "gofix.gofix_services.doctype.service_request.service_request.ensure_service_order_on_accept",
-	},
-	"Customer": {
-		"validate": "gofix.gofix_services.customer_address.validate_single_active_address",
-		"on_update": "gofix.gofix_services.customer_address.sync_standard_customer_address",
-	},
-	"Data Import": {
-		"on_change": "gofix.gofix_services.customer_address.on_data_import_change",
+		"on_update_after_submit": [
+			"gofix.gofix_services.doctype.service_request.service_request.ensure_service_order_on_accept",
+			"gofix.spare_lifecycle.release_holds_on_dead_ticket",
+		],
 	},
 }
 

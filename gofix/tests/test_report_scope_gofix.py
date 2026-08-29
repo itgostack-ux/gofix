@@ -28,10 +28,27 @@ from ch_erp15.ch_erp15.scope import clear_scope_cache
 
 _TEST_USER = "tier4-gofix-user@ch-tests.local"
 _TEST_STORE = "TIER4-GOFIX-STORE-A"
+_TEST_ROLE_PROFILE = "_Test GoFix Scoped Reporter"
+
+
+def _ensure_role_profile() -> None:
+    if frappe.db.exists("Role Profile", _TEST_ROLE_PROFILE):
+        return
+    doc = frappe.new_doc("Role Profile")
+    doc.role_profile = _TEST_ROLE_PROFILE
+    for role in ("Accounts User", "Service Viewer"):
+        doc.append("roles", {"role": role})
+    doc.insert(ignore_permissions=True)
 
 
 def _ensure_user(user: str) -> None:
     if frappe.db.exists("User", user):
+        doc = frappe.get_doc("User", user)
+        existing_roles = {row.role for row in doc.roles}
+        for role in ("Accounts User", "Service Viewer"):
+            if role not in existing_roles:
+                doc.append("roles", {"role": role})
+        doc.save(ignore_permissions=True)
         return
     doc = frappe.new_doc("User")
     doc.email = user
@@ -40,6 +57,7 @@ def _ensure_user(user: str) -> None:
     doc.new_password = "TestPass123!Tier4"
     doc.send_welcome_email = 0
     doc.append("roles", {"role": "Accounts User"})
+    doc.append("roles", {"role": "Service Viewer"})
     doc.flags.ignore_permissions = True
     doc.insert(ignore_permissions=True)
 
@@ -61,11 +79,46 @@ def _get_or_create_ch_store(name: str, warehouse: str, company: str) -> None:
     if frappe.db.exists("CH Store", name):
         return
     doc = frappe.new_doc("CH Store")
-    doc.store_id = name
     doc.store_code = name
     doc.store_name = name
     doc.company = company
     doc.warehouse = warehouse
+    # Active-store validation now requires the operational geography.
+    reference = frappe.get_all(
+        "CH Store",
+        filters={"company": company, "disabled": 0, "city": ("is", "set"), "zone": ("is", "set")},
+        fields=["city", "zone"],
+        limit=1,
+    )
+    if reference:
+        doc.city = reference[0].city
+        doc.zone = reference[0].zone
+    else:
+        # Do NOT fall back to a disabled/Planned store: scope resolution skips
+        # inactive stores, so the assertions below would pass vacuously. Mint the
+        # geography instead so the fixture is a genuinely Active store.
+        zone = frappe.db.get_value("CH Store Zone", {"company": company}, "name")
+        if not zone:
+            z = frappe.new_doc("CH Store Zone")
+            z.zone_name = f"{name} Zone"
+            z.company = company
+            z.city = frappe.db.get_value("CH City", {"disabled": 0}, "name")
+            # NOT the store's own warehouse: location_hierarchy rejects a store
+            # whose warehouse is any zone's source hub ("configured as a zone hub").
+            z.source_warehouse = (
+                frappe.db.get_value(
+                    "Warehouse",
+                    {"company": company, "is_group": 1, "name": ("!=", warehouse)},
+                    "name",
+                )
+                or frappe.db.get_value(
+                    "Warehouse", {"company": company, "name": ("!=", warehouse)}, "name"
+                )
+            )
+            z.flags.ignore_permissions = True
+            z.insert(ignore_permissions=True)
+            zone = z.name
+        doc.zone = zone
     doc.flags.ignore_permissions = True
     doc.flags.ignore_mandatory = True
     doc.insert(ignore_permissions=True)
@@ -77,6 +130,8 @@ def _make_scope(user: str, store: str, company: str) -> None:
     doc = frappe.new_doc("CH User Scope")
     doc.user = user
     doc.scope_role = "Store Executive"
+    _ensure_role_profile()
+    doc.role_profile = _TEST_ROLE_PROFILE
     doc.enabled = 1
     doc.append("stores", {"company": company, "store": store})
     doc.flags.ignore_permissions = True

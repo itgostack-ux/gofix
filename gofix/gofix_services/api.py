@@ -3,10 +3,11 @@
 
 import frappe
 from frappe import _
-from frappe.utils import add_days, add_to_date, cint, flt, getdate, get_datetime, now, now_datetime, random_string, today
+from frappe.utils import add_days, add_to_date, cint, flt, getdate, get_datetime, now, now_datetime, nowdate, random_string, today
 import json
 import secrets
 
+from ch_item_master.ch_core.cost_center import apply_cost_center
 from gofix.config import get_int_setting, require_role_setting
 from gofix.security import assert_service_request_access
 
@@ -21,39 +22,22 @@ def _get_scoped_service_order(service_order, permission_type="read"):
 
 
 def _require_sales_operation_role() -> None:
-	require_role_setting(
-		"sales_operation_roles",
-		("Sales Manager", "System Manager", "Service Manager", "Sales User"),
-		action=_("manage service operations"),
-	)
+	frappe.has_permission("Service Request", ptype="write", throw=True)
 
 
 def _require_billing_role() -> None:
-	require_role_setting(
-		"billing_roles",
-		("Sales Manager", "System Manager", "Service Manager", "Sales User", "Store Manager", "Store Executive"),
-		action=_("manage service billing"),
-	)
+	frappe.has_permission("Sales Invoice", ptype="create", throw=True)
 
 
 def _require_store_operation_role() -> None:
-	require_role_setting(
-		"store_operation_roles",
-		("Sales Manager", "System Manager", "Service Manager", "Store Manager"),
-		action=_("manage store service operations"),
-	)
+	frappe.has_permission("Service Request", ptype="write", throw=True)
 
 
 def _require_service_manager_role() -> None:
-	require_role_setting(
-		"service_manager_roles",
-		("Service Manager", "System Manager"),
-		action=_("approve service decisions"),
-	)
+	frappe.has_permission("Service Request", ptype="submit", throw=True)
 
 
 def _require_reference_read(action, doctypes, role_field="service_access_roles") -> None:
-	require_role_setting(role_field, action=action)
 	for doctype in doctypes:
 		frappe.has_permission(doctype, "read", throw=True)
 
@@ -274,11 +258,17 @@ def validate_delivery_readiness(service_order) -> dict:
 		blockers.append(_("QC not passed (current: {0})").format(so.qc_status or "Pending"))
 
 	# Gate 2: Payment verified
-	has_unpaid = frappe.db.exists("Sales Invoice", {
-		"sales_order": service_order,
-		"outstanding_amount": [">", 0],
-		"docstatus": 1,
-	})
+	# sales_order is a Sales Invoice Item field, not an invoice header field.
+	has_unpaid = frappe.get_all(
+		"Sales Invoice",
+		filters=[
+			["Sales Invoice Item", "sales_order", "=", service_order],
+			["outstanding_amount", ">", 0],
+			["docstatus", "=", 1],
+		],
+		pluck="name",
+		limit=1,
+	)
 	if has_unpaid:
 		blockers.append(_("Outstanding payment exists"))
 
@@ -319,8 +309,7 @@ def complete_delivery(service_order, remarks=None) -> dict:
 
 	# Update SR status
 	if so.service_request:
-		frappe.db.set_value("Service Request", so.service_request, {
-			"status": "Delivered",
+		frappe.get_doc("Service Request", so.service_request).db_set({
 			"decision": "Delivered",
 		}, update_modified=True)
 
@@ -630,11 +619,7 @@ def send_estimate_to_customer(service_order, send_via="Email") -> dict:
 @frappe.whitelist(methods=["POST"])
 def customer_approve_estimate(service_order, remarks=None) -> dict:
 	"""Record an audited staff override of the customer estimate decision."""
-	require_role_setting(
-		"estimate_decision_override_roles",
-		("Service Manager",),
-		action=_("override a customer estimate decision"),
-	)
+	require_role_setting('estimate_decision_override_roles', action=_('override a customer estimate decision'))
 	if not (remarks or "").strip():
 		frappe.throw(_("Override remarks are required."), frappe.ValidationError)
 	so = _get_scoped_service_order(service_order, "write")
@@ -664,11 +649,7 @@ def customer_approve_estimate(service_order, remarks=None) -> dict:
 @frappe.whitelist(methods=["POST"])
 def customer_reject_estimate(service_order, remarks=None) -> dict:
 	"""Record an audited staff override of the customer estimate decision."""
-	require_role_setting(
-		"estimate_decision_override_roles",
-		("Service Manager",),
-		action=_("override a customer estimate decision"),
-	)
+	require_role_setting('estimate_decision_override_roles', action=_('override a customer estimate decision'))
 	if not (remarks or "").strip():
 		frappe.throw(_("Override remarks are required."), frappe.ValidationError)
 	so = _get_scoped_service_order(service_order, "write")
@@ -967,6 +948,7 @@ def process_advance_refund(service_request, amount=None, reason=None) -> dict:
 	pe.reference_no = reference_no
 	pe.reference_date = today()
 	pe.remarks = f"Advance refund for Service Request {sr.name}. Reason: {reason or 'Not Repairable'}"
+	apply_cost_center(pe, warehouse=sr.source_warehouse)
 
 	frappe.has_permission("Payment Entry", "create", throw=True)
 	frappe.has_permission("Payment Entry", "read", throw=True)
@@ -989,6 +971,48 @@ def process_advance_refund(service_request, amount=None, reason=None) -> dict:
 
 # ── Inter-Store Service Transfer ─────────────────────────────────────
 
+@frappe.whitelist()
+def get_repair_destinations(service_request) -> list:
+	"""Where this ticket's device may legitimately be sent for repair.
+
+	Driven off the location hierarchy — CH Store — rather than the warehouse
+	tree. A raw warehouse list offers 111 leaf bins on this company alone,
+	including Damaged, Buyback, Demo and Supplier Returns, none of which is a
+	place a technician works. Sending a customer's phone to a returns bin
+	because it appeared in a dropdown is not a mistake worth allowing.
+
+	Hubs are listed first when any store is flagged ``is_hub``; until that flag
+	is configured every service-enabled store is offered, which is still correct
+	— a store CAN repair for another store — just unranked.
+	"""
+	sr = assert_service_request_access(service_request, permission_type="read")
+	current = sr.get("current_location") or sr.get("source_warehouse")
+
+	filters = {"company": sr.company, "disabled": 0}
+	if frappe.db.has_column("CH Store", "is_service_enabled"):
+		filters["is_service_enabled"] = 1
+
+	rows = frappe.get_all(
+		"CH Store",
+		filters=filters,
+		fields=["name", "store_name", "warehouse", "city", "zone", "is_hub"],
+		order_by="is_hub desc, store_name asc",
+		limit_page_length=500,
+	)
+	return [
+		{
+			"store": row.name,
+			"warehouse": row.warehouse,
+			"label": row.store_name or row.name,
+			"city": row.city,
+			"zone": row.zone,
+			"is_hub": cint(row.is_hub),
+		}
+		for row in rows
+		if row.warehouse and row.warehouse != current
+	]
+
+
 @frappe.whitelist(methods=["POST"])
 def create_service_transfer(service_request, to_store, reason=None) -> dict:
 	"""Transfer a device from source store to a zone service center for repair.
@@ -996,7 +1020,7 @@ def create_service_transfer(service_request, to_store, reason=None) -> dict:
 	The submitted Stock Entry and logical movement are one database transaction.
 	"""
 	_require_store_operation_role()
-	sr = assert_service_request_access(service_request, permission_type="write")
+	sr = assert_service_request_access(service_request, permission_type="write", action="dispatch")
 
 	if sr.transfer_status in ("In Transit", "Received at Service Center"):
 		frappe.throw(_("Device is already in transfer (status: {0})").format(sr.transfer_status), title=_("API Error"))
@@ -1039,10 +1063,17 @@ def create_service_transfer(service_request, to_store, reason=None) -> dict:
 def receive_service_transfer(service_request) -> dict:
 	"""Mark device as received at the destination service center."""
 	_require_store_operation_role()
-	sr = assert_service_request_access(service_request, permission_type="write")
+	sr = assert_service_request_access(service_request, permission_type="write", action="receive")
 
 	if sr.transfer_status != "In Transit":
 		frappe.throw(_("Device is not in transit (status: {0})").format(sr.transfer_status), title=_("API Error"))
+
+	# Goods receipt is a logistics act, not a service-desk one. The device's
+	# stock sits in transit until someone at the destination actually takes
+	# custody of it, so this refuses to claim receipt before that happened —
+	# otherwise the ticket says "at the hub" while the ledger still says
+	# "in transit", and the difference is a device nobody can find.
+	_assert_device_movement_landed(sr)
 
 	sr.db_set("transfer_status", "Received at Service Center", update_modified=True)
 	sr.db_set("transfer_received_date", today(), update_modified=False)
@@ -1056,11 +1087,173 @@ def receive_service_transfer(service_request) -> dict:
 	return {"status": "Received at Service Center"}
 
 
+def _assert_device_movement_landed(sr) -> None:
+	"""Refuse to mark a device received while its stock is still in transit.
+
+	The dispatch leg moved the device out of the origin store into transit. The
+	destination owns it only once the transit entry reaches Transferred, which
+	is what the pickup/delivery flow produces. A ticket that skipped ahead would
+	report the device at a bench it has not reached.
+
+	Sites not running the transit states for service moves are left alone: with
+	no transfer document to check, there is nothing to contradict.
+	"""
+	reference = sr.get("last_transfer_reference")
+	if not reference or not frappe.db.exists("Stock Entry", reference):
+		return
+
+	status = (frappe.db.get_value("Stock Entry", reference, "custom_status") or "").strip()
+	if status in ("Transferred", "Partially Transferred"):
+		return
+
+	frappe.throw(
+		_("The device has not arrived yet — transfer {0} is at <b>{1}</b>. "
+		  "Complete the pickup and delivery, and receive it at the destination, "
+		  "before marking the ticket received.").format(reference, status or _("Draft")),
+		title=_("Device Still In Transit"),
+	)
+
+
+# Transit states a dispatch can still be called back from, in the Stock Entry's
+# own vocabulary — TRANSIT_STATUS_TRANSITIONS lets exactly these fall back to
+# Draft, and "In Transit" onwards only moves forward. That is the real cut-off:
+# once a driver has the consignment, recalling it is a logistics operation, not
+# a click.
+#
+# These are NOT manifest statuses. An earlier version used Draft/Packed/Assigned
+# from CH Transfer Manifest against this field, which no dispatch ever carries —
+# every one starts at Pending With Goods — so cancel refused every single time.
+_CANCELLABLE_TRANSIT_STATES = ("", "Draft", "Pending With Goods", "Ready For Pickup")
+
+
+@frappe.whitelist(methods=["POST"])
+def cancel_service_transfer(service_request, reason=None) -> dict:
+	"""Call back a dispatch, any time before the destination takes the device on.
+
+	The cut-off is physical receipt, not pickup. Until somebody at the far end
+	has the device in their hands and has said so on the ticket, the origin
+	still owns the decision — and a wrong destination is usually noticed while
+	the van is moving, not before it leaves.
+
+	What happens next depends on where the goods are, because the ledger has to
+	match the world: a device still on the origin shelf never left, so the
+	dispatch is torn up; a device already moving has to be physically brought
+	back, so a return leg is raised and the ticket says it is coming home.
+	"""
+	_require_store_operation_role()
+	sr = assert_service_request_access(service_request, permission_type="write", action="cancel")
+
+	if sr.transfer_status != "In Transit":
+		frappe.throw(
+			_("Only a dispatch the destination has not received yet can be cancelled "
+			  "(status: {0}). Once the device has been taken on there, it comes back "
+			  "as a return instead.").format(sr.transfer_status or _("not in transfer")),
+			title=_("Nothing to Cancel"),
+		)
+
+	if not (reason or "").strip():
+		frappe.throw(
+			_("Give a reason — it is written to the ticket as the record of why "
+			  "the dispatch was called back."),
+			title=_("Reason Required"),
+		)
+
+	# The cut-off is physical receipt at the destination, not pickup. Up to that
+	# moment nobody at the far end has taken the device on, so calling it back is
+	# still a decision the origin gets to make. What the cancel DOES depends on
+	# where the goods actually are:
+	#
+	#   still on the origin shelf  the dispatch is paperwork; tear it up
+	#   already moving             something has to physically bring it home,
+	#                              so raise the return leg and say so
+	#
+	# Pretending the second case never happened would put a movement in the
+	# ledger that contradicts where the device is.
+	reference = sr.get("last_transfer_reference")
+	movement = ""
+	if reference and frappe.db.exists("Stock Entry", reference):
+		movement = (frappe.db.get_value("Stock Entry", reference, "custom_status") or "Draft").strip()
+
+	if movement and movement not in _CANCELLABLE_TRANSIT_STATES:
+		from gofix.gofix_services.orchestration import _auto_create_device_transfer
+
+		return_ref = _auto_create_device_transfer(
+			sr,
+			sr.transferred_to_store,
+			sr.source_warehouse,
+			_("Dispatch called back: {0}").format(reason.strip()),
+		)
+		sr.db_set({
+			"transfer_status": "Return In Transit",
+			"current_location": None,
+			"last_transfer_reference": return_ref,
+			"transfer_reason": _("Called back — {0}").format(reason.strip()),
+		}, update_modified=True)
+
+		from gofix.purchase_api import reroute_open_spare_procurement
+
+		reroute_open_spare_procurement(sr, sr.source_warehouse)
+		sr.add_comment("Info", _("Dispatch called back mid-route: {0}").format(reason.strip()))
+		frappe.msgprint(
+			_("The device had already left, so it is being brought back on {0}. "
+			  "Confirm its arrival at the store to close the loop.").format(return_ref),
+			indicator="orange", title=_("Coming Back"),
+		)
+		return {"ok": True, "status": "Return In Transit", "transfer": return_ref,
+		        "recalled_in_flight": True}
+
+	if reference and movement:
+		try:
+			from ch_erp15.ch_erp15.custom.stock_entry import revert_transit_entry
+
+			doc = frappe.get_doc("Stock Entry", reference)
+			revert_transit_entry(doc)
+			doc.db_set("custom_status", "Cancelled", update_modified=False)
+		except Exception:
+			frappe.log_error(
+				frappe.get_traceback(), f"GoFix: could not revert transit for {reference}"
+			)
+			frappe.throw(
+				_("The stock movement for {0} could not be reversed, so the dispatch "
+				  "was left as it is. Resolve it in Stock before cancelling.").format(reference),
+				title=_("Stock Not Reversed"),
+			)
+
+	destination = sr.transferred_to_store
+	sr.db_set({
+		"transfer_status": None,
+		"transferred_to_store": None,
+		"transfer_date": None,
+		"transfer_reason": None,
+		"last_transfer_reference": None,
+		# The device never left, so it is where it always was.
+		"current_location": sr.source_warehouse,
+	}, update_modified=True)
+
+	# Parts were redirected to the destination when the dispatch was raised;
+	# they have to come back with it.
+	from gofix.purchase_api import reroute_open_spare_procurement
+
+	reroute_open_spare_procurement(sr, sr.source_warehouse)
+
+	sr.add_comment(
+		"Info",
+		_("Dispatch to {0} cancelled before pickup — {1}").format(destination or "—", reason),
+	)
+	frappe.msgprint(
+		_("Dispatch cancelled. The device stays at {0}.").format(
+			(sr.source_warehouse or "").split(" - ")[0]
+		),
+		indicator="green",
+	)
+	return {"ok": True, "status": "", "current_location": sr.source_warehouse}
+
+
 @frappe.whitelist(methods=["POST"])
 def return_service_transfer(service_request) -> dict:
 	"""Initiate return of device from service center back to origin store."""
 	_require_store_operation_role()
-	sr = assert_service_request_access(service_request, permission_type="write")
+	sr = assert_service_request_access(service_request, permission_type="write", action="movement")
 
 	if sr.transfer_status not in ("Received at Service Center", "Repair Complete"):
 		frappe.throw(_("Device must be at service center to initiate return (status: {0})").format(
@@ -1093,7 +1286,7 @@ def return_service_transfer(service_request) -> dict:
 def complete_service_transfer_return(service_request) -> dict:
 	"""Mark device as returned to the origin store."""
 	_require_store_operation_role()
-	sr = assert_service_request_access(service_request, permission_type="write")
+	sr = assert_service_request_access(service_request, permission_type="write", action="movement")
 
 	if sr.transfer_status != "Return In Transit":
 		frappe.throw(_("Device is not in return transit (status: {0})").format(sr.transfer_status), title=_("API Error"))
@@ -1201,7 +1394,6 @@ def confirm_return_delivery(service_request) -> dict:
 		frappe.throw(_("Return must be dispatched before delivery can be confirmed."), title=_("Dispatch Pending"))
 
 	sr.db_set("return_delivered_date", today(), update_modified=True)
-	sr.db_set("status", "Delivered", update_modified=False)
 	sr.db_set("decision", "Delivered", update_modified=False)
 	_audit_service_update(
 		sr,
@@ -1369,6 +1561,12 @@ _SERVICE_BOARD_TABS = {
 	"delivered": ["Delivered"],
 }
 
+# A device that has left the store for repair elsewhere is not simply "in
+# progress" — nobody at this counter can act on it, and the customer asking
+# after it needs a different answer. It is tracked by transfer_status rather
+# than decision, so it is a filter in its own right rather than a tab entry.
+_OUT_FOR_REPAIR_STATUSES = ("In Transit", "Received at Service Center", "Return In Transit")
+
 
 @frappe.whitelist()
 def get_store_service_board(warehouse, tab=None, search=None) -> dict:
@@ -1389,8 +1587,10 @@ def get_store_service_board(warehouse, tab=None, search=None) -> dict:
 	assert_warehouse(warehouse=warehouse)
 
 	filters = {"source_warehouse": warehouse}
-	if tab and tab in _SERVICE_BOARD_TABS:
-		filters["status"] = ["in", _SERVICE_BOARD_TABS[tab]]
+	if tab == "out_for_repair":
+		filters["transfer_status"] = ["in", list(_OUT_FOR_REPAIR_STATUSES)]
+	elif tab and tab in _SERVICE_BOARD_TABS:
+		filters["decision"] = ["in", _SERVICE_BOARD_TABS[tab]]
 	if tab == "ready":
 		# "Ready to Bill" means billable — a Completed SR that already
 		# carries an invoice (legacy status drift) is not billable again.
@@ -1413,11 +1613,11 @@ def get_store_service_board(warehouse, tab=None, search=None) -> dict:
 		filters=filters,
 		or_filters=or_filters,
 		fields=[
-			"name", "status", "decision", "customer", "customer_name",
+			"name", "decision", "customer", "customer_name",
 			"contact_number", "serial_no", "actual_imei", "device_item_name",
 			"issue_category", "service_date", "estimated_cost", "final_cost",
 			"service_invoice", "transfer_status", "current_location",
-			"transferred_to_store", "source_warehouse",
+			"transferred_to_store", "source_warehouse", "last_transfer_reference",
 		],
 		order_by="modified desc",
 		limit_page_length=row_limit,
@@ -1433,24 +1633,163 @@ def get_store_service_board(warehouse, tab=None, search=None) -> dict:
 			device_at = r.get("current_location") or r.get("transferred_to_store")
 		r["device_at"] = device_at
 		r["at_home_store"] = bool(device_at == warehouse)
+		r.update(device_movement_options(r, warehouse))
 
-	status_counts = {
-		row.status: cint(row.count)
+	decision_counts = {
+		row.decision: cint(row.count)
 		for row in frappe.get_list(
 			"Service Request",
 			filters={"source_warehouse": warehouse},
-			fields=["status", "count(name) as count"],
-			group_by="status",
+			fields=["decision", {"COUNT": "name", "as": "count"}],
+			group_by="decision",
 			limit_page_length=len(_SERVICE_BOARD_TABS) + 10,
 		)
 	}
+	for row in rows:
+		row["status"] = row.decision
 	counts = {
-		key: sum(cint(status_counts.get(s, 0)) for s in statuses)
+		key: sum(cint(decision_counts.get(s, 0)) for s in statuses)
 		for key, statuses in _SERVICE_BOARD_TABS.items()
 	}
-	counts["all"] = sum(cint(v) for v in status_counts.values())
+	counts["all"] = sum(cint(v) for v in decision_counts.values())
+	counts["out_for_repair"] = cint(frappe.db.count(
+		"Service Request",
+		{"source_warehouse": warehouse, "transfer_status": ["in", list(_OUT_FOR_REPAIR_STATUSES)]},
+	))
 
 	return {"rows": rows, "counts": counts}
+
+
+# Landed states in the Stock Entry's own transit vocabulary: the consignment
+# is at the destination and can be taken into stock there.
+_LANDED_TRANSIT_STATES = ("Ready For Receive", "Receive At Transit", "Transferred",
+                          "Partially Transferred")
+
+
+def device_movement_options(row, home_warehouse=None) -> dict:
+	"""Which device movements this ticket can actually perform right now.
+
+	The tracker offered Send to Hub and Cancel Dispatch and nothing else, so a
+	device that had left its store had no way back: cancel stops being legal the
+	moment a driver picks it up, receive lives only in the Ops Hub, and the
+	return leg was reachable only from a status the ticket could not get to
+	without receiving first. The device could go out and not come home.
+
+	Both halves of the answer are needed, because the ticket and the ledger
+	disagree more often than they agree — a ticket reads "In Transit" from the
+	moment it is dispatched, while the goods sit on the origin's dock until
+	somebody drives them. So the ticket's transfer_status says which leg we are
+	on, and the transfer document says how far that leg has actually got.
+	"""
+	transfer = (row.get("transfer_status") or "").strip()
+	reference = row.get("last_transfer_reference")
+	movement = ""
+	if reference:
+		movement = (frappe.db.get_value("Stock Entry", reference, "custom_status") or "").strip()
+
+	# No transfer document means nothing contradicts the ticket, so trust it.
+	landed = (not reference) or movement in _LANDED_TRANSIT_STATES
+	actions = []
+	if transfer in ("", "Not Transferred", "Returned to Store"):
+		actions.append("dispatch")
+	elif transfer == "In Transit":
+		# Callable back right up to physical receipt: until somebody at the far
+		# end takes the device on, the origin still gets to change its mind.
+		actions.append("cancel")
+		if landed:
+			actions.append("receive")
+	elif transfer in ("Received at Service Center", "Repair Complete"):
+		actions.append("return")
+	elif transfer == "Return In Transit":
+		if landed:
+			actions.append("confirm_return")
+
+	return {
+		"movement_status": movement,
+		"transfer_actions": actions,
+		"awaiting_pickup": transfer == "In Transit" and movement in _CANCELLABLE_TRANSIT_STATES,
+		"home_warehouse": home_warehouse or row.get("source_warehouse"),
+	}
+
+
+@frappe.whitelist(methods=["POST"])
+def add_ticket_note(service_request, note, visibility="Internal") -> dict:
+	"""Add a note to a ticket — from anywhere, at any point in its life.
+
+	The one thing custody does not gate. A note claims nothing about where the
+	device is or what has been done to it; it is somebody writing down what they
+	know, and the moments you most want that written down are exactly the ones
+	the rest of the ticket is frozen for — the customer rang while the phone was
+	on a van, the hub called about a part.
+
+	Appended rather than assigned, and stamped with who and when, because "any
+	time by anyone" means two people will eventually write at once and neither
+	should silently overwrite the other.
+	"""
+	sr = assert_service_request_access(service_request, permission_type="write", action="note")
+
+	note = (note or "").strip()
+	if not note:
+		frappe.throw(_("Write something first."), title=_("Empty Note"))
+	limit = get_int_setting("ticket_note_max_chars", 2000)
+	if len(note) > limit:
+		frappe.throw(
+			_("Keep the note under {0} characters.").format(limit), title=_("Note Too Long")
+		)
+
+	field = "customer_remarks" if visibility == "Customer" else "internal_remarks"
+	if not sr.meta.get_field(field):
+		frappe.throw(_("This site has no {0} field.").format(field))
+
+	stamp = _("{0} · {1}").format(
+		frappe.utils.get_fullname(frappe.session.user),
+		frappe.utils.format_datetime(now_datetime(), "medium"),
+	)
+	existing = (sr.get(field) or "").strip()
+	updated = f"{existing}\n\n{stamp}\n{note}".strip() if existing else f"{stamp}\n{note}"
+	sr.db_set(field, updated, update_modified=True)
+
+	# The field holds the running text; the comment is the audit trail, which
+	# nobody can edit away.
+	sr.add_comment("Comment", note)
+	return {"ok": True, "field": field, "value": updated}
+
+
+@frappe.whitelist()
+def get_repair_close_options(service_request=None) -> dict:
+	"""What the counter needs to close a job that will not be repaired.
+
+	Outcomes and their coded reasons in one call, so POS and the Ops Hub put the
+	same words in front of whoever is closing the ticket.
+	"""
+	from gofix.repair_closure import CLOSE_OUTCOMES, get_close_reasons
+
+	if service_request:
+		assert_service_request_access(service_request, permission_type="read")
+	return {
+		"outcomes": [
+			{
+				"outcome": name,
+				"decision": spec["decision"],
+				"reasons": get_close_reasons(name),
+			}
+			for name, spec in CLOSE_OUTCOMES.items()
+		]
+	}
+
+
+@frappe.whitelist()
+def get_device_movement_options(service_request) -> dict:
+	"""The same answer for one ticket, for a screen that holds a single card."""
+	sr = assert_service_request_access(service_request, permission_type="read")
+	return device_movement_options(
+		{
+			"transfer_status": sr.get("transfer_status"),
+			"last_transfer_reference": sr.get("last_transfer_reference"),
+			"source_warehouse": sr.get("source_warehouse"),
+		},
+		sr.get("source_warehouse"),
+	)
 
 
 # ── Issue → Solution → Spare Cascade APIs ────────────────────────────
@@ -1635,11 +1974,221 @@ def get_eligible_technicians(issue_categories, warehouse=None) -> list:
 		order_by="employee_name",
 		limit_page_length=row_limit,
 	)
+	# A lapsed authorisation is not a qualification. Skip technicians whose
+	# certification has run out, so routing cannot hand brand-authorised work
+	# to someone no longer approved to do it. A blank expiry means no
+	# time-limited authorisation applies and the technician stays eligible.
+	from gofix.service_maturity import certification_valid
+
+	rows = [r for r in rows if certification_valid(r.name)]
+
+	# Same roster rule as the picker — one answer to "who works here".
+	rostered = technicians_mapped_to_location(warehouse)
+	if rostered:
+		on_roster = [r for r in rows if r.name in rostered]
+		if on_roster:
+			return on_roster
+
 	if warehouse and frappe.db.has_column("Employee", "gofix_service_warehouse"):
 		local = [r for r in rows if r.get("gofix_service_warehouse") == warehouse]
 		if local:
 			return local
 	return rows
+
+
+@frappe.whitelist()
+def get_reopenable_repairs(serial_no=None, service_request=None, company=None) -> list:
+	"""Past repairs on a device, with the individual work lines that can fail.
+
+	A returning customer says "it's doing it again", not "solution line 3 of
+	SR-260828-16218". This gives the counter the list to point at: each
+	delivered repair, what was done on it, and whether the workmanship warranty
+	on that repair is still live.
+	"""
+	serial_no = (serial_no or "").strip()
+	if not serial_no and service_request:
+		serial_no = frappe.db.get_value("Service Request", service_request, "serial_no")
+	if not serial_no:
+		return []
+
+	filters = {
+		"serial_no": serial_no,
+		"docstatus": 1,
+		"decision": ("in", ("Completed", "Invoiced", "Delivered")),
+	}
+	if company:
+		filters["company"] = company
+
+	today_ = getdate(nowdate())
+	out = []
+	for sr in frappe.get_all(
+		"Service Request", filters=filters,
+		fields=["name", "service_date", "repair_warranty_expiry", "customer_name"],
+		order_by="service_date desc", limit_page_length=10,
+	):
+		covered = bool(sr.repair_warranty_expiry and getdate(sr.repair_warranty_expiry) >= today_)
+		lines = frappe.get_all(
+			"SR Solution Line",
+			filters={"parent": sr.name, "parenttype": "Service Request",
+			         "status": ("in", ("Completed", "Skipped"))},
+			fields=["name", "repair_solution", "issue_category", "status", "technician"],
+		)
+		if not lines:
+			continue
+		out.append({
+			"service_request": sr.name,
+			"service_date": str(sr.service_date or ""),
+			"under_warranty": covered,
+			"warranty_expiry": str(sr.repair_warranty_expiry or ""),
+			"solutions": [
+				{
+					"solution_line": l.name,
+					"repair_solution": l.repair_solution,
+					"issue_category": l.issue_category,
+					"technician": l.technician,
+					"status": l.status,
+				}
+				for l in lines
+			],
+		})
+	return out
+
+
+@frappe.whitelist(methods=["POST"])
+def reopen_repair(solution_line, description=None, company=None) -> dict:
+	"""Raise a return visit against the exact repair line that failed.
+
+	A new ticket rather than reviving the old one: the first repair was
+	delivered and invoiced, and rewriting a closed job loses what actually
+	happened. The link back is what carries the meaning — the new ticket knows
+	which repair and which line it is a comeback for, so warranty pricing,
+	first-time-fix and any supplier claim all resolve to the right thing.
+	"""
+	_require_store_operation_role()
+
+	line = frappe.db.get_value(
+		"SR Solution Line", solution_line,
+		["name", "parent", "repair_solution", "issue_category"], as_dict=True,
+	)
+	if not line:
+		frappe.throw(_("That repair line no longer exists."), title=_("Nothing to Reopen"))
+
+	old = assert_service_request_access(line.parent, permission_type="read")
+
+	sr = frappe.new_doc("Service Request")
+	for field in ("customer", "customer_name", "contact_number", "device_item",
+	              "device_item_name", "serial_no", "actual_imei", "brand", "company",
+	              "source_warehouse", "email", "accessories_received",
+	              "product_condition_desc", "backup_info"):
+		if old.get(field):
+			sr.set(field, old.get(field))
+	sr.issue_category = line.issue_category
+	sr.issue_description = description or _(
+		"Return visit — {0} carried out on {1} has not held."
+	).format(line.repair_solution, old.name)
+	sr.service_date = nowdate()
+	sr.decision = "Draft"
+	sr.warranty_status = old.get("warranty_status") or "Out of Warranty"
+	sr.device_condition = old.get("device_condition") or "Damaged"
+	sr.data_backup_disclaimer = 1
+	# Submission gates on these two, and a return visit that cannot be submitted
+	# is a return visit the counter cannot log. Carry the original's words over;
+	# fall back to a statement of fact rather than leaving them blank.
+	sr.product_condition_desc = sr.product_condition_desc or _(
+		"Returned by customer after repair {0}."
+	).format(old.name)
+	sr.backup_info = sr.backup_info or _("Carried over from {0}.").format(old.name)
+	sr.previous_service_request = old.name
+	if sr.meta.get_field("is_repeat_complaint"):
+		sr.is_repeat_complaint = 1
+
+	sr.append("issue_lines", {
+		"issue_category": line.issue_category,
+		"reported_by": "Customer",
+		"status": "Open",
+		"description": sr.issue_description,
+		"reopened_from_solution": line.name,
+		"reopened_from_request": old.name,
+	})
+	sr.flags.ignore_mandatory = True
+	sr.insert(ignore_permissions=True)
+	sr.submit()
+
+	frappe.get_doc("Service Request", old.name).add_comment(
+		"Info",
+		_("Customer returned about {0}; reopened as {1}.").format(
+			line.repair_solution,
+			f'<a href="/app/service-request/{sr.name}">{sr.name}</a>',
+		),
+	)
+	return {
+		"ok": True,
+		"service_request": sr.name,
+		"reopened_from": old.name,
+		"solution": line.repair_solution,
+	}
+
+
+def technicians_mapped_to_location(warehouse: str) -> set:
+	"""Employees whose USER is rostered to this store in CH User Scope.
+
+	POS already answers "who works here" from CH User Scope Store, and that
+	roster is what an administrator actually maintains. GoFix was answering the
+	same question from Employee.gofix_service_warehouse — a second, parallel
+	mapping nobody keeps in step, which is how the Ops Hub ended up offering
+	technicians from other stores.
+
+	Returns an empty set when the store has no roster, which callers treat as
+	"no opinion" and fall back to the old field. Better an unfiltered picker
+	than an empty one: a site that has not adopted CH User Scope must still be
+	able to assign work.
+	"""
+	if not warehouse:
+		return set()
+	try:
+		from ch_erp15.ch_erp15.scope import get_store_roster
+	except ImportError:
+		return set()
+
+	store = frappe.db.get_value("CH Store", {"warehouse": warehouse}, "name")
+	if not store:
+		node, seen = warehouse, set()
+		while node and node not in seen:
+			seen.add(node)
+			store = frappe.db.get_value("CH Store", {"warehouse_group": node}, "name")
+			if store:
+				break
+			node = frappe.db.get_value("Warehouse", node, "parent_warehouse")
+	if not store:
+		return set()
+
+	# One roster for the whole bench — the same list the POS closure screen
+	# reads, which is the point: the two must never disagree about who works
+	# here. It unions CH User Scope with the configured assignment records.
+	users = [row["user"] for row in (get_store_roster(store) or []) if row.get("user")]
+
+	# POS Profile users are staff on a till at this warehouse. Kept as a second
+	# read because a profile can point at a warehouse whose CH Store is not the
+	# one resolved above, and a technician missing from the picker is worse than
+	# one extra name in it.
+	users += frappe.db.sql_list(
+		"""
+		SELECT DISTINCT pu.user
+		FROM `tabPOS Profile User` pu
+		JOIN `tabPOS Profile` p ON p.name = pu.parent
+		WHERE p.warehouse = %s AND IFNULL(p.disabled, 0) = 0
+		""",
+		warehouse,
+	)
+	users = list(dict.fromkeys(users))
+	if not users:
+		return set()
+
+	return set(frappe.get_all(
+		"Employee",
+		filters={"user_id": ("in", users), "status": "Active"},
+		pluck="name",
+	))
 
 
 @frappe.whitelist()
@@ -1662,17 +2211,20 @@ def technician_query(doctype, txt, searchfield, start, page_len, filters) -> lis
 	filters = filters or {}
 
 	warehouse = filters.get("warehouse")
+	company = filters.get("company")
 	if warehouse:
 		from gofix.scope_guard import assert_warehouse
 
 		assert_warehouse(warehouse=warehouse)
-	if not warehouse and filters.get("sr_name"):
+	if filters.get("sr_name"):
 		from gofix.gofix_services.page.gofix_ops_hub.gofix_ops_hub import (
 			_effective_repair_warehouse,
 		)
 
 		sr = assert_service_request_access(filters["sr_name"], permission_type="read")
-		warehouse = _effective_repair_warehouse(sr)
+		company = company or sr.company
+		if not warehouse:
+			warehouse = _effective_repair_warehouse(sr)
 
 	has_wh_col = frappe.db.has_column("Employee", "gofix_service_warehouse")
 	values = {
@@ -1684,6 +2236,13 @@ def technician_query(doctype, txt, searchfield, start, page_len, filters) -> lis
 		),
 		"warehouse": warehouse or "",
 	}
+	# A technician belongs to a company before they belong to a store. Without
+	# this the picker offered GoGizmo's staff on a GoFix ticket whenever the
+	# store had no roster — the two payrolls are separate and must stay so.
+	company_clause = ""
+	if company:
+		company_clause = "AND e.company = %(company)s"
+		values["company"] = company
 	wh_rank = (
 		"CASE WHEN e.gofix_service_warehouse = %(warehouse)s THEN 0 "
 		"WHEN IFNULL(e.gofix_service_warehouse, '') = '' THEN 1 ELSE 2 END"
@@ -1698,12 +2257,23 @@ def technician_query(doctype, txt, searchfield, start, page_len, filters) -> lis
 		WHERE e.status = 'Active'
 		  AND IFNULL(e.technician_grade, '') != ''
 		  AND (e.name LIKE %(txt)s OR e.employee_name LIKE %(txt)s)
+		  {company_clause}
 		ORDER BY wh_rank, e.employee_name
 		LIMIT %(start)s, %(page_len)s
 		""",
 		values,
 	)
-	# When the location has dedicated technicians, hide other stores' staff.
+	# The store roster wins where one exists: a technician offered for this
+	# location must be somebody actually rostered to it, not merely tagged to it
+	# on a second field.
+	rostered = technicians_mapped_to_location(warehouse)
+	if rostered:
+		on_roster = [r for r in rows if r[0] in rostered]
+		if on_roster:
+			return [r[:3] for r in on_roster]
+
+	# No roster, or nobody on it holds a technician grade — fall back to the
+	# warehouse tag rather than returning nothing.
 	if has_wh_col and warehouse and any(r[3] == 0 for r in rows):
 		rows = [r for r in rows if r[3] == 0]
 	return [r[:3] for r in rows]

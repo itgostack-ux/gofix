@@ -9,7 +9,6 @@ from gofix.config import get_int_setting, require_role_setting
 
 
 def execute(filters=None):
-	require_role_setting("service_dashboard_roles", action=_("view technician performance"))
 	frappe.has_permission("Job Assignment", "read", throw=True)
 	frappe.has_permission("Sales Order", "read", throw=True)
 	columns = get_columns()

@@ -11,8 +11,7 @@ from gofix.config import (
 	get_int_setting,
 	get_role_setting,
 	has_any_role,
-	has_role_setting,
-)
+	has_role_setting)
 
 
 class CustomSalesOrder(SalesOrder):
@@ -37,8 +36,7 @@ class CustomSalesOrder(SalesOrder):
 		"delivery_otp_sent_at",
 		"delivery_otp_attempts",
 		"delivery_otp_locked_until",
-		"delivery_otp_consumed_at",
-	)
+		"delivery_otp_consumed_at")
 
 	def _validate_server_evidence(self):
 		before = self.get_doc_before_save() if not self.is_new() else None
@@ -52,8 +50,7 @@ class CustomSalesOrder(SalesOrder):
 		):
 			frappe.throw(
 				_("Service-order approval and OTP evidence can only be changed through authorized actions."),
-				frappe.PermissionError,
-			)
+				frappe.PermissionError)
 
 	def validate(self):
 		"""Validate Service Order workflow"""
@@ -74,8 +71,7 @@ class CustomSalesOrder(SalesOrder):
 		rule = check_approval_required(
 			"High Estimate", total, self.company,
 			issue_category=getattr(self, "issue_category", None),
-			warranty_status=getattr(self, "warranty_status", None),
-		)
+			warranty_status=getattr(self, "warranty_status", None))
 		if rule and not getattr(self, "estimate_approved", None):
 			if not getattr(self, "estimate_approval_status", None) or self.estimate_approval_status == "Pending":
 				self.estimate_approval_status = "Pending"
@@ -276,8 +272,7 @@ class CustomSalesOrder(SalesOrder):
 			_("Workflow condition {0!r} uses unsupported syntax. "
 			  "Only simple field comparisons are allowed: "
 			  "doc.field_name == 'value' (joined by and/or).").format(condition_script),
-			title=_("Invalid Workflow Condition"),
-		)
+			title=_("Invalid Workflow Condition"))
 
 	def on_update(self):
 		"""Sync status to Service Request"""
@@ -311,7 +306,7 @@ class CustomSalesOrder(SalesOrder):
 			# the Service Order AFTER billing must not knock the SR back to
 			# Completed (QC-Pass branch below) nor fast-forward it to
 			# Delivered before the device is handed over.
-			if sr.service_invoice and sr.status in ("Invoiced", "Delivered"):
+			if sr.service_invoice and sr.decision in ("Invoiced", "Delivered"):
 				return
 
 			# Map SO status to SR status
@@ -329,12 +324,11 @@ class CustomSalesOrder(SalesOrder):
 			if hasattr(self, 'qc_status') and self.qc_status == "Pass":
 				new_status = "Completed"
 			else:
-				new_status = status_mapping.get(self.status, sr.status)
+				new_status = status_mapping.get(self.status, sr.decision)
 			
 			# Only update if status changed
-			if sr.status != new_status:
-				sr.db_set("status", new_status, update_modified=True)
-				sr.db_set("decision", new_status, update_modified=False)
+			if sr.decision != new_status:
+				sr.db_set("decision", new_status, update_modified=True)
 				
 				frappe.msgprint(
 					_("Service Request {0} updated to {1}").format(self.service_request, new_status),
@@ -352,8 +346,7 @@ class CustomSalesOrder(SalesOrder):
 		
 		try:
 			sr = frappe.get_doc("Service Request", self.service_request)
-			sr.db_set("status", status, update_modified=True)
-			sr.db_set("decision", status, update_modified=False)
+			sr.db_set("decision", status, update_modified=True)
 		except Exception as e:
 			frappe.log_error(f"Failed to update SR status: {str(e)}")
 
@@ -373,8 +366,7 @@ class CustomSalesOrder(SalesOrder):
 				  "These must Pass before QC can be approved.").format(
 					", ".join(critical_failures)
 				),
-				title=_("Critical QC Failure"),
-			)
+				title=_("Critical QC Failure"))
 
 		# N/A is a valid result for all items — technicians use it to mark checks
 		# that do not apply to this repair (e.g. camera check on a screen-only repair).
@@ -388,8 +380,7 @@ class CustomSalesOrder(SalesOrder):
 				_("QC Checklist incomplete. The following checks have no result: {0}").format(
 					", ".join(incomplete)
 				),
-				title=_("QC Incomplete"),
-			)
+				title=_("QC Incomplete"))
 
 
 def validate_service_order_before_submit(doc, method=None):
@@ -418,8 +409,7 @@ def validate_service_order_before_submit(doc, method=None):
 			frappe.db.set_value(
 				"Job Assignment", js.name, "assignment_status",
 				"Completed" if flt(js.actual_hours) else "Cancelled",
-				update_modified=False,
-			)
+				update_modified=False)
 		incomplete = []
 
 	if incomplete:
@@ -432,12 +422,11 @@ def update_service_request_on_qc(doc, method=None):
 		if doc.qc_status == "Pass":
 			# GF-5 fix: Only users with QC Manager/Store Manager/System Manager role can approve QC Pass
 			if not has_role_setting(
-				"qc_approval_roles", ("QC Manager", "Store Manager", "System Manager")
+				"qc_approval_roles"
 			):
 				frappe.throw(
 					_("Only QC Managers or Store Managers can approve QC Pass."),
-					title=_("Insufficient Permission"),
-				)
+					title=_("Insufficient Permission"))
 
 			# Stamp QC Pass only when moving forward — never drag a Closed
 			# order back (the Close action fires this hook via
@@ -491,7 +480,7 @@ def _update_service_costing(doc):
 		WHERE service_request = %s
 		  AND status = 'Active'
 		  AND part_status IN ('Consumed', 'Issued')
-	""", (doc.service_request,), as_dict=True)
+	""", (doc.service_request), as_dict=True)
 
 	parts_cost = flt(parts[0].total_cost) if parts else 0
 	parts_revenue = flt(parts[0].total_revenue) if parts else 0
@@ -515,8 +504,7 @@ def _update_service_costing(doc):
 			"Employee",
 			filters={"name": ("in", employee_names)},
 			fields=employee_fields,
-			limit_page_length=len(employee_names),
-		):
+			limit_page_length=len(employee_names)):
 			hourly_rate = flt(employee.get("custom_hourly_rate")) if has_hourly_rate else 0
 			if not hourly_rate and flt(employee.ctc):
 				hourly_rate = flt(employee.ctc) / annual_working_hours
@@ -555,7 +543,7 @@ def _update_service_costing(doc):
 		WHERE service_request = %s
 		  AND is_defective = 1
 		  AND defect_type = 'Installation Damage'
-	""", (doc.service_request,), as_dict=True)
+	""", (doc.service_request), as_dict=True)
 	damage_cost = flt(damage[0].damage_cost) if damage else 0
 	doc.db_set("technician_damage_cost", damage_cost, update_modified=False)
 
@@ -571,26 +559,23 @@ def _alert_max_rework(doc, rework_count, max_rework):
 		"Immediate attention required — consider reassigning technician or escalating."
 	).format(doc.name, rework_count, max_rework)
 
-	notification_roles = get_role_setting("service_notification_roles", ("Service Manager",))
+	notification_roles = get_role_setting("service_notification_roles")
 	sr_scope = frappe.db.get_value(
 		"Service Request",
 		doc.service_request,
 		["company", "source_warehouse"],
-		as_dict=True,
-	) if doc.service_request else frappe._dict()
+		as_dict=True) if doc.service_request else frappe._dict()
 	company = doc.company or sr_scope.get("company")
 	store = None
 	if sr_scope.get("source_warehouse"):
 		store = frappe.db.get_value(
 			"CH Store",
 			{"warehouse": sr_scope.source_warehouse},
-			"name",
-		)
+			"name")
 	manager_users = get_business_role_users(
 		notification_roles,
 		company=company,
-		store=store,
-	)
+		store=store)
 
 	for user in manager_users:
 		frappe.publish_realtime("msgprint",
@@ -603,8 +588,7 @@ def move_service_order_to_qc_if_ready(doc):
 	job_sheets = frappe.get_all(
 		"Job Assignment",
 		filters={"service_order": doc.name},
-		fields=["assignment_status"],
-	)
+		fields=["assignment_status"])
 	if not job_sheets:
 		return
 
@@ -621,8 +605,7 @@ def move_service_order_to_qc_if_ready(doc):
 	# technician added mid-repair.
 	if doc.service_request:
 		from gofix.gofix_services.doctype.service_request.service_request import (
-			get_unresolved_issue_gaps,
-		)
+			get_unresolved_issue_gaps)
 
 		gaps = get_unresolved_issue_gaps(doc.service_request)
 		if not gaps["ready_for_qc"]:
@@ -631,8 +614,7 @@ def move_service_order_to_qc_if_ready(doc):
 				"Comment",
 				_("QC entry blocked — unresolved: {0}").format(
 					", ".join(gaps["uncovered_issues"] + gaps["open_solutions"])
-				),
-			)
+				))
 			return
 
 	# Always reset to Awaiting (handles first QC and re-QC after rework)
@@ -670,8 +652,7 @@ def _populate_qc_checklist(doc, force=False):
 	all_templates = frappe.get_all(
 		"GoFix QC Template",
 		filters=filters,
-		fields=["name", "issue_category"],
-	)
+		fields=["name", "issue_category"])
 	by_category = {t.issue_category: t.name for t in all_templates if t.issue_category}
 	generic = next((t.name for t in all_templates if not t.issue_category), None)
 	template_cache = {}
@@ -706,8 +687,7 @@ def _populate_qc_checklist(doc, force=False):
 			"SR Solution Line",
 			filters={"parent": doc.service_request, "status": ["not in", ["Cancelled"]]},
 			fields=["repair_solution", "issue_category"],
-			order_by="idx",
-		)
+			order_by="idx")
 	for sol in solutions:
 		tmpl = by_category.get(sol.issue_category)
 		if tmpl:

@@ -17,6 +17,10 @@
   {"role": "Service Manager"},
   {"role": "Store Manager"},
   {"role": "Store Executive"},
-  {"role": "Service Viewer"}
+  {"role": "Service Viewer"},
+  {"role": "Stock Manager"},
+  {"role": "Stock User"},
+  {"role": "Purchase Manager"},
+  {"role": "Purchase User"}
  ]
 }

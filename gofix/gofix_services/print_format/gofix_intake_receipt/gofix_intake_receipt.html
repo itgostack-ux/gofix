@@ -1,0 +1,153 @@
+{#
+  GoFix Intake Receipt — what the customer takes away at drop-off.
+
+  The counterpart to the delivery receipt, and the more important of the two.
+  Every dispute about a repair is a dispute about the state the device arrived
+  in, and this is the only document that records it while the customer is
+  standing there: condition, accessories, what they were told about their data,
+  and their signature under all of it.
+
+  Deliberately printed BEFORE any price is known. Nothing here promises a cost;
+  it is a receipt for a device, not a quotation.
+#}
+<div class="gfx-intake">
+
+  <div class="gfx-head">
+    <div>
+      <div class="gfx-title">Device Receipt</div>
+      <div class="gfx-sub">{{ doc.name }}</div>
+    </div>
+    <div class="gfx-head-right">
+      {% if doc.company %}<div class="gfx-co">{{ doc.company }}</div>{% endif %}
+      <div class="gfx-muted">
+        {{ frappe.format(doc.service_date, {"fieldtype": "Date"}) }}
+        {%- if doc.received_datetime %} · {{ frappe.format(doc.received_datetime, {"fieldtype": "Datetime"}) }}{% endif %}
+      </div>
+      {% if doc.source_warehouse %}
+        <div class="gfx-muted">{{ doc.source_warehouse.split(" - ")[0] }}</div>
+      {% endif %}
+    </div>
+  </div>
+
+  <table class="gfx-grid">
+    <tr>
+      <th>Customer</th><td>{{ doc.customer_name or doc.customer or "—" }}</td>
+      <th>Contact</th><td>{{ doc.contact_number or "—" }}</td>
+    </tr>
+    <tr>
+      <th>Device</th><td>{{ doc.device_item_name or doc.device_item or "—" }}</td>
+      <th>IMEI / Serial</th><td>{{ doc.actual_imei or doc.serial_no or "—" }}</td>
+    </tr>
+    <tr>
+      <th>Reported fault</th><td>{{ doc.issue_category or "—" }}</td>
+      <th>Warranty</th><td>{{ doc.warranty_status or "—" }}</td>
+    </tr>
+  </table>
+
+  {% if doc.issue_description %}
+    <div class="gfx-block">
+      <div class="gfx-label">What the customer reported</div>
+      <div>{{ doc.issue_description }}</div>
+    </div>
+  {% endif %}
+
+  {# Condition and accessories are the whole point of the document. #}
+  <div class="gfx-two">
+    <div class="gfx-block">
+      <div class="gfx-label">Condition as received</div>
+      <div><b>{{ doc.device_condition or "—" }}</b></div>
+      {% if doc.product_condition_desc %}<div class="gfx-note">{{ doc.product_condition_desc }}</div>{% endif %}
+    </div>
+    <div class="gfx-block">
+      <div class="gfx-label">Accessories handed over</div>
+      <div><b>{{ doc.accessories_received or "None" }}</b></div>
+    </div>
+  </div>
+
+  <div class="gfx-block gfx-terms">
+    <div class="gfx-label">Data and consent</div>
+    <ul>
+      <li>
+        {% if doc.data_backup_disclaimer %}
+          The customer has been told that data on the device may be lost during repair and
+          accepts that risk.
+        {% else %}
+          <b>No data-loss acknowledgement was recorded at drop-off.</b>
+        {% endif %}
+      </li>
+      {% if doc.data_access_required %}
+        <li>
+          This repair requires access to the data on the device.
+          {% if doc.data_access_consent %}The customer has consented to that access.
+          {% else %}<b>Consent to access has not yet been given.</b>{% endif %}
+        </li>
+      {% endif %}
+      {% if doc.backup_info %}<li>Backup: {{ doc.backup_info }}</li>{% endif %}
+    </ul>
+    <div class="gfx-note">
+      No charge is authorised by this receipt. An estimate will be raised after the device
+      has been examined, and work begins only once the customer approves it.
+    </div>
+  </div>
+
+  <div class="gfx-two gfx-sign">
+    <div>
+      <div class="gfx-label">Customer signature</div>
+      {% if doc.intake_signature %}
+        <img src="{{ doc.intake_signature }}" class="gfx-sig-img" alt="Customer signature">
+        {% if doc.intake_signed_at %}
+          <div class="gfx-note">Signed {{ frappe.format(doc.intake_signed_at, {"fieldtype": "Datetime"}) }}</div>
+        {% endif %}
+      {% else %}
+        <div class="gfx-sig-line"></div>
+        <div class="gfx-note">Signature not captured on the ticket.</div>
+      {% endif %}
+    </div>
+    <div>
+      <div class="gfx-label">Received by</div>
+      <div class="gfx-sig-line"></div>
+      <div class="gfx-note">
+        {{ frappe.db.get_value("User", doc.accepted_by or doc.owner, "full_name") or doc.accepted_by or doc.owner or "" }}
+      </div>
+    </div>
+  </div>
+
+  <div class="gfx-foot">
+    Quote <b>{{ doc.name }}</b> when asking after this repair.
+    {%- if doc.tracking_token %} Track it online with reference <b>{{ doc.tracking_token }}</b>.{% endif %}
+  </div>
+</div>
+
+<style>
+  /* Printed on a counter printer, often thermal — so: no colour dependence, no
+     hairlines that vanish, and a layout that survives a narrow roll. */
+  .gfx-intake { font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; color: #111; font-size: 12px; line-height: 1.5; }
+  .gfx-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px;
+              border-bottom: 2px solid #111; padding-bottom: 8px; margin-bottom: 12px; }
+  .gfx-title { font-size: 19px; font-weight: 700; letter-spacing: -.2px; }
+  .gfx-sub { font-family: "Courier New", monospace; font-size: 13px; font-weight: 700; margin-top: 2px; }
+  .gfx-head-right { text-align: right; }
+  .gfx-co { font-weight: 700; }
+  .gfx-muted { color: #555; font-size: 11px; }
+
+  .gfx-grid { width: 100%; border-collapse: collapse; margin-bottom: 12px; }
+  .gfx-grid th { text-align: left; font-size: 9px; text-transform: uppercase; letter-spacing: .07em;
+                 color: #555; font-weight: 700; padding: 4px 8px 4px 0; width: 15%; vertical-align: top; }
+  .gfx-grid td { padding: 4px 14px 4px 0; vertical-align: top; width: 35%; }
+
+  .gfx-block { border: 1px solid #bbb; border-radius: 3px; padding: 8px 10px; margin-bottom: 10px; }
+  .gfx-label { font-size: 9px; text-transform: uppercase; letter-spacing: .07em; color: #555;
+               font-weight: 700; margin-bottom: 3px; }
+  .gfx-note { color: #555; font-size: 10.5px; margin-top: 3px; }
+  .gfx-two { display: flex; gap: 10px; }
+  .gfx-two > * { flex: 1; }
+
+  .gfx-terms ul { margin: 4px 0 0; padding-left: 16px; }
+  .gfx-terms li { margin-bottom: 3px; }
+
+  .gfx-sign { margin-top: 16px; }
+  .gfx-sig-img { max-height: 54px; max-width: 100%; display: block; margin: 4px 0; }
+  .gfx-sig-line { border-bottom: 1px solid #111; height: 40px; }
+
+  .gfx-foot { border-top: 1px solid #bbb; margin-top: 14px; padding-top: 7px; font-size: 11px; color: #333; }
+</style>

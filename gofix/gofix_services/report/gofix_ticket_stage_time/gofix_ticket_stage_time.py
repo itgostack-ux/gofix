@@ -12,6 +12,7 @@ timeline is one row. Bottleneck flags the slowest leg per ticket; the
 chart shows average hours per leg across the filtered set."""
 
 import frappe
+from ch_erp15.ch_erp15.report_scope import get_scoped_warehouses_or_none
 from frappe import _
 from frappe.utils import flt, now_datetime, time_diff_in_hours
 
@@ -35,11 +36,16 @@ _ALIAS = {"draft": "Draft", "intake": "Draft"}
 EXTRA_LEGS = [
 	("spare_mr_po", _("MR → PO (h)")),
 	("spare_po_receipt", _("PO → Receipt (h)")),
+	# The part being ON SITE is not the same as it being IN the device. A spare
+	# received on Monday and fitted on Thursday hides three days inside the
+	# Repair stage, which is exactly the delay a bottleneck report should name.
+	("spare_receipt_fitted", _("Receipt → Fitted (h)")),
 	("device_logistics", _("Logistics (h)")),
 ]
 _EXTRA_LABEL = {
 	"spare_mr_po": "Spare MR → PO",
 	"spare_po_receipt": "Spare PO → Receipt",
+	"spare_receipt_fitted": "Spare Receipt → Fitted",
 	"device_logistics": "Device Logistics",
 }
 
@@ -64,6 +70,11 @@ def get_columns():
 	for fieldname, label in EXTRA_LEGS:
 		cols.append({"label": label, "fieldname": fieldname, "fieldtype": "Float", "width": 100, "precision": 1})
 	cols += [
+		# Elapsed stage time counts nights and weekends; this is the hours a
+		# technician actually had the device in hand. The gap between the two is
+		# the queue, and reading them side by side is the point.
+		{"label": _("Tech Hours (h)"), "fieldname": "tech_hours", "fieldtype": "Float", "width": 95, "precision": 1},
+		{"label": _("Spares Req/Recd/Fitted"), "fieldname": "spare_flow", "fieldtype": "Data", "width": 150},
 		{"label": _("Total TAT (h)"), "fieldname": "total_hours", "fieldtype": "Float", "width": 100, "precision": 1},
 		{"label": _("Bottleneck"), "fieldname": "bottleneck", "fieldtype": "Data", "width": 170},
 	]
@@ -93,6 +104,21 @@ def get_data(filters):
 			sr_filters["service_date"] = ("<=", filters.to_date)
 		if filters.get("open_only"):
 			sr_filters["decision"] = ("not in", ["Closed", "Cancelled", "Rejected", "Expired"])
+
+	# Row-level scope. This report reads through frappe.get_all rather than raw
+	# SQL, so the scope is applied by narrowing the filter dict. Fail closed:
+	# an in-scope-but-empty set, or an explicitly requested out-of-scope store,
+	# both yield no rows rather than the unscoped whole.
+	scoped = get_scoped_warehouses_or_none()
+	if scoped is not None:
+		requested = sr_filters.get("source_warehouse")
+		if requested:
+			if requested not in scoped:
+				return []
+		elif scoped:
+			sr_filters["source_warehouse"] = ("in", sorted(scoped))
+		else:
+			return []
 
 	tickets = frappe.get_all(
 		"Service Request",
@@ -127,6 +153,8 @@ def get_data(filters):
 		tech_map.setdefault(row.parent, set()).add(row.technician_name or row.technician)
 
 	procurement = _procurement_times(names)
+	tech_hours = _technician_hours(names)
+	spare_flow = _spare_flow(names)
 
 	stage_fields = {key: frappe.scrub(key) for key, _l in STAGES}
 	out = []
@@ -165,6 +193,8 @@ def get_data(filters):
 			"store": t.source_warehouse,
 			"technicians": ", ".join(sorted(tech_map.get(t.name, []))) or "—",
 			"current_stage": current,
+			"tech_hours": round(flt((tech_hours or {}).get(t.name)), 1),
+			"spare_flow": (spare_flow or {}).get(t.name, "—"),
 			"total_hours": round(total, 1),
 			"bottleneck": f"{bottleneck} ({round(all_legs[bottleneck], 1)}h)" if bottleneck else "",
 		}
@@ -174,6 +204,48 @@ def get_data(filters):
 			rec[field] = round(flt(extras.get(field)), 1)
 		out.append(rec)
 	return out
+
+
+def _technician_hours(names):
+	"""Hands-on hours per ticket — the time a technician actually held the job.
+
+	Custody Log is the truthful source: it records taken_at/released_at per
+	technician, so a device passed between an L1 and an L3 counts both spells.
+	Job Assignment.actual_hours is the fallback for tickets worked before
+	custody logging, so older rows do not silently read zero.
+	"""
+	out = {}
+	for row in frappe.get_all(
+		"GoFix Custody Log",
+		filters={"service_request": ("in", names)},
+		fields=["service_request", "hours"],
+	):
+		out[row.service_request] = out.get(row.service_request, 0.0) + flt(row.hours)
+	for row in frappe.get_all(
+		"Job Assignment",
+		filters={"service_request": ("in", names), "docstatus": ("<", 2)},
+		fields=["service_request", "actual_hours"],
+	):
+		if not out.get(row.service_request):
+			out[row.service_request] = out.get(row.service_request, 0.0) + flt(row.actual_hours)
+	return out
+
+
+def _spare_flow(names):
+	"""requested / received / fitted counts per ticket, as one readable cell."""
+	out = {}
+	for row in frappe.get_all(
+		"SR Spare Line",
+		filters={"parent": ("in", names), "parenttype": "Service Request"},
+		fields=["parent", "status"],
+	):
+		rec = out.setdefault(row.parent, {"req": 0, "recd": 0, "fitted": 0})
+		rec["req"] += 1
+		if row.status in ("Reserved", "Issued", "Consumed", "Sold"):
+			rec["recd"] += 1
+		if row.status in ("Consumed", "Sold"):
+			rec["fitted"] += 1
+	return {k: f"{v['req']} / {v['recd']} / {v['fitted']}" for k, v in out.items()}
 
 
 def _procurement_times(names):
@@ -205,9 +277,25 @@ def _procurement_times(names):
 	po_at = _first_by_mr("Purchase Order", "Purchase Order Item")
 	pr_at = _first_by_mr("Purchase Receipt", "Purchase Receipt Item")
 
+	# When each ticket's spares were actually fitted — the Spare Parts Usage
+	# submission is the moment the part left stock and entered the device.
+	fitted_at = {}
+	for row in frappe.get_all(
+		"Spare Parts Usage",
+		filters={"service_request": ("in", names), "docstatus": 1, "part_status": ("in", ("Consumed", "Issued"))},
+		fields=["service_request", "modified"],
+	):
+		prev = fitted_at.get(row.service_request)
+		# the LAST part fitted is what released the job
+		if not prev or row.modified > prev:
+			fitted_at[row.service_request] = row.modified
+
 	out = {}
 	for m in mrs:
-		rec = out.setdefault(m.service_request, {"spare_mr_po": 0.0, "spare_po_receipt": 0.0})
+		rec = out.setdefault(
+			m.service_request,
+			{"spare_mr_po": 0.0, "spare_po_receipt": 0.0, "spare_receipt_fitted": 0.0},
+		)
 		po = po_at.get(m.name)
 		pr = pr_at.get(m.name)
 		if po:
@@ -215,6 +303,14 @@ def _procurement_times(names):
 			end = pr or (now_datetime() if m.status not in ("Received", "Stopped", "Cancelled") else None)
 			if end:
 				rec["spare_po_receipt"] = max(rec["spare_po_receipt"], flt(time_diff_in_hours(end, po)))
+			if pr:
+				# received: either it has been fitted, or it is sitting on the
+				# bench right now and the wait is still running
+				fitted = fitted_at.get(m.service_request)
+				stop = fitted if fitted and fitted > pr else now_datetime()
+				rec["spare_receipt_fitted"] = max(
+					rec["spare_receipt_fitted"], flt(time_diff_in_hours(stop, pr))
+				)
 		elif m.status not in ("Received", "Stopped", "Cancelled"):
 			# MR raised, purchase hasn't acted yet — still waiting
 			rec["spare_mr_po"] = max(rec["spare_mr_po"], flt(time_diff_in_hours(now_datetime(), m.creation)))

@@ -41,15 +41,12 @@ from gofix.gofix_services.doctype.gofix_token.gofix_token import (
 	STATUS_LEFT,
 	STATUS_WAITING,
 	normalize_phone,
-	resolve_store_code,
-)
+	resolve_store_code)
 
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-
-_DEFAULT_TOKEN_ROLES = {"System Manager", "Service Manager", "Store Manager", "Store Executive"}
 
 
 # ---------------------------------------------------------------------------
@@ -94,8 +91,7 @@ def _resolve_store(identifier: str | None) -> dict | None:
 			LIMIT 1
 			""",
 			(identifier, identifier, identifier, identifier, identifier),
-			as_dict=True,
-		)
+			as_dict=True)
 		if row and row[0].get("warehouse") and _company_is_gofix_enabled(row[0].get("company")):
 			r = row[0]
 			return {
@@ -110,8 +106,7 @@ def _resolve_store(identifier: str | None) -> dict | None:
 		"POS Profile",
 		identifier,
 		("name", "warehouse", "company"),
-		as_dict=True,
-	)
+		as_dict=True)
 	if profile and profile.get("warehouse") and _company_is_gofix_enabled(profile.get("company")):
 		code, name = resolve_store_code(profile["warehouse"])
 		return {
@@ -126,8 +121,7 @@ def _resolve_store(identifier: str | None) -> dict | None:
 		"Warehouse",
 		identifier,
 		("name", "warehouse_name", "company", "is_group", "disabled"),
-		as_dict=True,
-	)
+		as_dict=True)
 	if (
 		wh
 		and not wh.get("is_group")
@@ -173,8 +167,7 @@ def _rate_limit_guest(bucket: str) -> None:
 		frappe.throw(
 			_("Too many requests from this store. Please slow down."),
 			frappe.RateLimitExceededError,
-			title=_("Rate Limit"),
-		)
+			title=_("Rate Limit"))
 
 
 # ---------------------------------------------------------------------------
@@ -199,22 +192,19 @@ def get_tablet_config(store: str) -> dict:
 		filters={"disabled": 0},
 		fields=["device_type", "icon", "display_order"],
 		order_by="display_order asc, device_type asc",
-		limit_page_length=queue_limit,
-	)
+		limit_page_length=queue_limit)
 	visit_reasons = frappe.get_all(
 		"GoFix Visit Reason",
 		filters={"disabled": 0},
 		fields=["reason_name", "is_repair", "display_order"],
 		order_by="display_order asc, reason_name asc",
-		limit_page_length=get_int_setting("token_queue_limit", 200),
-	)
+		limit_page_length=get_int_setting("token_queue_limit", 200))
 	brand_rows = frappe.get_all(
 		"GoFix Brand Option",
 		filters={"disabled": 0},
 		fields=["device_type", "brand_name", "display_order"],
 		order_by="device_type asc, display_order asc, brand_name asc",
-		limit_page_length=get_int_setting("token_queue_limit", 200),
-	)
+		limit_page_length=get_int_setting("token_queue_limit", 200))
 	symptom_rows = frappe.get_all(
 		"GoFix Symptom",
 		filters={"disabled": 0},
@@ -226,8 +216,7 @@ def get_tablet_config(store: str) -> dict:
 			"display_order",
 		],
 		order_by="device_type asc, display_order asc, symptom_name asc",
-		limit_page_length=get_int_setting("token_queue_limit", 200),
-	)
+		limit_page_length=get_int_setting("token_queue_limit", 200))
 
 	brands_by_device: dict[str, list[dict]] = {}
 	for r in brand_rows:
@@ -341,8 +330,7 @@ def create_token(
 	other_device_hint: str | None = None,
 	selected_issues: Any = None,
 	additional_notes: str | None = None,
-	customer_language: str | None = None,
-) -> dict:
+	customer_language: str | None = None) -> dict:
 	"""Create a GoFix Token from the customer tablet.
 
 	Returns ``{token_number, name, queue_position, whatsapp_status}``. All
@@ -369,8 +357,7 @@ def create_token(
 		"GoFix Visit Reason",
 		visit_reason,
 		("name", "is_repair", "disabled"),
-		as_dict=True,
-	)
+		as_dict=True)
 	if not visit_row or visit_row.get("disabled"):
 		frappe.throw(_("Visit reason {0} is not available.").format(visit_reason))
 	is_repair = bool(visit_row.get("is_repair"))
@@ -382,8 +369,7 @@ def create_token(
 		rows = frappe.get_all(
 			"GoFix Symptom",
 			filters={"device_type": device_type, "disabled": 0},
-			fields=["name", "symptom_name", "device_type", "is_expert_check", "is_other"],
-		)
+			fields=["name", "symptom_name", "device_type", "is_expert_check", "is_other"])
 		symptom_lookup = {r["symptom_name"]: r for r in rows}
 
 	issues = _parse_issues(selected_issues, symptom_lookup)
@@ -421,8 +407,7 @@ def create_token(
 	except Exception:
 		frappe.log_error(
 			title="gofix_token: whatsapp enqueue failed",
-			message=frappe.get_traceback(),
-		)
+			message=frappe.get_traceback())
 
 	position = _queue_position(doc.name, resolved["warehouse"], doc.business_date)
 	return {
@@ -452,8 +437,7 @@ def _enqueue_whatsapp_confirmation(token_name: str) -> None:
 		"gofix.gofix_services.whatsapp_notifications.send_token_confirmation",
 		queue="short",
 		token_name=token_name,
-		enqueue_after_commit=True,
-	)
+		enqueue_after_commit=True)
 
 
 # ---------------------------------------------------------------------------
@@ -477,8 +461,7 @@ def _queue_position(token_name: str, warehouse: str, business_date) -> int:
 		WHERE store = %s AND business_date = %s AND status = %s
 		  AND creation < (SELECT creation FROM `tabGoFix Token` WHERE name = %s)
 		""",
-		(warehouse, str(business_date), STATUS_WAITING, token_name),
-	)[0][0]
+		(warehouse, str(business_date), STATUS_WAITING, token_name))[0][0]
 	return int(ahead or 0) + 1
 
 
@@ -499,8 +482,7 @@ def get_queue_position(token_number: str, store: str) -> dict:
 			"business_date": nowdate(),
 		},
 		("name", "status", "business_date", "whatsapp_status"),
-		as_dict=True,
-	)
+		as_dict=True)
 	if not row:
 		frappe.throw(_("Token {0} not found for today.").format(token_number))
 	position = _queue_position(row["name"], resolved["warehouse"], row["business_date"])
@@ -518,7 +500,7 @@ def get_queue_position(token_number: str, store: str) -> dict:
 
 
 def _ensure_fde() -> None:
-	if not has_role_setting("token_transition_roles", _DEFAULT_TOKEN_ROLES):
+	if not has_role_setting("token_transition_roles"):
 		frappe.throw(_("Not permitted"), frappe.PermissionError)
 
 
@@ -564,7 +546,7 @@ def _assert_token_assignee(user: str, doc) -> None:
 	if not row or not row.enabled or row.user_type != "System User":
 		frappe.throw(_("The selected assignee is not an active System User."), frappe.PermissionError)
 	if not is_privileged_user(user) and not has_role_setting(
-		"token_transition_roles", _DEFAULT_TOKEN_ROLES, user=user
+		"token_transition_roles", user=user
 	):
 		frappe.throw(_("The selected user is not configured to operate GoFix tokens."), frappe.PermissionError)
 	assignee_scope = get_user_service_scope(user)
@@ -600,8 +582,7 @@ def get_fde_stores() -> list[dict]:
 			),
 		},
 		pluck="name",
-		limit_page_length=get_int_setting("token_queue_limit", 200),
-	)
+		limit_page_length=get_int_setting("token_queue_limit", 200))
 	if not companies:
 		return []
 
@@ -614,8 +595,7 @@ def get_fde_stores() -> list[dict]:
 			filters={"company": ("in", companies), "disabled": 0},
 			fields=["name", "store_code", "store_name", "warehouse", "company"],
 			order_by="store_name asc, store_code asc",
-			limit_page_length=get_int_setting("token_queue_limit", 200),
-		)
+			limit_page_length=get_int_setting("token_queue_limit", 200))
 		for r in rows:
 			if not r.get("warehouse"):
 				continue
@@ -637,8 +617,7 @@ def get_fde_stores() -> list[dict]:
 			filters={"company": ("in", companies), "is_group": 0, "disabled": 0},
 			fields=["name", "warehouse_name", "company"],
 			order_by="warehouse_name asc",
-			limit_page_length=get_int_setting("token_queue_limit", 200),
-		)
+			limit_page_length=get_int_setting("token_queue_limit", 200))
 		for w in wh_rows:
 			if scope is not None and w["name"] not in scope["warehouses"]:
 				continue
@@ -711,8 +690,7 @@ def list_active_tokens(store: str | None = None, statuses: Any = None) -> list[d
 			"whatsapp_status",
 		],
 		order_by="creation asc",
-		limit_page_length=queue_limit,
-	)
+		limit_page_length=queue_limit)
 
 	issue_map: dict[str, list[str]] = {r["name"]: [] for r in rows}
 	if issue_map:
@@ -721,8 +699,7 @@ def list_active_tokens(store: str | None = None, statuses: Any = None) -> list[d
 			filters={"parent": ("in", list(issue_map))},
 				fields=["parent", "symptom_name"],
 				order_by="parent asc, idx asc",
-				limit_page_length=get_int_setting("token_queue_limit", 200) * get_int_setting("max_selected_issues", 3),
-		):
+				limit_page_length=get_int_setting("token_queue_limit", 200) * get_int_setting("max_selected_issues", 3)):
 			issue_map.setdefault(issue.parent, []).append(issue.symptom_name)
 	now = now_datetime()
 	for r in rows:
@@ -742,8 +719,7 @@ def transition_token(
 	to_status: str,
 	reason: str | None = None,
 	notes: str | None = None,
-	assigned_fde: str | None = None,
-) -> dict:
+	assigned_fde: str | None = None) -> dict:
 	"""Move a token between statuses.
 
 	Delegates all rule checks to :class:`GoFixToken` — this function just
@@ -787,8 +763,7 @@ def link_service_request(name: str, service_request: str) -> dict:
 	sr_locations = {
 		value for value in (
 			sr.get("source_warehouse"), sr.get("current_location"),
-			sr.get("current_processing_location"), sr.get("transferred_to_store"),
-		) if value
+			sr.get("current_processing_location"), sr.get("transferred_to_store")) if value
 	}
 	if doc.store not in sr_locations:
 		frappe.throw(_("Token and Service Request must belong to the same store."), frappe.PermissionError)
@@ -823,8 +798,7 @@ def get_cancellation_reasons(scope: str | None = None) -> list[dict]:
 		filters=filters,
 		fields=["name", "reason_name", "scope", "requires_note", "display_order"],
 		order_by="display_order asc, reason_name asc",
-		limit_page_length=get_int_setting("token_queue_limit", 200),
-	)
+		limit_page_length=get_int_setting("token_queue_limit", 200))
 
 
 # ---------------------------------------------------------------------------
@@ -915,8 +889,7 @@ def get_pos_profiles() -> list[dict]:
 			ch = frappe.db.get_value(
 				"CH Store",
 				{"warehouse": s["warehouse"]},
-				"name",
-			)
+				"name")
 			if ch:
 				name = ch
 		profiles.append(
@@ -953,8 +926,7 @@ def get_dashboard_stats(pos_profile: str | None = None, date_filter: str = "toda
 		"GoFix Token",
 		filters=filters,
 		fields=["status", "creation", "completed_at", "store", "store_name"],
-		limit_page_length=analytics_limit,
-	)
+		limit_page_length=analytics_limit)
 
 	total = len(rows)
 	waiting = sum(1 for r in rows if _STATUS_BUCKET.get(r["status"]) == "waiting")
@@ -982,8 +954,7 @@ def get_dashboard_stats(pos_profile: str | None = None, date_filter: str = "toda
 		label = r.get("store_name") or key
 		bucket = store_breakdown.setdefault(
 			key,
-			{"store": label, "total": 0, "waiting": 0, "in_progress": 0, "completed": 0},
-		)
+			{"store": label, "total": 0, "waiting": 0, "in_progress": 0, "completed": 0})
 		bucket["total"] += 1
 		b = _STATUS_BUCKET.get(r["status"])
 		if b in bucket:
@@ -1077,15 +1048,13 @@ def get_queue(pos_profile: str | None = None, status: str | None = None, date_fi
 			"visit_reason", "assigned_fde", "store", "company",
 		],
 		order_by="creation desc",
-		limit_page_length=queue_limit + 1,
-	)
+		limit_page_length=queue_limit + 1)
 	if len(rows) > queue_limit:
 		frappe.throw(
 			_("The token queue exceeds the configured limit of {0} rows. Narrow the filters.").format(
 				queue_limit
 			),
-			frappe.ValidationError,
-		)
+			frappe.ValidationError)
 
 	tech_users = {r.get("assigned_fde") for r in rows if r.get("assigned_fde")}
 	user_names = {
@@ -1093,8 +1062,7 @@ def get_queue(pos_profile: str | None = None, status: str | None = None, date_fi
 		for row in frappe.get_all(
 			"User",
 			filters={"name": ("in", list(tech_users))},
-			fields=["name", "full_name"],
-		)
+			fields=["name", "full_name"])
 	} if tech_users else {}
 	now = now_datetime()
 	return [_token_row_for_ui(r, now, user_names) for r in rows]
@@ -1107,7 +1075,7 @@ def get_technician_tokens(technician: str | None = None) -> list[dict]:
 	_ensure_fde()
 	user = technician or frappe.session.user
 	if user != frappe.session.user and not has_role_setting(
-		"service_manager_roles", ("Service Manager", "System Manager")
+		"service_manager_roles"
 	):
 		frappe.throw(_("You can only view your own assigned tokens."), frappe.PermissionError)
 	today = frappe.utils.today()
@@ -1126,8 +1094,7 @@ def get_technician_tokens(technician: str | None = None) -> list[dict]:
 			"visit_reason", "assigned_fde", "store", "company",
 		],
 		order_by="creation desc",
-		limit_page_length=get_int_setting("token_queue_limit", 200),
-	)
+		limit_page_length=get_int_setting("token_queue_limit", 200))
 	now = now_datetime()
 	user_names = {user: frappe.db.get_value("User", user, "full_name") or user}
 	return [_token_row_for_ui(r, now, user_names) for r in rows]
@@ -1152,8 +1119,7 @@ def get_store_users(pos_profile: str | None = None, role: str | None = None) -> 
 		store_name = frappe.db.get_value(
 			"CH Store",
 			{"warehouse": resolved["warehouse"], "disabled": 0},
-			"name",
-		)
+			"name")
 		if store_name:
 			# CH Store User retired into CH User Scope (ch_erp15 patch v34).
 			from ch_erp15.ch_erp15.scope import get_store_users
@@ -1175,8 +1141,7 @@ def get_store_users(pos_profile: str | None = None, role: str | None = None) -> 
 					"User",
 					filters={"name": ("in", tuple(missing_names))},
 					fields=["name", "full_name"],
-					limit_page_length=len(missing_names),
-				)
+					limit_page_length=len(missing_names))
 			} if missing_names else {}
 			for row in rows:
 				if not row.full_name:
@@ -1239,8 +1204,7 @@ def cancel_token(
 	token_name: str,
 	drop_reason: str | None = None,
 	drop_sub_reason: str | None = None,
-	drop_remarks: str | None = None,
-) -> dict:
+	drop_remarks: str | None = None) -> dict:
 	"""Manager-dashboard "Cancel". Uses ``drop_reason`` if supplied else
 	first available Cancelled-scope reason (kept for API parity with the
 	ch_pos endpoint which passes optional drop metadata).
@@ -1254,8 +1218,7 @@ def cancel_token(
 			"GoFix Cancellation Reason",
 			{"scope": ["in", ["Cancelled", "Both"]], "disabled": 0},
 			"name",
-			order_by="display_order asc",
-		)
+			order_by="display_order asc")
 		reason = fallback
 	if not reason:
 		frappe.throw(_("No GoFix Cancellation Reason configured."))
@@ -1272,8 +1235,7 @@ def drop_token(
 	token_name: str,
 	drop_reason: str | None = None,
 	drop_sub_reason: str | None = None,
-	drop_remarks: str | None = None,
-) -> dict:
+	drop_remarks: str | None = None) -> dict:
 	"""Manager-dashboard "Drop" — customer walked away without service."""
 
 	_ensure_fde()
@@ -1284,8 +1246,7 @@ def drop_token(
 			"GoFix Cancellation Reason",
 			{"scope": ["in", ["Customer Left", "Both"]], "disabled": 0},
 			"name",
-			order_by="display_order asc",
-		)
+			order_by="display_order asc")
 		reason = fallback
 	if not reason:
 		frappe.throw(_("No GoFix Cancellation Reason configured."))
@@ -1313,8 +1274,7 @@ def get_reports(pos_profile: str | None = None, days: int = 7) -> dict:
 		"GoFix Token",
 		filters=filters,
 		fields=["name", "status", "creation", "completed_at", "assigned_fde"],
-		limit_page_length=analytics_limit + 1,
-	)
+		limit_page_length=analytics_limit + 1)
 	is_truncated = len(raw_rows) > analytics_limit
 	rows = raw_rows[:analytics_limit]
 
@@ -1323,8 +1283,7 @@ def get_reports(pos_profile: str | None = None, days: int = 7) -> dict:
 		day = str(get_datetime(r["creation"]).date())
 		bucket = daily_map.setdefault(
 			day,
-			{"date": day, "created": 0, "completed": 0, "cancelled": 0, "wait_sum": 0, "wait_count": 0},
-		)
+			{"date": day, "created": 0, "completed": 0, "cancelled": 0, "wait_sum": 0, "wait_count": 0})
 		bucket["created"] += 1
 		mgmt = _STATUS_BUCKET.get(r["status"])
 		if mgmt == "completed":
@@ -1355,8 +1314,7 @@ def get_reports(pos_profile: str | None = None, days: int = 7) -> dict:
 		for row in frappe.get_all(
 			"User",
 			filters={"name": ("in", list(tech_users))},
-			fields=["name", "full_name"],
-		)
+			fields=["name", "full_name"])
 	} if tech_users else {}
 	tech_map: dict[str, dict] = {}
 	for r in rows:
@@ -1369,8 +1327,7 @@ def get_reports(pos_profile: str | None = None, days: int = 7) -> dict:
 				"technician": tech,
 					"name": user_names.get(tech) or tech,
 				"total": 0, "completed": 0, "time_sum": 0, "time_count": 0,
-			},
-		)
+			})
 		bucket["total"] += 1
 		if _STATUS_BUCKET.get(r["status"]) == "completed":
 			bucket["completed"] += 1

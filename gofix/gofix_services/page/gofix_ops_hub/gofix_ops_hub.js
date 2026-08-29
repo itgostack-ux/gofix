@@ -27,8 +27,8 @@ frappe.pages["gofix-ops-hub"].on_page_load = function (wrapper) {
 /* ═══════════════════════════════════════════════════════════════════════════ */
 const STAGES = [
 	{ key: "analysis",  label: "Analysis",  icon: "fa-search",         color: "#3b82f6" },
-	{ key: "confirm",   label: "Confirm",   icon: "fa-check-circle",   color: "#8b5cf6" },
 	{ key: "solutions", label: "Solutions",  icon: "fa-bolt",          color: "#f59e0b" },
+	{ key: "confirm",   label: "Confirm",   icon: "fa-check-circle",   color: "#8b5cf6" },
 	{ key: "assign",    label: "Assign",     icon: "fa-user-plus",     color: "#10b981" },
 	{ key: "repair",    label: "Repair",     icon: "fa-wrench",        color: "#ef4444" },
 	{ key: "qc",        label: "QC",         icon: "fa-check-square-o", color: "#6366f1" },
@@ -37,8 +37,8 @@ const STAGES = [
 
 const STAGE_BADGE = {
 	analysis:  { label: "Analysis",  cls: "badge-blue" },
-	confirm:   { label: "Confirm",   cls: "badge-purple" },
 	solutions: { label: "Solutions", cls: "badge-yellow" },
+	confirm:   { label: "Confirm",   cls: "badge-purple" },
 	assign:    { label: "Assign",    cls: "badge-green" },
 	repair:    { label: "Repair",    cls: "badge-red" },
 	qc:        { label: "QC",        cls: "badge-indigo" },
@@ -152,6 +152,19 @@ class GoFixOpsHub {
 				const short = w.split(" - ")[0];
 				wh_options.push(`<option value="${esc(w)}">${esc(short)}</option>`);
 			});
+		}
+
+		// A blank hub and a broken hub look identical. When the server says the
+		// user can see nothing, say so where they are looking.
+		const access = this.ctx.access;
+		if (access && access.ok === false) {
+			this.page.set_indicator(__("No store access"), "orange");
+			this.parent.prepend(`
+				<div class="goh-access-note">
+					<div class="goh-access-title">${esc(access.title || __("Nothing to show"))}</div>
+					<div class="goh-access-detail">${esc(access.detail || "")}</div>
+				</div>
+			`);
 		}
 
 		this.page.set_secondary_action(__("Refresh"), () => this._refresh_all(), "refresh");
@@ -647,37 +660,150 @@ class GoFixOpsHub {
 	/* ═══════════════════════════════════════════════════════════════════════ */
 	_html_timeline_tab(d) {
 		const esc = frappe.utils.escape_html;
-		const log = d.status_log || [];
+		const log = (d.status_log || []).filter(e => e.to_status);
 
 		if (!log.length) {
 			return `<div class="goh-section"><p class="text-muted">${__("No status changes recorded yet")}</p></div>`;
 		}
 
-		const items = log.slice().reverse().map(entry => {
-			const dt = entry.changed_at ? frappe.datetime.str_to_user(entry.changed_at) : "";
-			const dur = entry.hours_in_prev ? `<span class="text-muted small">(${entry.hours_in_prev}h in ${esc(entry.from_status)})</span>` : "";
+		const fmtHours = (h) => {
+			const v = parseFloat(h) || 0;
+			if (!v) return "—";
+			if (v < 1) return `${Math.round(v * 60)}m`;
+			if (v < 24) return `${v.toFixed(1)}h`;
+			return `${(v / 24).toFixed(1)}d`;
+		};
+
+		/* ── Two tracks, never one ─────────────────────────────────────
+		   A ticket has a document lifecycle (Draft -> Accepted -> Completed)
+		   and a shop-floor stage (Analysis -> Repair -> QC). They run in
+		   parallel over the same hours, so summing them together counted
+		   every hour twice. Each track is totalled on its own, the way SAP
+		   keeps system status and user status apart. */
+		const tracks = {};
+		log.forEach(e => {
+			const t = e.track || __("Lifecycle");
+			(tracks[t] = tracks[t] || []).push(e);
+		});
+
+		const trackPanel = (name, entries) => {
+			const perStage = {};
+			let total = 0;
+			entries.forEach(e => {
+				const h = parseFloat(e.hours_in_prev) || 0;
+				const stage = e.from_status || __("Intake");
+				if (!perStage[stage]) perStage[stage] = { hours: 0, visits: 0 };
+				perStage[stage].hours += h;
+				perStage[stage].visits += 1;
+				total += h;
+			});
+			const rows = Object.entries(perStage)
+				.sort((a, b) => b[1].hours - a[1].hours)
+				.map(([stage, v]) => {
+					const share = total ? (v.hours / total) * 100 : 0;
+					return `
+						<tr>
+							<td>${esc(stage)}</td>
+							<td class="text-right goh-num">${fmtHours(v.hours)}</td>
+							<td class="text-right goh-num">${v.visits > 1 ? v.visits + "&times;" : "1&times;"}</td>
+							<td style="width:34%">
+								<div class="goh-bar"><span style="width:${share.toFixed(1)}%"></span></div>
+							</td>
+							<td class="text-right goh-num">${share.toFixed(0)}%</td>
+						</tr>`;
+				}).join("");
+
+			const last = entries[entries.length - 1];
 			return `
-				<div class="goh-tl-item">
-					<div class="goh-tl-dot"></div>
-					<div class="goh-tl-content">
-						<div class="goh-tl-header">
-							<span class="goh-badge badge-muted">${esc(entry.from_status)}</span>
-							<i class="fa fa-arrow-right text-muted mx-1"></i>
-							<span class="goh-badge badge-blue">${esc(entry.to_status)}</span>
-							${dur}
-						</div>
-						<div class="goh-tl-meta text-muted small">
-							${esc(entry.changed_by_name || entry.changed_by || "")} &middot; ${dt}
-						</div>
+				<div class="goh-section">
+					<div class="goh-section-title">
+						<i class="fa fa-hourglass-half"></i>
+						${__("Where the time went")} — <span class="goh-track-name">${esc(name)}</span>
 					</div>
-				</div>
-			`;
+					<div class="goh-tl-stats">
+						<div><span class="k">${__("Transitions")}</span><span class="v">${entries.length}</span></div>
+						<div><span class="k">${__("Stages touched")}</span><span class="v">${Object.keys(perStage).length}</span></div>
+						<div><span class="k">${__("Elapsed to last move")}</span><span class="v">${fmtHours(total)}</span></div>
+						<div><span class="k">${__("Currently in")}</span><span class="v">${esc(last.to_status || "—")}</span></div>
+					</div>
+					<div class="goh-tl-scroll">
+						<table class="goh-tl-table">
+							<thead>
+								<tr>
+									<th>${__("Stage")}</th>
+									<th class="text-right">${__("Time in stage")}</th>
+									<th class="text-right">${__("Visits")}</th>
+									<th>${__("Share of total")}</th>
+									<th class="text-right">%</th>
+								</tr>
+							</thead>
+							<tbody>${rows}</tbody>
+						</table>
+					</div>
+					<p class="text-muted" style="font-size:11px;margin:6px 2px 0">
+						${__("Measured from intake. Hours are charged to the stage being left, which is where they were spent.")}
+					</p>
+				</div>`;
+		};
+
+		/* Shop floor first — it is the track anybody working the hub is
+		   actually asking about. */
+		const order = [__("Operations"), __("Lifecycle")];
+		const panels = Object.keys(tracks)
+			.sort((a, b) => order.indexOf(a) - order.indexOf(b))
+			.map(name => trackPanel(name, tracks[name]))
+			.join("");
+
+		/* ── One chronological log, in the order things happened ──────── */
+		const seenStage = {};
+		const rows = log.map((e, i) => {
+			const when = e.changed_at ? frappe.datetime.str_to_user(e.changed_at) : "—";
+			const to = e.to_status || "—";
+			const key = `${e.track}|${to}`;
+			seenStage[key] = (seenStage[key] || 0) + 1;
+			const repeat = seenStage[key] > 1
+				? ` <span class="goh-repeat" title="${__("Ticket returned to this stage")}">${__("revisit")} ${seenStage[key]}</span>`
+				: "";
+			const isOps = (e.track || "") === "Operations";
+			const inferred = e.inferred
+				? ` <span class="goh-inferred" title="${__("No move was logged for this step. It is reconstructed from the stage the ticket had actually reached, so the waiting time is charged where it was spent.")}">${__("reconstructed")}</span>`
+				: "";
+			return `
+				<tr>
+					<td class="goh-num text-muted">${i + 1}</td>
+					<td><span class="goh-track goh-track-${isOps ? "ops" : "life"}">${esc(e.track || "—")}</span></td>
+					<td class="text-muted">${esc(e.from_status || __("Intake"))}</td>
+					<td><b>${esc(to)}</b>${repeat}${inferred}</td>
+					<td class="text-right goh-num">${fmtHours(e.hours_in_prev)}</td>
+					<td>${esc(e.changed_by_name || e.changed_by || "—")}</td>
+					<td class="text-muted">${when}</td>
+				</tr>`;
 		}).join("");
 
 		return `
+			${panels}
+
 			<div class="goh-section">
 				<div class="goh-section-title"><i class="fa fa-clock-o"></i> ${__("Status Timeline")}</div>
-				<div class="goh-timeline">${items}</div>
+				<p class="text-muted" style="font-size:11px;margin:0 2px 8px">
+					${__("Both tracks, in the order they happened. The two run in parallel over the same hours — read each one down its own column, not across.")}
+				</p>
+				<div class="goh-tl-scroll">
+					<table class="goh-tl-table">
+						<thead>
+							<tr>
+								<th style="width:2.5rem">#</th>
+								<th>${__("Track")}</th>
+								<th>${__("From")}</th>
+								<th>${__("To")}</th>
+								<th class="text-right">${__("Time in previous")}</th>
+								<th>${__("By")}</th>
+								<th>${__("When")}</th>
+							</tr>
+						</thead>
+						<tbody>${rows}</tbody>
+					</table>
+				</div>
 			</div>
 		`;
 	}
@@ -717,7 +843,7 @@ class GoFixOpsHub {
 
 		const issueRows = activeIssues.map((row, i) => `
 			<tr data-name="${esc(row.name)}" data-idx="${i}">
-				<td><input class="form-control input-xs goh-issue-cat" value="${esc(row.issue_category)}" list="goh-cat-list" placeholder="${__("Issue Category")}"></td>
+				<td><select class="form-control input-xs goh-issue-cat" data-selected="${esc(row.issue_category)}"><option value="">${__("Issue Category")}</option></select></td>
 				<td>
 					<select class="form-control input-xs goh-issue-reporter">
 						<option value="Technician" ${row.reported_by === "Technician" ? "selected" : ""}>${__("Technician")}</option>
@@ -752,7 +878,6 @@ class GoFixOpsHub {
 		` : "";
 
 		return `
-			<datalist id="goh-cat-list"></datalist>
 			<div class="goh-section">
 				<div class="goh-section-title">
 					<i class="fa fa-search"></i> ${__("Technical Analysis")}
@@ -810,11 +935,16 @@ class GoFixOpsHub {
 					${issueList || `<p class="text-muted">${__("No issues logged")}</p>`}
 				</div>
 
+				<div id="goh-est-breakdown" class="goh-est-breakdown">
+					<span class="text-muted">${__("Pricing the chosen repairs…")}</span>
+				</div>
+
 				<div class="goh-confirm-cost" style="display:flex;align-items:center;gap:10px">
 					<span class="goh-kv-label">${__("Estimated Cost")}</span>
 					<span style="font-size:18px;font-weight:600">₹</span>
 					<input type="number" class="form-control" id="goh-est-cost" value="${flt(d.estimated_cost)}" min="0" step="100" style="max-width:180px;font-size:18px;font-weight:700">
 					<button class="btn btn-xs btn-default" id="goh-save-est-cost" style="white-space:nowrap"><i class="fa fa-save"></i> ${__("Save")}</button>
+					<button class="btn btn-xs btn-primary" id="goh-use-calc" style="white-space:nowrap;display:none"><i class="fa fa-calculator"></i> ${__("Use calculated")}</button>
 				</div>
 
 				${sentAt ? `<div class="goh-sent-indicator"><i class="fa fa-whatsapp text-success"></i> ${__("WhatsApp sent")} ${sentAt}</div>` : ""}
@@ -870,7 +1000,13 @@ class GoFixOpsHub {
 	/* ═══════════════════════════════════════════════════════════════════════ */
 	_html_assign(d) {
 		const esc = frappe.utils.escape_html;
-		const sols = (d.solution_lines || []).filter(s => s.status !== "Cancelled");
+		// Match the server's definition of assignable: a Skipped row is not
+		// active work, and offering it pre-checked only sets the operator up
+		// for "Invalid Solution Selection" on submit. Skipped rows are listed
+		// separately below with a pointer to Restart on the Repair step.
+		const all = (d.solution_lines || []).filter(s => s.status !== "Cancelled");
+		const skipped = all.filter(s => s.status === "Skipped");
+		const sols = all.filter(s => s.status !== "Skipped");
 		const assigned = sols.filter(s => s.technician);
 		const unassigned = sols.filter(s => !s.technician);
 		const allDone = sols.length > 0 && unassigned.length === 0;
@@ -925,6 +1061,13 @@ class GoFixOpsHub {
 			</div>
 		`).join("");
 
+		const skippedHtml = skipped.length ? `
+			<div class="text-muted" style="font-size:12px;margin:6px 0 0 4px">
+				<i class="fa fa-forward"></i> ${__("Skipped (not assignable)")}:
+				${skipped.map(s => esc(s.repair_solution)).join(", ")}
+				— ${__("use Restart on the Repair step to bring one back")}
+			</div>` : "";
+
 		const progressPct = sols.length ? Math.round((assigned.length / sols.length) * 100) : 0;
 
 		return `
@@ -958,6 +1101,7 @@ class GoFixOpsHub {
 							<span style="font-weight:400;font-size:11px;color:var(--text-muted);margin-left:8px">${__("Select solutions & assign a technician")}</span>
 						</div>
 						${unassignedHtml}
+				${skippedHtml}
 						<div style="display:flex;gap:10px;align-items:flex-end;margin-top:12px;padding-top:10px;border-top:1px solid var(--border-color)">
 							<div style="flex:2">
 								<label class="goh-field-label" style="font-size:11px">${__("Technician")}</label>
@@ -985,6 +1129,39 @@ class GoFixOpsHub {
 	/* ═══════════════════════════════════════════════════════════════════════ */
 	/*  STEP 5 — Repair Execution                                            */
 	/* ═══════════════════════════════════════════════════════════════════════ */
+	/* ── Device transfer control ─────────────────────────────────────────
+	   Shown wherever the device is being worked. A repair that turns out to be
+	   beyond this bench should not have to go back to the counter to be moved,
+	   and a device that has been sent away has to be able to come home. The two
+	   directions are deliberately different actions: sending needs a
+	   destination and a reason, returning has neither — it goes back to the
+	   store that sent it. */
+	_transfer_button(d) {
+		const away = d.transfer_status && d.transfer_status !== "Returned";
+		if (away) {
+			const at = d.transferred_to_store ? String(d.transferred_to_store).split(" - ")[0] : "";
+			return `
+				<span class="goh-badge badge-orange" title="${__("Device is away from its origin store")}">
+					<i class="fa fa-truck"></i> ${frappe.utils.escape_html(d.transfer_status)}${at ? " · " + frappe.utils.escape_html(at) : ""}
+				</span>
+				${d.transfer_status === "Received at Service Center" ? `
+					<button class="btn btn-xs btn-default" id="goh-return-store"
+						title="${__("Send the device back to the store that raised the ticket")}">
+						<i class="fa fa-undo"></i> ${__("Return to Store")}
+					</button>` : ""}
+				${d.transfer_status === "In Transit" ? `
+					<button class="btn btn-xs btn-default" id="goh-cancel-transfer"
+						title="${__("Call the dispatch back — only while the device has not been picked up")}">
+						<i class="fa fa-times"></i> ${__("Cancel Dispatch")}
+					</button>` : ""}`;
+		}
+		return `
+			<button class="btn btn-xs btn-default" id="goh-send-hub"
+				title="${__("This bench cannot finish the repair — send the device to another location")}">
+				<i class="fa fa-truck"></i> ${__("Transfer for Repair")}
+			</button>`;
+	}
+
 	_html_repair(d) {
 		const esc = frappe.utils.escape_html;
 		const sols = d.solution_lines || [];
@@ -1097,18 +1274,18 @@ class GoFixOpsHub {
 		// Spare parts — separate active and damaged
 		const activeSpares = (d.spare_lines || []).filter(sp => sp.status !== "Damaged");
 		const damagedSpares = (d.spare_lines || []).filter(sp => sp.status === "Damaged");
-		const awaitingCount = (d.spare_lines || []).filter(sp => sp.status === "Awaiting Procurement").length;
+		const awaitingCount = (d.spare_lines || []).filter(sp => ["Awaiting Procurement", "In Transit"].includes(sp.status)).length;
 
 		const spare_badge = (st) => {
 			const map = {
 				"Reserved": "badge-blue", "Consumed": "badge-green", "Issued": "badge-blue",
-				"Awaiting Procurement": "badge-orange", "Pending": "badge-muted", "Returned": "badge-grey",
+				"Awaiting Procurement": "badge-orange", "In Transit": "badge-blue", "Pending": "badge-muted", "Returned": "badge-grey",
 			};
 			return `<span class="goh-badge ${map[st] || "badge-muted"}">${__(st)}</span>`;
 		};
 
 		const spareRows = activeSpares.map(sp => {
-			const removable = ["Reserved", "Awaiting Procurement", "Pending"].includes(sp.status);
+			const removable = ["Reserved", "Awaiting Procurement", "In Transit", "Pending"].includes(sp.status);
 			const actionBtn = removable
 				? `<button class="btn btn-xs btn-outline-secondary goh-spare-remove" data-row="${esc(sp.name)}" title="${__("Remove")}"><i class="fa fa-times"></i></button>`
 				: `<button class="btn btn-xs btn-outline-danger goh-spare-damage" data-row="${esc(sp.name)}" title="${__("Mark Damaged")}"><i class="fa fa-exclamation-triangle"></i></button>`;
@@ -1120,9 +1297,21 @@ class GoFixOpsHub {
 					data-installed="${esc(sp.installed_part_serial || "")}" data-condition="${esc(sp.removed_part_condition || "")}"
 					title="${arrived ? __("Install part — record old + new serials") : __("Part serial details (required before close)")}"><i class="fa fa-pencil"></i></button>`
 				: "";
+			// A part that has not landed is the usual reason a ticket stalls, so
+			// say where it is and when it is due rather than just "awaiting".
+			const waiting = ["Awaiting Procurement", "In Transit"].includes(sp.status);
+			const eta = sp.expected_date ? frappe.datetime.str_to_user(sp.expected_date) : "";
+            const overdue = sp.expected_date && sp.expected_date < frappe.datetime.get_today();
+			const etaPill = waiting
+				? ` <span class="indicator-pill ${overdue ? "red" : "blue"}" style="font-size:10px">${
+					sp.status === "In Transit"
+						? (eta ? __("in transit — due {0}", [eta]) : __("in transit"))
+						: (eta ? __("not ordered yet — needed by {0}", [eta]) : __("not ordered yet"))
+				}${overdue ? " · " + __("overdue") : ""}</span>`
+				: "";
 			const pill = arrived
 				? ` <span class="indicator-pill blue" style="font-size:10px">${__("arrived — install & record new serial")}</span>`
-				: (needsGenealogy ? ` <span class="indicator-pill orange" style="font-size:10px">${__("serial details missing")}</span>` : "");
+				: (needsGenealogy ? ` <span class="indicator-pill orange" style="font-size:10px">${__("serial details missing")}</span>` : etaPill);
 			return `
 			<tr data-spare-row="${esc(sp.name)}">
 				<td>${esc(sp.item_name || sp.spare_item)}${pill}</td>
@@ -1146,15 +1335,38 @@ class GoFixOpsHub {
 
 		// Technician info — the current device holder glows; others queue
 		const activeAssigns = (d.assignments || []).filter(a => a.assignment_status !== "Cancelled");
+
+		// Hands-on hours per technician, from the custody log — the spells when
+		// they actually had the device, not the elapsed age of the ticket. A
+		// still-open spell counts up to now so a job in hand shows live time.
+		const heldHours = {};
+		(d.custody_log || []).forEach(c => {
+			const who = c.technician || c.technician_name;
+			if (!who) return;
+			// an open spell has no stored hours yet — count it up to now
+			const hrs = c.released_at
+				? flt(c.hours)
+				: (c.taken_at ? Math.max(0, moment().diff(moment(c.taken_at), "minutes") / 60) : 0);
+			heldHours[who] = (heldHours[who] || 0) + hrs;
+		});
+
 		const techInfo = activeAssigns.map(a => {
 			const holds = a.assignment_status === "In Progress";
+			const hrs = heldHours[a.service_engineer] || flt(a.actual_hours);
+			const hoursBadge = hrs
+				? ` <span class="goh-badge badge-muted" title="${__("Hands-on time recorded against this technician")}">${hrs.toFixed(1)}h</span>`
+				: "";
 			return `
 			<span class="goh-assign-chip-sm" style="${holds ? "background:var(--green-100,#dcfce7);border:1.5px solid var(--green-600,#16a34a);font-weight:600" : ""}">
 				<i class="fa ${holds ? "fa-mobile" : "fa-user"}" ${holds ? 'style="color:var(--green-600,#16a34a)"' : ""}></i>
 				${esc(a.engineer_display)}
 				${holds ? `<span class="goh-badge badge-green">${__("has device")}</span>` : `<span class="goh-badge badge-muted">${esc(a.assignment_status)}</span>`}
+				${hoursBadge}
 			</span>`;
 		}).join("");
+
+		const totalHeld = Object.values(heldHours).reduce((a, b) => a + b, 0)
+			|| activeAssigns.reduce((sum, a) => sum + flt(a.actual_hours), 0);
 
 		const custodyRows = (d.custody_log || []).slice(0, 6).map(c => `
 			<div class="small" style="padding:1px 0">
@@ -1168,8 +1380,10 @@ class GoFixOpsHub {
 			<div class="goh-section">
 				<div class="goh-section-title" style="display:flex;align-items:center;gap:8px">
 					<span><i class="fa fa-users"></i> ${__("Technicians")}</span>
+					${totalHeld ? `<span class="goh-badge badge-blue" title="${__("Total hands-on time across every technician who held this device")}"><i class="fa fa-clock-o"></i> ${totalHeld.toFixed(1)}h ${__("hands-on")}</span>` : ""}
 					<span style="flex:1"></span>
 					${activeAssigns.length ? `<button class="btn btn-xs btn-default" id="goh-device-handover" title="${__("Move the physical device to another technician on this ticket (⇄ on a card moves the solution instead)")}"><i class="fa fa-mobile"></i> ${__("Hand Over Device")}</button>` : ""}
+					${this._transfer_button(d)}
 				</div>
 				<div class="goh-tech-chips">${techInfo || `<span class="text-muted">${__("None assigned")}</span>`}</div>
 				${custodyRows ? `
@@ -1253,7 +1467,7 @@ class GoFixOpsHub {
 						<option value="">${__("—")}</option>
 						<option value="Pass" ${row.result === "Pass" ? "selected" : ""}>${__("Pass")}</option>
 						<option value="Fail" ${row.result === "Fail" ? "selected" : ""}>${__("Fail")}</option>
-						<option value="N/A" ${row.result === "N/A" ? "selected" : ""}>${__("N/A")}</option>
+						<option value="NA" ${row.result === "NA" ? "selected" : ""}>${__("N/A")}</option>
 					</select>
 				</td>
 				<td><input class="form-control input-xs goh-qc-remarks" data-name="${esc(row.name)}" data-check="${esc(row.check_name)}" value="${esc(row.remarks || "")}" placeholder="${__("Remarks")}"></td>
@@ -1278,8 +1492,8 @@ class GoFixOpsHub {
 			</div>
 
 			<div class="goh-section">
-				<div class="goh-section-title">
-					<i class="fa fa-check-square-o"></i> ${__("QC Checklist")}
+				<div class="goh-section-title" style="display:flex;align-items:center;gap:8px">
+					<span><i class="fa fa-check-square-o"></i> ${__("QC Checklist")}</span>
 					<span class="goh-badge ${qc_status === "Pass" ? "badge-green" : qc_status === "Fail" ? "badge-red" : "badge-indigo"}">${esc(qc_status)}</span>
 				</div>
 
@@ -1450,6 +1664,20 @@ class GoFixOpsHub {
 
 		/* ── Draft: accept & create the Service Order from the hub ───── */
 		if (activeStage === "draft") {
+			content.find("#goh-open-job").on("click", (e) => {
+				const btn = $(e.currentTarget);
+				btn.prop("disabled", true).html(`<i class="fa fa-spinner fa-spin"></i> ${__("Opening…")}`);
+				frappe.xcall(`${API}.open_walkin_job`, { sr_name: d.name })
+					.then(() => {
+						frappe.show_alert({ message: __("Job opened — ticket is in Analysis."), indicator: "green" });
+						self._refresh_all();
+					})
+					.catch((err) => {
+						frappe.msgprint({ title: __("Could not open the job"), message: err.message || String(err), indicator: "red" });
+						btn.prop("disabled", false).html(`<i class="fa fa-inbox"></i> ${__("Take In — start Analysis")}`);
+					});
+			});
+
 			content.find("#goh-accept-create-so").on("click", (e) => {
 				const btn = $(e.currentTarget);
 				btn.prop("disabled", true).html(`<i class="fa fa-spinner fa-spin"></i> ${__("Accepting…")}`);
@@ -1471,9 +1699,13 @@ class GoFixOpsHub {
 		/* ── Analysis ────────────────────────────────────────────────── */
 		if (activeStage === "analysis") {
 			// Load categories
+			// A native <datalist> popup is drawn by the browser, not the page, so
+			// it ignores the desk theme entirely and renders dark on a light page.
+			// A <select> is browser-themed consistently, and Issue Category is a
+			// closed list anyway — free text only invited typos.
 			frappe.xcall(`${API}.get_issue_categories`).then(cats => {
-				const opts = (cats || []).map(c => `<option value="${frappe.utils.escape_html(c)}">`).join("");
-				this.parent.find("#goh-cat-list").html(opts);
+				self._issue_categories = cats || [];
+				self._fill_issue_category_selects();
 			});
 
 			content.find("#goh-add-issue").on("click", () => {
@@ -1482,13 +1714,15 @@ class GoFixOpsHub {
 				const idx = tbody.find("tr").length;
 				tbody.append(`
 					<tr data-idx="${idx}">
-						<td><input class="form-control input-xs goh-issue-cat" list="goh-cat-list" placeholder="${__("Issue Category")}"></td>
+						<td><select class="form-control input-xs goh-issue-cat"><option value="">${__("Issue Category")}</option></select></td>
 						<td><select class="form-control input-xs goh-issue-reporter"><option value="Technician">${__("Technician")}</option><option value="Customer">${__("Customer")}</option></select></td>
 						<td><input class="form-control input-xs goh-issue-desc" placeholder="${__("Description")}"></td>
 						<td></td>
 						<td><button class="btn btn-xs btn-danger goh-issue-remove"><i class="fa fa-trash"></i></button></td>
 					</tr>
 				`);
+				self._fill_issue_category_selects();
+				tbody.find("tr:last .goh-issue-cat").focus();
 			});
 
 			content.on("click", ".goh-issue-remove", function () {
@@ -1532,6 +1766,40 @@ class GoFixOpsHub {
 
 		/* ── Confirm ─────────────────────────────────────────────────── */
 		if (activeStage === "confirm") {
+			// Price the ticket from the chosen repairs rather than leaving the
+			// operator to guess. The typed field stays authoritative so a
+			// negotiated price can still override the rate card.
+			frappe.xcall(`${API}.get_estimate_breakdown`, { sr_name: d.name }).then(est => {
+				const box = content.find("#goh-est-breakdown");
+				if (!box.length) return;
+				if (!est.priced) {
+					box.html(`<span class="text-muted"><i class="fa fa-info-circle"></i> ${frappe.utils.escape_html(est.reason || "")}</span>`);
+					return;
+				}
+				const rows = (est.lines || []).map(l => `
+					<tr>
+						<td>${frappe.utils.escape_html(l.repair_solution || "")}</td>
+						<td class="text-right">₹${format_number(l.labor || 0)}</td>
+						<td class="text-right">${l.spare_item ? `₹${format_number(l.spare || 0)}` : "—"}</td>
+						<td class="text-muted small">${l.spare_item ? frappe.utils.escape_html(`${l.spare_item} · ${l.spare_grade || ""}`) : ""}</td>
+					</tr>`).join("");
+				box.html(`
+					<table class="goh-est-table">
+						<thead><tr><th>${__("Repair")}</th><th class="text-right">${__("Labour")}</th><th class="text-right">${__("Part")}</th><th></th></tr></thead>
+						<tbody>${rows}</tbody>
+						<tfoot><tr>
+							<th>${__("Calculated total")}</th>
+							<th class="text-right">₹${format_number(est.labour)}</th>
+							<th class="text-right">₹${format_number(est.parts)}</th>
+							<th class="text-right">₹${format_number(est.total)}</th>
+						</tr></tfoot>
+					</table>`);
+				const input = content.find("#goh-est-cost");
+				if (!flt(input.val())) input.val(est.total);
+				else if (flt(input.val()) !== flt(est.total)) content.find("#goh-use-calc").show();
+				content.find("#goh-use-calc").off("click").on("click", () => input.val(est.total).trigger("change"));
+			});
+
 			content.find("#goh-send-wa").on("click", () => {
 				frappe.xcall(`${API}.send_confirmation_whatsapp`, { sr_name: d.name })
 					.then(r => {
@@ -1540,9 +1808,23 @@ class GoFixOpsHub {
 					});
 			});
 
-			content.find("#goh-mark-confirmed").on("click", () => {
+			content.find("#goh-mark-confirmed").on("click", (e) => {
+				const btn = $(e.currentTarget);
+				btn.prop("disabled", true);
 				frappe.xcall(`${API}.mark_customer_confirmed`, { sr_name: d.name })
-					.then(() => { frappe.show_alert({ message: __("Customer confirmed."), indicator: "green" }); self._refresh_all(); });
+					.then((r) => {
+						frappe.show_alert({
+							message: r && r.service_order
+								? __("Customer confirmed — Service Order {0} raised.", [r.service_order])
+								: __("Customer confirmed."),
+							indicator: "green",
+						});
+						self._refresh_all();
+					})
+					.catch((err) => {
+						frappe.msgprint({ title: __("Could not confirm"), message: err.message || String(err), indicator: "red" });
+						btn.prop("disabled", false);
+					});
 			});
 
 			content.find("#goh-back-to-analysis").on("click", () => {
@@ -1852,6 +2134,107 @@ class GoFixOpsHub {
 				);
 			});
 
+			// Send the device somewhere that can finish the repair. Destinations
+			// come from the location hierarchy, not the warehouse tree, so a
+			// Damaged bin is never a place to send a customer's phone.
+			content.find("#goh-send-hub").on("click", () => {
+				frappe.xcall("gofix.gofix_services.api.get_repair_destinations", { service_request: d.name })
+					.then((dests) => {
+						if (!(dests || []).length) {
+							frappe.msgprint({
+								title: __("Nowhere to send it"),
+								message: __("No other service-enabled store is available in this company."),
+								indicator: "orange",
+							});
+							return;
+						}
+						const opts = dests.map((x) =>
+							`${x.label}${x.is_hub ? " — " + __("Hub") : ""}${x.city ? " · " + x.city : ""}`);
+						const dlg = new frappe.ui.Dialog({
+							title: __("Transfer {0} for repair", [d.name]),
+							fields: [
+								{ fieldname: "dest", fieldtype: "Select", label: __("Send to"), reqd: 1, options: opts },
+								{ fieldname: "reason", fieldtype: "Small Text", reqd: 1,
+								  label: __("Why can this location not finish it?") },
+							],
+							primary_action_label: __("Dispatch"),
+							primary_action: (v) => {
+								const picked = dests[opts.indexOf(v.dest)];
+								if (!picked) return;
+								dlg.get_primary_btn().prop("disabled", true);
+								frappe.xcall("gofix.gofix_services.api.create_service_transfer", {
+									service_request: d.name, to_store: picked.warehouse, reason: v.reason,
+								}).then(() => {
+									dlg.hide();
+									frappe.show_alert({
+										message: __("{0} dispatched to {1}.", [d.name, picked.label]),
+										indicator: "green",
+									});
+									self._refresh_all();
+								}).catch((err) => {
+									dlg.get_primary_btn().prop("disabled", false);
+									frappe.msgprint({ title: __("Could not dispatch"),
+										message: err.message || String(err), indicator: "red" });
+								});
+							},
+						});
+						dlg.show();
+					});
+			});
+
+			// Send it home. No destination to choose — it goes back to the store
+			// that raised the ticket, which is where the customer will collect it
+			// and where the invoice is raised.
+			content.find("#goh-return-store").on("click", () => {
+				const home = d.source_warehouse ? String(d.source_warehouse).split(" - ")[0] : __("the origin store");
+				frappe.confirm(
+					__("Send this device back to {0} for handover and invoicing?", [home]),
+					() => {
+						frappe.xcall("gofix.gofix_services.api.return_service_transfer", {
+							service_request: d.name,
+						}).then(() => {
+							frappe.show_alert({
+								message: __("{0} is on its way back to {1}.", [d.name, home]),
+								indicator: "green",
+							});
+							self._refresh_all();
+						}).catch((err) => {
+							frappe.msgprint({ title: __("Could not return the device"),
+								message: err.message || String(err), indicator: "red" });
+						});
+					}
+				);
+			});
+
+			// Call back a dispatch that has not left the shelf yet.
+			content.find("#goh-cancel-transfer").on("click", () => {
+				const dlg = new frappe.ui.Dialog({
+					title: __("Cancel dispatch of {0}", [d.name]),
+					fields: [
+						{ fieldname: "note", fieldtype: "HTML",
+						  options: `<p class="text-muted small">${__("Only possible while the device has not been picked up. It stays at {0} and any redirected spares come back with it.", [(d.source_warehouse || "").split(" - ")[0]])}</p>` },
+						{ fieldname: "reason", fieldtype: "Small Text", reqd: 1,
+						  label: __("Why is it being called back?") },
+					],
+					primary_action_label: __("Cancel Dispatch"),
+					primary_action: (v) => {
+						dlg.get_primary_btn().prop("disabled", true);
+						frappe.xcall("gofix.gofix_services.api.cancel_service_transfer", {
+							service_request: d.name, reason: v.reason,
+						}).then(() => {
+							dlg.hide();
+							frappe.show_alert({ message: __("Dispatch cancelled."), indicator: "green" });
+							self._refresh_all();
+						}).catch((err) => {
+							dlg.get_primary_btn().prop("disabled", false);
+							frappe.msgprint({ title: __("Could not cancel"),
+								message: err.message || String(err), indicator: "red" });
+						});
+					},
+				});
+				dlg.show();
+			});
+
 			// Device handover — custody moves, solution assignments stay
 			content.find("#goh-device-handover").on("click", () => {
 				const holder = d.device_holder || "";
@@ -2125,6 +2508,7 @@ class GoFixOpsHub {
 				"#goh-back-to-analysis", "#goh-save-solutions", "#goh-back-to-confirm",
 				"#goh-back-to-solutions", "#goh-submit-qc",
 				"#goh-back-to-assign", "#goh-rework-assign", "#goh-device-handover",
+				"#goh-send-hub", "#goh-return-store", "#goh-cancel-transfer",
 			];
 			// Assigning MORE technicians mid-repair is legitimate (a ticket can be
 			// split across L1/L2/L4) — keep the Assign action live while the
@@ -2137,6 +2521,29 @@ class GoFixOpsHub {
 	/* ═══════════════════════════════════════════════════════════════════════ */
 	/*  Helper Methods                                                       */
 	/* ═══════════════════════════════════════════════════════════════════════ */
+	_fill_issue_category_selects() {
+		/* Options come from the server once, then every Issue Category <select>
+		   on screen is (re)filled. data-selected carries the row's saved value so
+		   refilling never silently blanks an existing issue. */
+		const cats = this._issue_categories || [];
+		this.parent.find("select.goh-issue-cat").each(function () {
+			const $sel = $(this);
+			const chosen = $sel.val() || $sel.data("selected") || "";
+			const placeholder = $sel.find('option[value=""]').text() || __("Issue Category");
+			$sel.html(
+				`<option value="">${frappe.utils.escape_html(placeholder)}</option>` +
+				cats.map(c => {
+					const v = frappe.utils.escape_html(c);
+					return `<option value="${v}"${c === chosen ? " selected" : ""}>${v}</option>`;
+				}).join("")
+			);
+			if (chosen && !cats.includes(chosen)) {
+				// keep a value the catalogue no longer offers rather than dropping it
+				$sel.append(`<option value="${frappe.utils.escape_html(chosen)}" selected>${frappe.utils.escape_html(chosen)}</option>`);
+			}
+		});
+	}
+
 	_collect_issues() {
 		const issues = [];
 		this.parent.find("#goh-issue-tbody tr").each(function () {
@@ -2187,9 +2594,17 @@ class GoFixOpsHub {
 				</div>
 			</div>
 			<p class="text-muted" style="font-size:12px">
-				${__("Accepting confirms the diagnosis, records estimate v1 as customer-approved and creates the Service Order — the ticket then moves into Solutions → Assign → Repair. For a detailed diagnosis or a formal estimate approval first, use the stepper stages instead.")}
+				${__("Tickets raised at a counter open themselves — the device is already in hand. This queue is for requests raised remotely, where taking the job is a decision.")}
 			</p>
-			<button class="btn btn-primary" id="goh-accept-create-so">
+			<p class="text-muted" style="font-size:12px">
+				<b>${__("Take In")}</b> ${__("opens the job and sends it to Analysis. Nothing is quoted or ordered yet — the Service Order is raised once the customer confirms the estimate.")}
+				<br>
+				<b>${__("Accept & Create Service Order")}</b> ${__("additionally records estimate v1 as customer-approved and raises the Service Order up front. Use it only when the price is already agreed.")}
+			</p>
+			<button class="btn btn-primary" id="goh-open-job">
+				<i class="fa fa-inbox"></i> ${__("Take In — start Analysis")}
+			</button>
+			<button class="btn btn-default" id="goh-accept-create-so" style="margin-left:6px">
 				<i class="fa fa-check"></i> ${__("Accept & Create Service Order")}
 			</button>
 		</div>`;
@@ -2286,38 +2701,80 @@ class GoFixOpsHub {
 			return;
 		}
 		this.parent.find(".goh-not-repairable-btn").on("click", () => {
-			const dlg = new frappe.ui.Dialog({
-				title: __("Mark Not Repairable"),
-				fields: [
-					{
-						fieldname: "status", label: __("Status"), fieldtype: "Select",
-						options: "Not Repairable\nBER", default: "Not Repairable", reqd: 1,
-						description: __("BER = Beyond Economical Repair (repair cost exceeds device value)")
-					},
-					{
-						fieldname: "reason", label: __("Reason"), fieldtype: "Small Text", reqd: 1,
-						description: __("Why is the device not repairable? This will be shown on the customer receipt.")
-					},
-				],
-				primary_action_label: __("Confirm — Not Repairable"),
-				primary_action: v => {
-					dlg.disable_primary_action();
-					frappe.xcall(`${API}.mark_not_repairable`, {
-						sr_name: d.name, status: v.status, reason: v.reason,
-					}).then(r => {
-						dlg.hide();
-						frappe.show_alert({
-							message: __("Marked as {0}", [v.status]), indicator: "orange",
+			// All four ways a job ends without a repair, with the coded reasons
+			// the counter sees. The workshop closing a job and the counter
+			// closing the same job must record it identically, so both read the
+			// one list from the server rather than carrying their own.
+			frappe.xcall("gofix.gofix_services.api.get_repair_close_options",
+				{ service_request: d.name })
+				.then((opts) => {
+					const outcomes = (opts && opts.outcomes) || [];
+					if (!outcomes.length) {
+						frappe.msgprint({
+							title: __("Nothing configured"), indicator: "orange",
+							message: __("No closing reasons are set up. Add them under Withdrawal Reason."),
 						});
-						if (r.needs_spare_recovery && r.pending_spares.length) {
-							self._show_spare_recovery_dialog(d.name, r.pending_spares);
-						} else {
-							self._refresh_all();
-						}
-					}).catch(() => dlg.enable_primary_action());
-				},
-			});
-			dlg.show();
+						return;
+					}
+					const by_outcome = {};
+					outcomes.forEach((o) => { by_outcome[o.outcome] = o.reasons || []; });
+
+					const refresh_reasons = () => {
+						const rows = by_outcome[dlg.get_value("outcome")] || [];
+						dlg.set_df_property("reason", "options",
+							rows.map((r) => ({ value: r.name, label: r.reason_name || r.name })));
+						dlg.set_value("reason", rows.length ? rows[0].name : "");
+						dlg.set_df_property("note", "reqd",
+							rows.length && rows[0].requires_note ? 1 : 0);
+					};
+
+					const dlg = new frappe.ui.Dialog({
+						title: __("Close without repair"),
+						fields: [
+							{
+								fieldname: "outcome", label: __("How did it end?"),
+								fieldtype: "Select", reqd: 1,
+								options: outcomes.map((o) => o.outcome),
+								default: outcomes[0].outcome,
+								description: __("BER = beyond economic repair: fixable, but not for what the device is worth."),
+								onchange: () => refresh_reasons(),
+							},
+							{
+								fieldname: "reason", label: __("Reason"),
+								fieldtype: "Select", reqd: 1,
+								description: __("Coded, so it can be counted later."),
+							},
+							{
+								fieldname: "note", label: __("What happened?"),
+								fieldtype: "Small Text",
+								description: __("Shown on the customer receipt. Required for reasons that mean nothing on their own."),
+							},
+						],
+						primary_action_label: __("Close Job"),
+						primary_action: (v) => {
+							dlg.disable_primary_action();
+							frappe.xcall(`${API}.mark_not_repairable`, {
+								sr_name: d.name, status: v.outcome,
+								reason: v.note, reason_code: v.reason,
+							}).then((r) => {
+								dlg.hide();
+								frappe.show_alert({
+									message: r.handback_entry
+										? __("Closed as {0}. Device issued back to the customer.", [v.outcome])
+										: __("Closed as {0}", [v.outcome]),
+									indicator: "orange",
+								});
+								if (r.needs_spare_recovery && (r.pending_spares || []).length) {
+									self._show_spare_recovery_dialog(d.name, r.pending_spares);
+								} else {
+									self._refresh_all();
+								}
+							}).catch(() => dlg.enable_primary_action());
+						},
+					});
+					dlg.show();
+					refresh_reasons();
+				});
 		});
 	}
 

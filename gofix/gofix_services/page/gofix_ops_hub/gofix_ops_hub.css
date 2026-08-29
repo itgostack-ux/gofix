@@ -3,12 +3,19 @@
 
 :root {
 	--goh-sidebar-w: 320px;
-	--goh-border: #e2e8f0;
-	--goh-bg: #f8fafc;
-	--goh-card-bg: #fff;
-	--goh-text: #1e293b;
-	--goh-muted: #64748b;
 	--goh-radius: 8px;
+
+	/* Follow the desk theme. Frappe redefines these under [data-theme="dark"],
+	   so aliasing rather than hardcoding is what keeps this page in step with
+	   the rest of Desk -- and stops native controls (link dropdowns, date
+	   pickers) rendering dark on a hardcoded-light page. */
+	--goh-border: var(--border-color);
+	--goh-bg: var(--bg-color);
+	--goh-card-bg: var(--card-bg);
+	--goh-text: var(--text-color);
+	--goh-muted: var(--text-muted);
+	--goh-subtle: var(--subtle-fg, var(--control-bg));
+	--goh-control-bg: var(--control-bg);
 }
 
 /* ── Root Layout ─────────────────────────────────────────────────────────── */
@@ -48,7 +55,7 @@
 }
 .goh-queue-count {
 	font-size: 11px;
-	background: #e2e8f0;
+	background: var(--goh-border);
 	color: var(--goh-muted);
 	padding: 2px 6px;
 	border-radius: 10px;
@@ -76,7 +83,7 @@
 	cursor: pointer;
 	transition: background 0.15s;
 }
-.goh-q-card:hover { background: #f1f5f9; }
+.goh-q-card:hover { background: var(--goh-subtle); }
 .goh-q-card.goh-q-active {
 	background: #eff6ff;
 	border-left: 3px solid #3b82f6;
@@ -189,18 +196,18 @@
 	justify-content: center;
 	font-size: 12px;
 	font-weight: 600;
-	border: 2px solid #cbd5e1;
-	background: #fff;
-	color: #94a3b8;
+	border: 2px solid var(--goh-border);
+	background: var(--goh-card-bg);
+	color: var(--goh-muted);
 	transition: all 0.2s;
 }
 .goh-step-done .goh-step-dot {
 	background: #10b981;
 	border-color: #10b981;
-	color: #fff;
+	color: var(--goh-card-bg);
 }
 .goh-step-active .goh-step-dot {
-	color: #fff;
+	color: var(--goh-card-bg);
 	box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
 }
 .goh-step-label {
@@ -235,7 +242,7 @@
 .goh-step-line {
 	flex: 1;
 	height: 2px;
-	background: #e2e8f0;
+	background: var(--goh-border);
 	min-width: 20px;
 	max-width: 60px;
 	margin: 0 4px;
@@ -272,7 +279,7 @@
 	border-radius: 10px;
 	font-size: 10px;
 	font-weight: 600;
-	color: #fff;
+	color: var(--goh-card-bg);
 }
 .goh-banner-meta {
 	display: flex;
@@ -365,7 +372,7 @@
 .badge-green   { background: #f0fdf4; color: #16a34a; }
 .badge-red     { background: #fef2f2; color: #dc2626; }
 .badge-indigo  { background: #eef2ff; color: #4f46e5; }
-.badge-muted   { background: #f1f5f9; color: #64748b; }
+.badge-muted   { background: var(--goh-subtle); color: var(--goh-muted); }
 .badge-orange  { background: #fff7ed; color: #ea580c; }
 .badge-done    { background: #f0fdf4; color: #059669; }
 
@@ -402,7 +409,7 @@
 	font-size: 12px;
 }
 .goh-table th {
-	background: #f8fafc;
+	background: var(--goh-bg);
 	padding: 6px 10px;
 	font-weight: 600;
 	color: var(--goh-muted);
@@ -413,7 +420,7 @@
 }
 .goh-table td {
 	padding: 6px 10px;
-	border-bottom: 1px solid #f1f5f9;
+	border-bottom: 1px solid var(--goh-subtle);
 	color: var(--goh-text);
 }
 .goh-table tfoot td {
@@ -453,44 +460,133 @@
 	display: block;
 }
 
-/* ── Timeline ────────────────────────────────────────────────────────────── */
-.goh-timeline {
-	position: relative;
-	padding-left: 24px;
+/* ── Timeline ────────────────────────────────────────────────────────────
+   A vertical list of badges made every transition look equally important and
+   buried the one thing anyone reads a timeline for: where the time went. Two
+   tables instead — time per stage first, then the chronological log. */
+
+.goh-tl-stats {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+	gap: 1px;
+	background: var(--goh-border);
+	border: 1px solid var(--goh-border);
+	border-radius: 6px;
+	overflow: hidden;
+	margin-bottom: 14px;
 }
-.goh-tl-item {
-	position: relative;
-	padding-bottom: 16px;
-	padding-left: 12px;
-}
-.goh-tl-item::before {
-	content: "";
-	position: absolute;
-	left: -18px;
-	top: 8px;
-	bottom: -8px;
-	width: 2px;
-	background: #e2e8f0;
-}
-.goh-tl-item:last-child::before { display: none; }
-.goh-tl-dot {
-	position: absolute;
-	left: -22px;
-	top: 6px;
-	width: 10px;
-	height: 10px;
-	border-radius: 50%;
-	background: #3b82f6;
-	border: 2px solid #fff;
-	box-shadow: 0 0 0 2px #e2e8f0;
-}
-.goh-tl-header {
+.goh-tl-stats > div {
+	background: var(--goh-card-bg);
+	padding: 10px 12px;
 	display: flex;
-	align-items: center;
-	gap: 6px;
-	flex-wrap: wrap;
+	flex-direction: column;
+	gap: 2px;
 }
-.goh-tl-meta { margin-top: 2px; }
+.goh-tl-stats .k {
+	font-size: 11px;
+	text-transform: uppercase;
+	letter-spacing: .06em;
+	color: var(--goh-text-muted);
+}
+.goh-tl-stats .v {
+	font-size: 18px;
+	font-weight: 600;
+	font-variant-numeric: tabular-nums;
+}
+
+/* Wide content scrolls inside its own box so the page never slides sideways. */
+.goh-tl-scroll { overflow-x: auto; }
+
+.goh-tl-table {
+	width: 100%;
+	border-collapse: collapse;
+	font-size: 13px;
+}
+.goh-tl-table th {
+	text-align: left;
+	font-size: 11px;
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: .06em;
+	color: var(--goh-text-muted);
+	padding: 6px 10px;
+	border-bottom: 1px solid var(--goh-border);
+	white-space: nowrap;
+}
+.goh-tl-table td {
+	padding: 7px 10px;
+	border-bottom: 1px solid var(--goh-border-soft, var(--goh-border));
+	vertical-align: middle;
+}
+.goh-tl-table tbody tr:last-child td { border-bottom: 0; }
+.goh-tl-table tbody tr:hover { background: var(--goh-hover-bg, rgba(127,127,127,.06)); }
+.goh-tl-table .text-right { text-align: right; }
+.goh-tl-table .goh-num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* Share-of-total bar. Width is the datum; the track keeps short bars readable. */
+.goh-bar {
+	background: var(--goh-border);
+	border-radius: 3px;
+	height: 6px;
+	overflow: hidden;
+	min-width: 60px;
+}
+.goh-bar > span {
+	display: block;
+	height: 100%;
+	background: #3b82f6;
+	border-radius: 3px;
+}
+
+/* A ticket that comes back to a stage it already left is worth seeing. */
+.goh-repeat {
+	display: inline-block;
+	margin-left: 6px;
+	font-size: 10px;
+	text-transform: uppercase;
+	letter-spacing: .05em;
+	padding: 1px 5px;
+	border-radius: 3px;
+	background: rgba(217, 119, 6, .14);
+	color: #b45309;
+	white-space: nowrap;
+}
+[data-theme="dark"] .goh-repeat { color: #f0b429; background: rgba(240, 180, 41, .15); }
+
+/* Which of the ticket's two status histories a row belongs to. The colour is
+   the only thing stopping the reader adding the two columns together. */
+.goh-track {
+	display: inline-block;
+	font-size: 10px;
+	text-transform: uppercase;
+	letter-spacing: .05em;
+	padding: 1px 6px;
+	border-radius: 3px;
+	white-space: nowrap;
+	font-weight: 600;
+}
+.goh-track-ops  { background: rgba(59, 130, 246, .13); color: #1d4ed8; }
+.goh-track-life { background: rgba(100, 116, 139, .16); color: #475569; }
+[data-theme="dark"] .goh-track-ops  { background: rgba(96, 165, 250, .17); color: #93c5fd; }
+[data-theme="dark"] .goh-track-life { background: rgba(148, 163, 184, .17); color: #cbd5e1; }
+
+.goh-track-name { color: var(--text-muted); font-weight: 600; }
+
+/* A step nobody logged, rebuilt from where the ticket had actually reached.
+   Says so, rather than presenting a reconstruction as a record. */
+.goh-inferred {
+	display: inline-block;
+	margin-left: 6px;
+	font-size: 10px;
+	text-transform: uppercase;
+	letter-spacing: .05em;
+	padding: 1px 5px;
+	border-radius: 3px;
+	background: rgba(100, 116, 139, .14);
+	color: #475569;
+	white-space: nowrap;
+}
+[data-theme="dark"] .goh-inferred { background: rgba(148, 163, 184, .16); color: #cbd5e1; }
 
 /* ── Repair Cards ────────────────────────────────────────────────────────── */
 .goh-repair-cards { display: flex; flex-direction: column; gap: 8px; }
@@ -498,10 +594,10 @@
 	border: 1px solid var(--goh-border);
 	border-radius: 6px;
 	padding: 10px 14px;
-	background: #fafafa;
+	background: var(--goh-bg);
 	transition: border-color 0.15s;
 }
-.goh-repair-card:hover { border-color: #94a3b8; }
+.goh-repair-card:hover { border-color: var(--goh-muted); }
 .goh-repair-card-head {
 	display: flex;
 	justify-content: space-between;
@@ -519,7 +615,7 @@
 	color: var(--goh-muted);
 	margin-top: 4px;
 	padding: 4px 8px;
-	background: #f1f5f9;
+	background: var(--goh-subtle);
 	border-radius: 4px;
 }
 .goh-repair-card-actions {
@@ -552,7 +648,7 @@
 	align-items: center;
 	gap: 6px;
 	padding: 4px 10px;
-	background: #f8fafc;
+	background: var(--goh-bg);
 	border: 1px solid var(--goh-border);
 	border-radius: 6px;
 	font-size: 12px;
@@ -577,7 +673,7 @@
 	cursor: pointer;
 	font-size: 12px;
 }
-.goh-sol-option:hover { background: #f1f5f9; }
+.goh-sol-option:hover { background: var(--goh-subtle); }
 .goh-sol-name { font-weight: 500; }
 .goh-existing-sols, .goh-existing-assigns {
 	display: flex;
@@ -629,7 +725,7 @@
 .goh-note-block {
 	margin-bottom: 12px;
 	padding: 10px 14px;
-	background: #f8fafc;
+	background: var(--goh-bg);
 	border-left: 3px solid #3b82f6;
 	border-radius: 0 6px 6px 0;
 }
@@ -736,7 +832,7 @@
 }
 .goh-sol-actions .btn { min-width: 28px; }
 .goh-sol-actions .btn-default { color: var(--goh-muted); background: var(--goh-card-bg); border: 1px solid var(--goh-border); }
-.goh-sol-actions .btn-default:hover { color: var(--goh-text); border-color: #cbd5e1; }
+.goh-sol-actions .btn-default:hover { color: var(--goh-text); border-color: var(--goh-border); }
 .goh-sol-done-details { margin-top: 10px; }
 .goh-sol-done-details > summary { list-style: none; outline: none; user-select: none; }
 .goh-sol-done-details > summary::-webkit-details-marker { display: none; }
@@ -756,3 +852,56 @@
 }
 .goh-custody-details > summary .goh-caret::before { content: "▸"; margin-right: 4px; }
 .goh-custody-details[open] > summary .goh-caret::before { content: "▾"; }
+
+/* ── Dark theme ──────────────────────────────────────────────────────────── */
+/* Layout colours already follow the desk theme through the --goh-* aliases
+   above. Only the semantic chips need a hand: their pale tints are unreadable
+   as-is on a dark surface, so keep the hue and darken the ground. */
+[data-theme="dark"] {
+	--goh-subtle: var(--gray-800, #1f2937);
+}
+
+[data-theme="dark"] .badge-blue    { background: rgba(59, 130, 246, 0.18); color: #93c5fd; }
+[data-theme="dark"] .badge-purple  { background: rgba(124, 58, 237, 0.18); color: #c4b5fd; }
+[data-theme="dark"] .badge-yellow  { background: rgba(217, 119, 6, 0.18);  color: #fcd34d; }
+[data-theme="dark"] .badge-green   { background: rgba(22, 163, 74, 0.18);  color: #86efac; }
+[data-theme="dark"] .badge-red     { background: rgba(220, 38, 38, 0.18);  color: #fca5a5; }
+[data-theme="dark"] .badge-indigo  { background: rgba(79, 70, 229, 0.18);  color: #a5b4fc; }
+[data-theme="dark"] .badge-orange  { background: rgba(234, 88, 12, 0.18);  color: #fdba74; }
+[data-theme="dark"] .badge-done    { background: rgba(5, 150, 105, 0.18);  color: #6ee7b7; }
+[data-theme="dark"] .badge-muted   { background: var(--goh-subtle); color: var(--goh-muted); }
+
+[data-theme="dark"] .goh-sla-pill.goh-sla-breach { background: rgba(220, 38, 38, 0.18); color: #fca5a5; }
+[data-theme="dark"] .goh-sla-pill.goh-sla-warn   { background: rgba(217, 119, 6, 0.18); color: #fcd34d; }
+[data-theme="dark"] .goh-sla-pill.goh-sla-ok     { background: rgba(22, 163, 74, 0.18); color: #86efac; }
+
+/* pale panel grounds that would otherwise stay white on a dark page */
+[data-theme="dark"] .goh-q-card:hover { background: var(--goh-subtle); }
+
+/* ── Estimate breakdown on the Confirm step ──────────────────────────────── */
+.goh-est-breakdown { margin: 10px 0; }
+.goh-est-table { width: 100%; font-size: 12px; border-collapse: collapse; }
+.goh-est-table th, .goh-est-table td { padding: 4px 8px; border-bottom: 1px solid var(--goh-border); }
+.goh-est-table thead th { color: var(--goh-muted); font-weight: 600; }
+.goh-est-table tfoot th { border-top: 2px solid var(--goh-border); border-bottom: none; color: var(--goh-text); }
+
+/* Tell the browser which way to render native UI it draws itself — select
+   popups, scrollbars, date pickers. Without this the OS/GTK preference wins,
+   which is how a dark popup ended up on a light page. */
+.goh-root { color-scheme: light; }
+[data-theme="dark"] .goh-root { color-scheme: dark; }
+
+/* ── Access explanation ──────────────────────────────────────────────────
+   Store scoping is fail-closed, so a user with no scope sees an empty hub
+   that looks broken. This is the difference between "nothing here" and
+   "nothing here, and here is why". */
+.goh-access-note {
+	background: var(--goh-card-bg);
+	border: 1px solid var(--goh-border);
+	border-left: 3px solid #d97706;
+	border-radius: 6px;
+	padding: 12px 14px;
+	margin-bottom: 14px;
+}
+.goh-access-title { font-weight: 600; margin-bottom: 3px; }
+.goh-access-detail { color: var(--goh-text-muted); font-size: 13px; }

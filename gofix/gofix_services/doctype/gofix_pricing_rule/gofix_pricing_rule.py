@@ -67,9 +67,61 @@ def get_pricing_rule(issue_category=None, repair_solution=None, brand=None,
 	return best
 
 
+def _select_spare(solution, device_item=None):
+	"""Pick the ONE part to quote for ``solution``, plus how many alternatives fit.
+
+	A repair consumes a single part. "Screen Replacement" maps to hundreds of
+	model-specific screens, so the estimate has to choose rather than sum.
+
+	Choice order:
+	  1. only parts compatible with the device being repaired, when it is known;
+	  2. cheapest first, so the quote is the customer-friendly default and any
+	     OEM upgrade is an explicit up-sell rather than a surprise.
+
+	With no device supplied nothing is quoted for parts -- a blind guess across
+	models would be worse than an obviously incomplete estimate.
+	"""
+	rows = frappe.get_all(
+		"Solution Spare Mapping",
+		filters={"repair_solution": solution, "is_active": 1},
+		fields=["spare_item", "default_qty"],
+		limit_page_length=0,
+	)
+	if not rows:
+		return None, 0
+
+	if not device_item:
+		return None, len(rows)
+
+	from gofix.gofix_services.api import is_spare_compatible_with_device
+
+	fitting = []
+	for row in rows:
+		if not is_spare_compatible_with_device(row.spare_item, device_item):
+			continue
+		info = frappe.db.get_value(
+			"Item", row.spare_item,
+			["standard_rate", "gofix_spare_grade", "disabled"], as_dict=True
+		) or frappe._dict()
+		if info.get("disabled"):
+			continue
+		fitting.append({
+			"item": row.spare_item,
+			"qty": row.default_qty or 1,
+			"rate": flt(info.get("standard_rate")),
+			"grade": info.get("gofix_spare_grade"),
+		})
+
+	if not fitting:
+		return None, 0
+	fitting.sort(key=lambda r: r["rate"])
+	return fitting[0], len(fitting) - 1
+
+
 def calculate_estimate_from_rules(issue_categories, solutions, brand=None,
                                   item_group=None, warranty_status=None,
-                                  company=None, warranty_plan=None):
+                                  company=None, warranty_plan=None,
+                                  device_item=None):
 	"""Calculate a full estimate using pricing rules.
 
 	Returns dict with labor_total, spare_total, estimate_total, line_details.
@@ -131,27 +183,25 @@ def calculate_estimate_from_rules(issue_categories, solutions, brand=None,
 			else:
 				labor = flt(rule.labor_rate)
 
-			# Spare cost from solution mapping
-			spare_items = frappe.get_all(
-				"Solution Spare Mapping",
-				filters={"repair_solution": sol_name, "is_active": 1},
-				fields=["spare_item", "default_qty"],
-			)
-			for sp in spare_items:
-				item_rate = flt(frappe.db.get_value("Item", sp.spare_item, "standard_rate"))
+			# A repair consumes ONE part, not every part mapped to it. With
+			# hundreds of model-specific spares behind "Screen Replacement",
+			# summing the mapping would quote the whole shelf.
+			chosen, alternatives = _select_spare(sol_name, device_item)
+			if chosen:
 				markup = flt(rule.spare_markup_percent) / 100
-				sp_cost = flt(sp.default_qty) * item_rate * (1 + markup)
-
+				sp_cost = flt(chosen["qty"]) * flt(chosen["rate"]) * (1 + markup)
 				if is_warranty and rule.warranty_spare_covered:
 					sp_cost = 0
 				if not rule.include_spare_cost:
 					sp_cost = 0
-
 				spare += sp_cost
 
-			# Enforce min/max
+			# Enforce min/max. A repair fully covered by warranty is exempt --
+			# the minimum is a bench fee for paying customers, not a way to
+			# charge someone whose labour and parts are both covered.
+			fully_covered = is_warranty and not flt(rule.warranty_labor_rate) and rule.warranty_spare_covered
 			total_line = labor + spare
-			if rule.min_charge and total_line < flt(rule.min_charge):
+			if rule.min_charge and total_line < flt(rule.min_charge) and not fully_covered:
 				labor = flt(rule.min_charge) - spare
 			if rule.max_charge and total_line > flt(rule.max_charge):
 				labor = flt(rule.max_charge) - spare
@@ -165,6 +215,9 @@ def calculate_estimate_from_rules(issue_categories, solutions, brand=None,
 			"spare": spare,
 			"total": labor + spare,
 			"pricing_rule": rule.name if rule else None,
+			"spare_item": (chosen or {}).get("item") if rule else None,
+			"spare_grade": (chosen or {}).get("grade") if rule else None,
+			"spare_alternatives": alternatives if rule else 0,
 		})
 
 	return {

@@ -14,7 +14,7 @@ import json
 
 import frappe
 from frappe import _
-from frappe.utils import flt, now_datetime, nowdate, today
+from frappe.utils import cint, flt, now_datetime, nowdate, today
 
 from gofix.config import get_float_setting, require_role_setting
 from gofix.security import assert_service_request_access
@@ -39,6 +39,17 @@ def create_estimate_version(service_request, reason=None, send_to_customer=False
 
 	# Calculate costs using pricing engine if available
 	labor_cost, spare_cost, estimate_total = _calculate_estimate(sr)
+
+	# A repair that comes back inside its own workmanship warranty is ours to
+	# carry, and a quote worth more than the device is worth saying out loud.
+	# Both were knowable from data already on the ticket and neither was checked.
+	from gofix.estimate_policy import apply_warranty_rework, flag_if_uneconomic
+
+	labor_cost, spare_cost, estimate_total, warranty_ctx = apply_warranty_rework(
+		sr, labor_cost, spare_cost, estimate_total
+	)
+	if not warranty_ctx["covered"]:
+		flag_if_uneconomic(sr, estimate_total)
 
 	# Determine version number
 	existing_versions = sr.get("estimate_versions") or []
@@ -135,11 +146,6 @@ def _apply_customer_estimate_action(sr, version_number, action, remarks=None, *,
 		audit_label = _("Authenticated customer tracking token")
 	elif authorization == "staff_override":
 		sr.check_permission("write")
-		require_role_setting(
-			"estimate_decision_override_roles",
-			("Service Manager",),
-			action=_("override a customer estimate decision"),
-		)
 		if not (remarks or "").strip():
 			frappe.throw(_("Override remarks are required."), frappe.ValidationError)
 		sr.flags.estimate_decision_override = True
@@ -204,6 +210,9 @@ def _calculate_estimate(sr):
 				warranty_status=sr.warranty_status,
 				company=sr.company,
 				warranty_plan=sr.get("warranty_plan"),
+				# without the device the engine cannot tell which of the
+				# hundreds of model-specific spares this repair actually needs
+				device_item=sr.get("device_item"),
 			)
 			if result.get("estimate_total"):
 				return (
@@ -312,31 +321,19 @@ def set_repairability(service_request, status, reason=None) -> dict:
 			create_estimate_version(service_request, reason="Initial estimate after diagnosis")
 			return {"message": _("Marked as Repairable. Initial estimate created.")}
 	elif status in ("Not Repairable", "BER"):
-		sr.set("decision", "Rejected")
-		sr.set("status", "Rejected")
-		sr.set("rejection_reason", reason or f"Device is {status}")
+		# Parts already fitted must come back out first. This used to be a
+		# msgprint the operator could click straight past, which let a device go
+		# home with our stock inside it.
+		from gofix.spare_lifecycle import assert_spares_recovered
 
-		# Check if there are consumed spares that need recovery
-		pending = frappe.get_all("Spare Parts Usage", filters={
-			"service_request": service_request,
-			"part_status": "Consumed",
-			"deleted": 0,
-			"status": "Active",
-		}, fields=["name", "spare_part_item", "item_name", "qty_used"])
-		if pending:
-			items_str = ", ".join(f"{p.item_name or p.spare_part_item} (x{p.qty_used})" for p in pending)
-			frappe.msgprint(
-				_("<b>⚠ {0} consumed spare(s) need recovery before device return:</b><br>{1}<br><br>"
-				  "Use the Spare Recovery panel to disposition each part as:<br>"
-				  "• Good → Back to Stock<br>"
-				  "• Faulty → Supplier Return<br>"
-				  "• Damaged by Technician → Damaged Stock").format(len(pending), items_str),
-				title=_("Spare Recovery Required"),
-				indicator="orange",
-			)
+		assert_spares_recovered(service_request, _("mark this device {0}").format(status))
+		sr.set("decision", "Rejected")
+		sr.set("rejection_reason", reason or f"Device is {status}")
 	elif status == "Customer Declined":
+		from gofix.spare_lifecycle import assert_spares_recovered
+
+		assert_spares_recovered(service_request, _("cancel this ticket"))
 		sr.set("decision", "Cancelled")
-		sr.set("status", "Cancelled")
 
 	sr.save()
 	return {"message": _("Repairability set to {0}").format(status)}
@@ -451,8 +448,55 @@ def confirm_return_at_source(service_request) -> dict:
 	return {"message": _("Device returned to source store. Ready for billing.")}
 
 
+def _device_is_company_stock(sr, from_location) -> bool:
+	"""Is this device ours to post a stock movement for?
+
+	A customer's handset booked in for repair is NOT inventory. We never bought
+	it, never received it, and it carries no valuation — its serial sits with no
+	warehouse at all. Posting a Material Transfer for it asks the ledger to move
+	stock that was never there, which is why the transit check refused with
+	"Serial ... is in warehouse None".
+
+	Company-owned devices — a demo unit, a refurbished handset, a buyback going
+	out for repair — genuinely are stock and must move through the ledger like
+	anything else. The difference is ownership, so that is what is tested:
+	a stock item whose serial is actually standing in the source warehouse.
+	"""
+	device_item = sr.get("device_item")
+	if not device_item:
+		return False
+
+	item = frappe.db.get_value(
+		"Item", device_item, ["is_stock_item", "has_serial_no"], as_dict=True
+	) or {}
+	if not cint(item.get("is_stock_item")):
+		return False
+
+	# Only consult the Serial No ledger when the ITEM is actually serial
+	# tracked. A ticket carries a serial label for any device — GoFix mints one
+	# at intake so the handset can be identified — but stock never files that
+	# label against a warehouse unless the item is serialised, so reading its
+	# warehouse would say "nowhere" for a device sitting on a shelf.
+	serial_no = (sr.get("serial_no") or "").strip()
+	if serial_no and cint(item.get("has_serial_no")):
+		if not frappe.db.exists("Serial No", serial_no):
+			return False
+		return frappe.db.get_value("Serial No", serial_no, "warehouse") == from_location
+
+	# Otherwise the bin is the authority on whether the device is standing here.
+	return flt(frappe.db.get_value(
+		"Bin", {"item_code": device_item, "warehouse": from_location}, "actual_qty"
+	)) > 0
+
+
 def _auto_create_device_transfer(sr, from_location, to_location, reason=None):
-	"""Create a Stock Entry (Material Transfer) to move the device."""
+	"""Move the device, and post a stock movement only if the device is ours.
+
+	Returns the Stock Entry name when one was raised, or None when the device is
+	customer-owned — in which case custody is tracked on the ticket and in the
+	custody log, which is what a repair chain actually does with a phone it does
+	not own.
+	"""
 	_validate_transfer_warehouse(sr, from_location, _("source"))
 	_validate_transfer_warehouse(sr, to_location, _("destination"))
 	serial_no = sr.get("serial_no")
@@ -461,8 +505,37 @@ def _auto_create_device_transfer(sr, from_location, to_location, reason=None):
 	if not device_item:
 		frappe.throw(_("A device item is required before its location can be transferred."))
 
+	# A customer's handset held as special stock moves between the Customer
+	# Device bins of the two stores — same two-step transit as any other
+	# movement, so it appears on a manifest with a driver.
+	from gofix.customer_device_stock import customer_device_bin
+
+	held_at = sr.get("customer_device_warehouse")
+	if held_at:
+		target_bin = customer_device_bin(to_location, sr.get("company"))
+		if target_bin:
+			from_location, to_location = held_at, target_bin
+		else:
+			frappe.msgprint(
+				_("{0} has no Customer Device bin, so the handset cannot be moved into "
+				  "custody there. The ticket records the move without a stock leg.").format(
+					to_location),
+				indicator="orange",
+			)
+			return None
+
+	if not _device_is_company_stock(sr, from_location):
+		frappe.msgprint(
+			_("{0} belongs to the customer, so no stock movement is posted — the ticket "
+			  "and its custody log carry the handover.").format(
+				sr.get("device_item_name") or device_item
+			),
+			indicator="blue",
+			alert=True,
+		)
+		return None
+
 	frappe.has_permission("Stock Entry", "create", throw=True)
-	frappe.has_permission("Stock Entry", "submit", throw=True)
 	se = frappe.new_doc("Stock Entry")
 	se.stock_entry_type = "Material Transfer"
 	se.company = sr.company
@@ -477,10 +550,85 @@ def _auto_create_device_transfer(sr, from_location, to_location, reason=None):
 		"s_warehouse": from_location,
 		"t_warehouse": to_location,
 		"serial_no": serial_no or "",
+		# custom_quantity is what the transit machine counts against; without it
+		# the dispatch leg moves nothing.
+		"custom_quantity": 1,
+		"custom_original_serials": serial_no or "",
 	})
 	se.insert()
-	se.submit()
+
+	# A customer's device does not teleport between sites. It goes out through
+	# the same two-step transfer every other movement uses — source to transit on
+	# dispatch, transit to destination on receipt — which is the standard
+	# stock-transport pattern (SAP's 313/315) and the reason direct Material
+	# Transfer submit is blocked here at all.
+	#
+	# Submitting straight through would have jumped the stock from store to hub
+	# with no transit visibility, and the guardrail correctly refused it, which
+	# left device transfer failing outright.
+	from ch_erp15.ch_erp15.custom.stock_entry import set_pending_qty
+
+	set_pending_qty(se.name)
+
+	# A dispatched device only reaches logistics through a manifest. Every
+	# Command Center view — the pipeline, the packing queue, the unassigned
+	# list, the trip planner — reads CH Transfer Manifest; a Stock Entry sitting
+	# at Pending With Goods with no manifest is invisible to all of them, which
+	# is exactly how a repair could leave a store and appear nowhere.
+	#
+	# Bulk stock moves are bundled into manifests by hand, because logistics
+	# decides what travels together. A customer's device is not that: it is one
+	# consignment with one destination, known the moment it is dispatched, so it
+	# gets its own manifest rather than waiting for someone to notice it.
+	_create_device_manifest(sr, se.name, from_location, to_location)
 	return se.name
+
+
+def _create_device_manifest(sr, stock_entry: str, from_location: str, to_location: str):
+	"""Put the dispatched device on its own manifest so logistics can see it.
+
+	Built directly rather than through transfer_manifest_api.create_manifest,
+	which requires a submitted Stock Entry — the transit flow deliberately keeps
+	its entry in draft and drives the ledger through custom_status instead, so
+	that API can never accept one. The manifest is created as a Draft, which is
+	where the packing queue picks it up.
+
+	Never raises: the device has already left the shelf, and a missing manifest
+	is a visibility problem to fix, not a reason to fail the dispatch.
+	"""
+	if not frappe.db.exists("DocType", "CH Transfer Manifest"):
+		return None
+	try:
+		store_of = lambda wh: frappe.db.get_value(  # noqa: E731
+			"CH Store", {"warehouse": wh}, "name"
+		)
+		doc = frappe.new_doc("CH Transfer Manifest")
+		doc.manifest_date = nowdate()
+		doc.company = sr.company
+		doc.source_warehouse = from_location
+		doc.destination_warehouse = to_location
+		doc.source_store = store_of(from_location) or store_of(sr.get("source_warehouse"))
+		doc.destination_store = store_of(to_location)
+		if doc.meta.has_field("notes"):
+			doc.notes = _("Customer device for repair {0} — {1}").format(
+				sr.name, sr.get("device_item_name") or sr.get("device_item") or ""
+			)
+		doc.append("transfers", {"stock_entry": stock_entry})
+		doc.flags.ignore_permissions = True
+		doc.insert(ignore_mandatory=True, ignore_permissions=True)
+
+		sr.add_comment(
+			"Info",
+			_("Device handed to logistics on manifest {0}.").format(
+				f'<a href="/app/ch-transfer-manifest/{doc.name}">{doc.name}</a>'
+			),
+		)
+		return doc.name
+	except Exception:
+		frappe.log_error(
+			frappe.get_traceback(), f"GoFix: could not raise a manifest for {sr.name}"
+		)
+		return None
 
 
 def _validate_transfer_warehouse(sr, warehouse, label):
@@ -634,11 +782,6 @@ def qc_fail_with_issues(service_request, failed_checks_json, new_issues_json=Non
 	failed_checks_json: list of {check_name, fail_reason, linked_issue_category, linked_solution}
 	new_issues_json: list of {issue_category, description} — issues discovered during QC
 	"""
-	require_role_setting(
-		"qc_approval_roles",
-		("QC Manager", "Store Manager"),
-		action=_("record a QC failure"),
-	)
 	sr = assert_service_request_access(service_request, permission_type="write")
 	sr.flags.ignore_validate_update_after_submit = True
 
@@ -674,7 +817,7 @@ def qc_fail_with_issues(service_request, failed_checks_json, new_issues_json=Non
 	for sol in (sr.get("solution_lines") or []):
 		if sol.repair_solution in failed_solutions:
 			sol.status = "In Progress"
-			sol.technician_remarks = (sol.technician_remarks or "") + f"\nRework required after QC fail"
+			sol.technician_remarks = (sol.technician_remarks or "") + "\nRework required after QC fail"
 
 	# 3. Add new issues discovered during QC
 	has_new_chargeable = False
@@ -708,41 +851,61 @@ def qc_fail_with_issues(service_request, failed_checks_json, new_issues_json=Non
 # 7. FLOW ENFORCEMENT: diagnosis before SO creation
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def validate_so_creation_prerequisites(sr):
-	"""Called before creating a Service Order.
-	Enforces: diagnosis → repairability → estimate → approval → SO.
+def so_creation_blockers(sr) -> list:
+	"""Why this Service Request cannot become a Service Order yet.
+
+	Empty list means the chain diagnosis → repairability → estimate → approval
+	is complete. Returned rather than thrown so callers can ASK without a
+	try/except: catching a ``frappe.throw`` leaves the message in
+	``frappe.message_log`` and it surfaces later as a stray popup.
 	"""
+	blockers = []
 	if not sr.get("analysis_confirmed"):
-		frappe.throw(_(
-			"Cannot create Service Order: Issue analysis has not been confirmed. "
-			"Complete diagnosis in the Ops Hub first."
+		blockers.append(_(
+			"Issue analysis has not been confirmed. Complete diagnosis in the Ops Hub first."
 		))
 
 	repairability = sr.get("repairability_status")
 	if repairability != "Repairable":
-		frappe.throw(_(
-			"Cannot create Service Order: Device repairability not confirmed. "
-			"Current status: {0}"
-		).format(repairability or "Pending Analysis"))
+		blockers.append(_(
+			"Device repairability not confirmed. Current status: {0}"
+		).format(repairability or _("Pending Analysis")))
 
-	# Check latest estimate is approved
 	if sr.get("estimate_approval_pending"):
-		frappe.throw(_(
-			"Cannot create Service Order: Latest estimate is pending customer approval."
-		))
+		blockers.append(_("Latest estimate is pending customer approval."))
 
 	latest_version = sr.get("latest_estimate_version") or 0
 	if latest_version > 0:
-		# Check the latest version is approved
-		approved = False
-		for ev in (sr.get("estimate_versions") or []):
-			if ev.version_number == latest_version and ev.status == "Customer Approved":
-				approved = True
-				break
+		approved = any(
+			ev.version_number == latest_version and ev.status == "Customer Approved"
+			for ev in (sr.get("estimate_versions") or [])
+		)
 		if not approved:
-			frappe.throw(_(
-				"Cannot create Service Order: Estimate version {0} is not approved by customer."
+			blockers.append(_(
+				"Estimate version {0} is not approved by customer."
 			).format(latest_version))
+	# No estimate raised at all is deliberately NOT a blocker: the direct accept
+	# path (store queue, the SR form's Accept button) raises the order first and
+	# quotes afterwards. Tightening that here would break those flows.
+
+	return blockers
+
+
+def can_create_service_order(sr) -> bool:
+	"""Non-throwing readiness check — see :func:`so_creation_blockers`."""
+	return not so_creation_blockers(sr)
+
+
+def validate_so_creation_prerequisites(sr):
+	"""Called before creating a Service Order.
+	Enforces: diagnosis → repairability → estimate → approval → SO.
+	"""
+	blockers = so_creation_blockers(sr)
+	if blockers:
+		frappe.throw(
+			_("Cannot create Service Order:") + "<ul><li>" + "</li><li>".join(blockers) + "</li></ul>",
+			title=_("Service Order Prerequisites"),
+		)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

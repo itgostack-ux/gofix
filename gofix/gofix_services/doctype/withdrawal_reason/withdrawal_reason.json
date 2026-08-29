@@ -10,6 +10,8 @@
  "field_order": [
   "reason_name",
   "reason_type",
+  "applies_to",
+  "requires_note",
   "description",
   "is_active"
  ],
@@ -30,6 +32,22 @@
    "options": "Customer Decision\nTechnical Limitation\nFinancial Constraint\nOther"
   },
   {
+   "fieldname": "applies_to",
+   "fieldtype": "Select",
+   "label": "Applies To",
+   "options": "Any\nNot Repairable\nBER\nCustomer Declined\nCustomer Cancelled",
+   "default": "Any",
+   "in_list_view": 1,
+   "description": "Which closing outcome this reason may be given for. Any offers it for all of them."
+  },
+  {
+   "fieldname": "requires_note",
+   "fieldtype": "Check",
+   "label": "Requires a Note",
+   "default": "0",
+   "description": "Tick for reasons that mean nothing on their own — \"Other\", or anything a manager would have to ring up to understand."
+  },
+  {
    "fieldname": "description",
    "fieldtype": "Small Text",
    "label": "Description"
@@ -43,7 +61,7 @@
   }
  ],
  "links": [],
- "modified": "2024-12-05 06:59:00.000000",
+ "modified": "2026-08-28 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "GoFix Services",
  "name": "Withdrawal Reason",

@@ -55,7 +55,6 @@ _ALLOWED_TRANSITIONS = {
 	STATUS_CANCELLED: set(),
 }
 
-_DEFAULT_TRANSITION_ROLES = {"System Manager", "Service Manager", "Store Manager", "Store Executive"}
 
 _PHONE_DIGITS = re.compile(r"\D+")
 
@@ -106,8 +105,7 @@ def resolve_store_code(warehouse: str | None) -> tuple[str, str]:
 			"CH Store",
 			{"warehouse": warehouse},
 			("store_code", "store_name"),
-			as_dict=True,
-		)
+			as_dict=True)
 		if row:
 			code = (row.get("store_code") or "").strip().upper()
 			name = row.get("store_name") or ""
@@ -147,6 +145,7 @@ class GoFixToken(Document):
 		self._resolve_store_fields()
 		self.customer_phone = normalize_phone(self.customer_phone)
 		self._validate_company_scope()
+		self._validate_service_request_link()
 		self._validate_repair_fields()
 		self._validate_issue_rules()
 		self._validate_status_transition()
@@ -191,6 +190,28 @@ class GoFixToken(Document):
 				)
 			)
 
+	def _validate_service_request_link(self) -> None:
+		"""A token may precede a repair, but can link to only one matching SR."""
+		if not self.service_request:
+			return
+		sr = frappe.db.get_value(
+			"Service Request",
+			self.service_request,
+			["company", "source_warehouse", "docstatus"],
+			as_dict=True)
+		if not sr or sr.docstatus == 2:
+			frappe.throw(_("Service Request must exist and must not be cancelled."))
+		if sr.company != self.company or sr.source_warehouse != self.store:
+			frappe.throw(_("Service Request company and store must match the token."))
+		other = frappe.db.get_value(
+			"GoFix Token",
+			{"service_request": self.service_request, "name": ("!=", self.name or "")},
+			"name")
+		if other:
+			frappe.throw(_("Service Request is already linked to token {0}.").format(other))
+		if self.status not in (STATUS_JOB_CARD, STATUS_COMPLETED):
+			frappe.throw(_("A linked Service Request requires Job Card Created or Completed status."))
+
 	def _validate_issue_rules(self) -> None:
 		rows = list(self.selected_issues or [])
 		max_issues = get_int_setting("max_selected_issues", 3)
@@ -215,7 +236,7 @@ class GoFixToken(Document):
 		if previous == self.status:
 			return
 		allowed = _ALLOWED_TRANSITIONS.get(previous, set())
-		can_transition = has_role_setting("token_transition_roles", _DEFAULT_TRANSITION_ROLES)
+		can_transition = has_role_setting("token_transition_roles")
 		can_override = has_role_setting("token_transition_override_roles")
 		if self.status not in allowed and not can_override:
 			frappe.throw(
@@ -237,8 +258,7 @@ class GoFixToken(Document):
 			"GoFix Cancellation Reason",
 			self.cancellation_reason,
 			("requires_note", "scope"),
-			as_dict=True,
-		) or {}
+			as_dict=True) or {}
 		scope = reason.get("scope") or "Both"
 		if scope != "Both":
 			if scope == "Customer Left" and self.status != STATUS_LEFT:
@@ -299,8 +319,7 @@ class GoFixToken(Document):
 					if self.flags.get("token_transition_override")
 					else ((self.cancellation_notes or "").strip() or None)
 				),
-			},
-		)
+			})
 
 
 # ---------------------------------------------------------------------------

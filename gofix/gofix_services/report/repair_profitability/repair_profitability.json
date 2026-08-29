@@ -15,6 +15,9 @@
  "roles": [
   {"role": "System Manager"},
   {"role": "Service Manager"},
-  {"role": "Sales Manager"}
+  {"role": "Sales Manager"},
+  {"role": "Accounts Manager"},
+  {"role": "Accounts User"},
+  {"role": "CEO"}
  ]
 }

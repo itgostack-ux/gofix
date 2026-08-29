@@ -34,10 +34,6 @@ def get_recommended_technicians(
 	  - workload_score (0–30): fewer active jobs = higher score
 	  - performance_score (0–30): completion rate, low rework, speed
 	"""
-	require_role_setting(
-		"job_assignment_creation_roles",
-		action=_("view technician recommendations"),
-	)
 	for doctype in ("Service Request", "Employee", "Job Assignment", "Technician Grade"):
 		frappe.has_permission(doctype, ptype="read", throw=True)
 

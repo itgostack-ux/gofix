@@ -316,7 +316,8 @@
    "fieldtype": "Link",
    "label": "Service Request",
    "options": "Service Request",
-   "description": "Linked Service Request created from this token (optional; token can complete without a request)."
+  "description": "Linked Service Request created from this token (optional; token can complete without a request).",
+  "unique": 1
   },
   {
    "fieldname": "job_assignment",

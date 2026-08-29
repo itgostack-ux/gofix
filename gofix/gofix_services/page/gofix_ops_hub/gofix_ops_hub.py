@@ -14,7 +14,7 @@ import json
 
 import frappe
 from frappe import _
-from frappe.utils import add_days, cint, flt, now_datetime, nowdate
+from frappe.utils import add_days, cint, flt, get_datetime, now_datetime, nowdate, time_diff_in_hours
 
 from gofix.config import get_int_setting, get_user_roles, has_role_setting, require_role_setting
 from gofix.gofix_services.store_context import (
@@ -25,6 +25,8 @@ from gofix.gofix_services.store_context import (
 no_cache = 1
 
 STAGE_LABELS = {
+	"draft": "Intake",
+	"closed": "Closed",
 	"analysis": "Analysis",
 	"confirm": "Customer Confirmation",
 	"solutions": "Solution Assignment",
@@ -39,12 +41,12 @@ STAGE_LABELS = {
 
 def _mark_sr_in_service(sr_name):
 	"""Advance SR decision & workflow_state to 'In Service' if still Accepted."""
-	current = frappe.db.get_value("Service Request", sr_name, "decision")
-	if current in ("Draft", "Accepted"):
-		updates = {"decision": "In Service", "status": "In Service"}
+	sr = frappe.get_doc("Service Request", sr_name)
+	if sr.decision in ("Draft", "Accepted"):
+		updates = {"decision": "In Service"}
 		if frappe.db.has_column("Service Request", "workflow_state"):
 			updates["workflow_state"] = "In Service"
-		frappe.db.set_value("Service Request", sr_name, updates, update_modified=True)
+		sr.db_set(updates, update_modified=True)
 
 
 def _log_ops_stage(sr_name, from_stage, to_stage):
@@ -67,18 +69,165 @@ def _log_ops_stage(sr_name, from_stage, to_stage):
 	sr.flags.skip_completion_artifacts = True
 
 	prev_at = None
-	if sr.get("status_log"):
-		prev_at = sr.status_log[-1].changed_at
-	elapsed = round(time_diff_in_hours(now_datetime(), prev_at), 2) if prev_at else 0
+	stage_rows = [row for row in (sr.get("status_log") or []) if row.get("event_type") == "Operations Stage"]
+	if stage_rows:
+		prev_at = stage_rows[-1].changed_at
 
-	sr.append("status_log", {
-		"from_status": STAGE_LABELS.get(from_stage, from_stage),
-		"to_status": STAGE_LABELS.get(to_stage, to_stage),
-		"changed_by": frappe.session.user,
-		"changed_at": now_datetime(),
-		"time_in_previous_status_hours": elapsed,
-	})
+	# Several actions legitimately move a ticket to the same stage — assigning a
+	# technician, assigning solutions to one, and the explicit advance button all
+	# end at Repair — and the hub calls more than one of them in a single click.
+	# The result was the same transition logged two or three times at the same
+	# second, which made the timeline unreadable. Whichever call gets there first
+	# records the move; an immediate repeat of the SAME from -> to is not a second
+	# event. A genuine loop (repair -> qc -> rework -> repair) still logs, because
+	# the rows in between differ.
+	from_label = STAGE_LABELS.get(from_stage, from_stage)
+	to_label = STAGE_LABELS.get(to_stage, to_stage)
+	if stage_rows:
+		last = stage_rows[-1]
+		if last.from_status == from_label and last.to_status == to_label:
+			return
+		if to_label == last.to_status:
+			# Already there. Recording it again as a move out of somewhere else
+			# would invent a transition that never happened.
+			return
+
+	now_ = now_datetime()
+	elapsed = round(time_diff_in_hours(now_, prev_at), 2) if prev_at else 0
+
+	def record(from_status, to_status, hours):
+		sr.append("status_log", {
+			"event_type": "Operations Stage",
+			"from_status": from_status,
+			"to_status": to_status,
+			"changed_by": frappe.session.user,
+			"changed_at": now_,
+			"time_in_previous_status_hours": hours,
+		})
+
+	# Each caller names the stage it believes the ticket is leaving, and a hub
+	# action that skips a step made that a lie — the history showed Repair
+	# entered and never left, then QC left and never entered, so the chain broke
+	# in two places. Bridge the gap explicitly rather than rewriting either end:
+	# the ticket really did pass through the stage in between, and dropping it
+	# would lose that. The waiting time belongs to the stage actually sat in, so
+	# the bridge carries it and the hop that follows carries none.
+	if stage_rows and stage_rows[-1].to_status and stage_rows[-1].to_status != from_label:
+		record(stage_rows[-1].to_status, from_label, elapsed)
+		elapsed = 0
+
+	record(from_label, to_label, elapsed)
 	sr.save()
+
+
+# A ticket carries two independent status histories, and they are not
+# interchangeable — the same distinction SAP draws between a service order's
+# system status and its user status:
+#
+#   Lifecycle         the document's own `decision` — Draft, Accepted,
+#                     In Service, Completed, Invoiced. The commercial state.
+#   Operations Stage  where the work actually is on the bench — Analysis,
+#                     Solution Assignment, Repair, QC. The shop-floor state.
+#
+# Both are appended to the same child table, each timing itself against its own
+# previous row. Reading them as one list therefore counted every wall-clock hour
+# twice — which is how a ticket open for 7 hours reported 14 hours of tracked
+# time. Durations are only ever summed WITHIN a track.
+TIMELINE_TRACKS = {
+	"Lifecycle": "Lifecycle",
+	"Operations Stage": "Operations",
+}
+
+
+def _build_status_timeline(sr) -> list:
+	"""The ticket's status history, per track, in the order things happened.
+
+	Two things are fixed here that the stored rows cannot express on their own:
+
+	* Rows are ordered by when they happened, not by the order the two tracks
+	  happened to append them. Interleaved writes had the log showing a
+	  13:21 transition above an 06:22 one.
+	* Dwell time is recomputed from the timestamps of the SAME track, anchored
+	  at the ticket's creation. The first row of a track previously recorded
+	  zero, so the wait before the first move vanished; and any row written out
+	  of order carried a duration measured against the wrong predecessor.
+
+	The result is arithmetically closed: within a track, the dwell times sum to
+	exactly the elapsed time from intake to the last move.
+	"""
+	rows = list(sr.get("status_log") or [])
+	if not rows:
+		return []
+
+	users = tuple({r.changed_by for r in rows if r.changed_by})
+	names = {
+		u.name: u.full_name or u.name
+		for u in frappe.get_all(
+			"User", filters={"name": ("in", users)},
+			fields=["name", "full_name"], limit_page_length=len(users),
+		)
+	} if users else {}
+
+	# Rows written before every stage key had a label kept the raw key, so an
+	# old ticket shows "draft" beside the lifecycle's "Draft" and reads as two
+	# of the same thing. Labelling on read fixes the tickets already on file
+	# without touching a single stored row.
+	def label(value):
+		if not value:
+			return value
+		return STAGE_LABELS.get(value, STAGE_LABELS.get(str(value).lower(), value))
+
+	opened = get_datetime(sr.creation) if sr.get("creation") else None
+	out = []
+	for event_type, track in TIMELINE_TRACKS.items():
+		track_rows = sorted(
+			(r for r in rows if (r.get("event_type") or "Lifecycle") == event_type),
+			key=lambda r: (get_datetime(r.changed_at) if r.changed_at else opened, cint(r.idx)),
+		)
+		prev = opened
+		last_landed = None
+		for r in track_rows:
+			at = get_datetime(r.changed_at) if r.changed_at else None
+			hours = 0.0
+			if at and prev and at >= prev:
+				hours = round(time_diff_in_hours(at, prev), 2)
+			frm = label(r.from_status) if event_type == "Operations Stage" else r.from_status
+			to = label(r.to_status) if event_type == "Operations Stage" else r.to_status
+
+			def row(from_status, to_status, hrs, inferred=False):
+				return {
+					"track": track,
+					"event_type": event_type,
+					"from_status": from_status,
+					"to_status": to_status,
+					"changed_by": r.changed_by,
+					"changed_by_name": names.get(r.changed_by, r.changed_by or ""),
+					"changed_at": str(r.changed_at) if r.changed_at else "",
+					"hours_in_prev": hrs,
+					"inferred": inferred,
+				}
+
+			# A hub action that skipped a step wrote a row leaving a stage the
+			# ticket had never been recorded as entering, and the dwell since the
+			# last move then landed on that stage's name. On SR-260828-16218 the
+			# device sat in Repair for seven hours and the log charged them to
+			# Quality Control, which the technician had passed in seconds.
+			#
+			# The gap is reconstructed rather than papered over: the ticket did
+			# pass through the stage in between, and the hours belong to the one
+			# it demonstrably sat in — the last stage it was recorded as
+			# reaching. The hop that follows takes none.
+			if last_landed and frm and frm != last_landed:
+				out.append(row(last_landed, frm, hours, inferred=True))
+				hours = 0.0
+
+			out.append(row(frm, to, hours))
+			last_landed = to
+			if at:
+				prev = at
+
+	out.sort(key=lambda e: (e["changed_at"] or "", e["track"]))
+	return out
 
 
 def get_context(context):
@@ -133,6 +282,51 @@ def get_ops_context(company=None) -> dict:
 		"stores": stores,
 		"warehouses": [store["warehouse"] for store in stores],
 		"is_manager": is_manager,
+		"access": _access_diagnosis(user, company, stores),
+	}
+
+
+def _access_diagnosis(user, company, stores) -> dict:
+	"""Why this user can or cannot see anything, in words.
+
+	Store scoping is fail-closed: a user with no scope row sees no stores, which
+	is correct but indistinguishable from a broken page. Somebody with the right
+	roles would open the hub, find it blank, and have nothing to act on. This
+	says which of the three things is missing — the company, the scope, or just
+	the tickets — so the answer is on screen instead of in a server log.
+	"""
+	if stores:
+		return {"ok": True}
+
+	from gofix.scope_guard import user_scope
+
+	try:
+		allowed_wh, allowed_co, bypass = user_scope()
+	except Exception:
+		allowed_wh, allowed_co, bypass = set(), set(), False
+
+	if not company:
+		return {
+			"ok": False,
+			"title": _("No company selected"),
+			"detail": _("Your login has no default company set, so there is nothing to load. "
+			            "Set one on your User record, or pick a company from the switcher."),
+		}
+
+	if not bypass and not allowed_wh:
+		return {
+			"ok": False,
+			"title": _("No stores assigned to you"),
+			"detail": _("You have service roles but no store access, so the hub has nothing to "
+			            "show. Ask an administrator to add you to a CH User Scope with the "
+			            "stores you cover — access is deliberately closed until then."),
+		}
+
+	return {
+		"ok": False,
+		"title": _("No stores found for {0}").format(company),
+		"detail": _("Your access covers stores, but none of them belong to this company. "
+		            "Switch company, or check that your scope lists stores in {0}.").format(company),
 	}
 
 
@@ -141,7 +335,6 @@ def get_ops_context(company=None) -> dict:
 @frappe.whitelist()
 def get_ticket_queue(warehouse=None, search=None, date_from=None, date_to=None, stage_filter="active", company=None) -> list:
 	"""Return annotated SR list for the sidebar ticket queue."""
-	require_role_setting("service_access_roles", action=_("view the Ops Hub ticket queue"))
 	frappe.has_permission("Service Request", "read", throw=True)
 	company = _active_company(company)
 	queue_limit = min(get_int_setting("ops_hub_ticket_queue_limit", 150), 2000)
@@ -360,10 +553,13 @@ def _derive_stage(sr):
 	# Accepted or In Service — normal progression
 	if not cint(sr.get("analysis_confirmed")) or cint(sr.get("open_issue_count", 1)) > 0:
 		return "analysis"
-	if not cint(sr.get("customer_confirmed")):
-		return "confirm"
+	# Solutions before Confirm: the customer cannot approve a price until the
+	# work that determines it has been chosen. Asking first only ever produced
+	# a hand-typed number, because the estimate is priced off solution lines.
 	if not cint(sr.get("solution_count")):
 		return "solutions"
+	if not cint(sr.get("customer_confirmed")):
+		return "confirm"
 	if not cint(sr.get("assignment_count")):
 		return "assign"
 
@@ -378,6 +574,62 @@ def _derive_stage(sr):
 # ── Ticket Detail ─────────────────────────────────────────────────────────────
 
 @frappe.whitelist(methods=["POST"])
+def open_walkin_job(sr_name) -> dict:
+	"""Open the job for a device handed over at the counter.
+
+	A walk-in has nothing to accept. The customer is standing there, the device
+	is in the drawer, and the intake form they signed IS the authorisation to
+	look at it. Holding the ticket in a Draft queue for someone to press
+	"Accept" adds a wait with no decision behind it.
+
+	Every repair chain works this way — Cashify, uBreakiFix, Apple's GSX,
+	authorised service centres — and so does every ERP with a service module:
+	SAP's notification and Dynamics' service order are both created at check-in
+	and start life in diagnosis. The accept/reject decision belongs to the
+	REMOTE path, where the device has not arrived yet.
+
+	Deliberately does NOT create the Service Order. That is a Sales Order, and
+	no honest ERP raises one before it knows what it is selling — the price is
+	not knowable until the device has been diagnosed and solutions chosen. The
+	SO is born at Customer Confirmation, where it belongs, against a real quote.
+	"""
+	_assert_sr_permission(sr_name, "write")
+	sr = frappe.get_doc("Service Request", sr_name)
+	if sr.docstatus != 1:
+		frappe.throw(_("Submit the Service Request before opening the job."), title=_("Validation Error"))
+	if sr.decision != "Draft":
+		return {"ok": True, "stage": _derive_stage(sr.as_dict()), "already_open": True}
+
+	# Seed the reported issue so Analysis opens with the customer's complaint on
+	# it rather than an empty list.
+	active_issues = [r for r in sr.get("issue_lines", []) if r.status not in ("Deleted", "Cancelled")]
+	if not active_issues and sr.issue_category:
+		sr.flags.ignore_validate_update_after_submit = True
+		sr.flags.ignore_mandatory = True
+		sr.append("issue_lines", {
+			"issue_category": sr.issue_category,
+			"reported_by": "Customer",
+			"status": "Open",
+		})
+		sr.save()
+
+	updates = {"decision": "Accepted", "walkin_status": "Accepted"}
+	if frappe.db.has_column("Service Request", "accepted_by"):
+		updates["accepted_by"] = frappe.session.user
+	sr.db_set(updates, update_modified=False)
+	_log_ops_stage(sr_name, "draft", "analysis")
+
+	# Take the handset into custody as customer special stock, so it becomes a
+	# thing the system can move and scan rather than a note on a ticket.
+	from gofix.customer_device_stock import receive_customer_device
+
+	sr.reload()
+	receive_customer_device(sr)
+
+	return {"ok": True, "stage": "analysis", "service_order": ""}
+
+
+@frappe.whitelist(methods=["POST"])
 def accept_and_create_service_order(sr_name) -> dict:
 	"""Express acceptance from the hub's Draft stage.
 
@@ -386,6 +638,14 @@ def accept_and_create_service_order(sr_name) -> dict:
 	repairability Repairable, estimate v1 recorded as customer-approved —
 	which births the Service Order (SAP notification→order moment). Every
 	step lands in the ops stage log / estimate versions for audit.
+
+	This is the REMOTE path — a request raised by phone or web, where someone
+	has to decide whether to take the job at all. A counter walk-in uses
+	``open_walkin_job`` instead: the device is already in hand.
+
+	The ticket lands in Analysis: the estimate approved here is the acceptance
+	of a job, not of a diagnosis, and the seeded issue is still open. It moves
+	on to Solutions once a technician confirms the analysis.
 	"""
 	_assert_sr_permission(sr_name, "write")
 	sr = frappe.get_doc("Service Request", sr_name)
@@ -415,7 +675,7 @@ def accept_and_create_service_order(sr_name) -> dict:
 		"analysis_confirmed": 1,
 		"repairability_status": "Repairable",
 	}, update_modified=False)
-	_log_ops_stage(sr_name, "draft", "confirm")
+	_log_ops_stage(sr_name, "draft", "analysis")
 
 	from gofix.gofix_services import orchestration
 
@@ -426,10 +686,10 @@ def accept_and_create_service_order(sr_name) -> dict:
 	if not sr.service_order:
 		frappe.throw(_("Acceptance completed but Service Order was not created — check estimate gates."))
 
-	updates = {"decision": "Accepted", "walkin_status": "Accepted", "status": "In Service"}
+	updates = {"decision": "Accepted", "walkin_status": "Accepted"}
 	if frappe.db.has_column("Service Request", "accepted_by"):
 		updates["accepted_by"] = frappe.session.user
-	frappe.db.set_value("Service Request", sr_name, updates, update_modified=False)
+	sr.db_set(updates, update_modified=False)
 
 	return {"ok": True, "service_order": sr.service_order, "estimate": estimate}
 
@@ -447,7 +707,7 @@ def update_spare_genealogy(sr_name, spare_row_name, removed_part_serial=None,
 	row = frappe.db.get_value(
 		"SR Spare Line",
 		{"name": spare_row_name, "parent": sr_name, "parenttype": "Service Request"},
-		["name", "status"],
+		["name", "status", "spare_usage", "spare_item", "qty", "uom", "rate"],
 		as_dict=True,
 	)
 	if not row:
@@ -459,16 +719,77 @@ def update_spare_genealogy(sr_name, spare_row_name, removed_part_serial=None,
 		updates["installed_part_serial"] = installed_part_serial.strip()
 	if removed_part_condition is not None:
 		updates["removed_part_condition"] = removed_part_condition.strip()
-	if cint(consume) and row.status in ("Reserved", "Issued", "Pending"):
+	consume_now = cint(consume) and row.status in ("Reserved", "Issued", "Pending")
+	if consume_now:
 		if not (updates.get("installed_part_serial") or "").strip():
 			frappe.throw(
 				_("Record the new part's serial/IMEI to install this spare."),
 				title=_("New Part Serial Missing"),
 			)
-		updates["status"] = "Consumed"
 	if updates:
 		frappe.db.set_value("SR Spare Line", spare_row_name, updates, update_modified=False)
-	return {"ok": True, "status": updates.get("status") or row.status}
+	if consume_now:
+		sr = frappe.get_doc("Service Request", sr_name)
+		# Resolve the existing usage from EITHER direction. SR Spare Line.spare_usage
+		# is written after usage.insert(), but a parent save triggered during that
+		# insert rewrites the child rows and drops it — leaving the forward link
+		# empty while Spare Parts Usage.service_request_spare_line still points
+		# back. Relying on the forward link alone sent the second call (the one
+		# after approval) down the "create new" branch, where the duplicate guard
+		# threw "Spare line already has usage record" and the approve→consume loop
+		# could never complete.
+		existing_usage = row.spare_usage or frappe.db.get_value(
+			"Spare Parts Usage",
+			{"service_request_spare_line": spare_row_name, "status": ("!=", "Cancelled")},
+			"name",
+		)
+		if existing_usage and not row.spare_usage:
+			frappe.db.set_value(
+				"SR Spare Line", spare_row_name, "spare_usage", existing_usage,
+				update_modified=False,
+			)
+		usage = frappe.get_doc("Spare Parts Usage", existing_usage) if existing_usage else frappe.get_doc({
+			"doctype": "Spare Parts Usage",
+			"service_request": sr_name,
+			"service_request_spare_line": spare_row_name,
+			"warehouse": _effective_repair_warehouse(sr),
+			"spare_part_item": row.spare_item,
+			"qty_used": row.qty,
+			"uom": row.uom,
+			"sales_price": row.rate,
+			"part_source": "Store Stock",
+			"part_status": "Reserved",
+			"status": "Active",
+		})
+		new_installed = (installed_part_serial or "").strip()
+		new_removed = (removed_part_serial or "").strip()
+		if usage.docstatus == 1 and (
+			new_installed != (usage.installed_part_serial or "")
+			or new_removed != (usage.removed_part_serial or "")
+		):
+			frappe.throw(_("Part genealogy cannot be changed after stock consumption."))
+		usage.installed_part_serial = new_installed
+		usage.barcode_value = new_installed
+		usage.removed_part_serial = new_removed
+		if usage.is_new():
+			usage.insert()
+			# written after the insert AND re-read, because the insert can trigger
+			# a parent save that rewrites this child row
+			frappe.db.set_value("SR Spare Line", spare_row_name, "spare_usage", usage.name, update_modified=False)
+			if frappe.db.get_value("SR Spare Line", spare_row_name, "spare_usage") != usage.name:
+				frappe.db.sql(
+					"UPDATE `tabSR Spare Line` SET spare_usage=%s WHERE name=%s",
+					(usage.name, spare_row_name),
+				)
+		elif usage.docstatus == 0:
+			usage.save()
+		if usage.requires_approval and usage.approval_status != "Approved":
+			return {"ok": True, "status": "Reserved", "approval_required": True, "spare_usage": usage.name}
+		if usage.docstatus == 0:
+			usage.part_status = "Consumed"
+			usage.submit()
+		return {"ok": True, "status": "Consumed", "spare_usage": usage.name, "stock_entry": usage.stock_entry}
+	return {"ok": True, "status": row.status}
 
 
 def _assert_removed_part_details_complete(sr) -> None:
@@ -482,7 +803,7 @@ def _assert_removed_part_details_complete(sr) -> None:
 	pending = [
 		(row.item_name or row.spare_item)
 		for row in sr.get("spare_lines", [])
-		if row.status in ("Awaiting Procurement", "Pending", "Reserved", "Issued")
+		if row.status in ("Awaiting Procurement", "In Transit", "Pending", "Reserved", "Issued")
 	]
 	if pending:
 		frappe.throw(
@@ -517,9 +838,14 @@ def get_ticket_detail(sr_name) -> dict:
 
 	customer_info = {}
 	if sr.customer:
+		# link_doctype / link_name are on the Dynamic Link child table, not on
+		# Contact itself — filtering them on the parent raised 1054.
 		contacts = frappe.get_all(
 			"Contact",
-			filters={"link_doctype": "Customer", "link_name": sr.customer},
+			filters=[
+				["Dynamic Link", "link_doctype", "=", "Customer"],
+				["Dynamic Link", "link_name", "=", sr.customer],
+			],
 			fields=["email_id", "mobile_no"],
 			limit=1,
 		)
@@ -571,9 +897,19 @@ def get_ticket_detail(sr_name) -> dict:
 			"removed_part_serial": row.get("removed_part_serial") or "",
 			"installed_part_serial": row.get("installed_part_serial") or "",
 			"removed_part_condition": row.get("removed_part_condition") or "",
+			# procurement visibility: where the part is and when it is due
+			"material_request": row.get("material_request") or "",
+			"purchase_order": row.get("purchase_order") or "",
+			"expected_date": str(row.get("expected_date") or ""),
 		}
 		for row in sr.get("spare_lines", [])
 	]
+
+	# Same cap the rest of the hub applies to related rows. This was only ever
+	# defined as a local of _log_ops_stage(), so every reference here raised
+	# NameError — get_ticket_detail simply could not run. It went unnoticed while
+	# the queue was empty, because with no tickets there was nothing to click.
+	related_limit = min(get_int_setting("ops_hub_related_row_limit", 500), 5000)
 
 	assignments = frappe.get_all(
 		"Job Assignment",
@@ -648,29 +984,7 @@ def get_ticket_detail(sr_name) -> dict:
 			)
 		qc_checklist = qc_rows
 
-	# Fetch status log (timeline)
-	status_rows = sr.get("status_log") or []
-	changed_users = tuple({row.changed_by for row in status_rows if row.changed_by})
-	changed_user_names = {
-		row.name: row.full_name or row.name
-		for row in frappe.get_all(
-			"User",
-			filters={"name": ("in", changed_users)},
-			fields=["name", "full_name"],
-			limit_page_length=len(changed_users),
-		)
-	} if changed_users else {}
-	status_log = [
-		{
-			"from_status": row.from_status,
-			"to_status": row.to_status,
-			"changed_by": row.changed_by,
-			"changed_by_name": changed_user_names.get(row.changed_by, row.changed_by or ""),
-			"changed_at": str(row.changed_at) if row.changed_at else "",
-			"hours_in_prev": flt(row.get("time_in_previous_status_hours")),
-		}
-		for row in status_rows
-	]
+	status_log = _build_status_timeline(sr)
 
 	all_solutions_done = (
 		len(solution_lines) > 0
@@ -693,7 +1007,7 @@ def get_ticket_detail(sr_name) -> dict:
 	return {
 		"name": sr.name,
 		"decision": sr.decision,
-		"status": sr.status or sr.decision,
+		"status": sr.decision,
 		"priority": sr.priority,
 		"customer": sr.customer,
 		"customer_name": sr.customer_name,
@@ -718,6 +1032,11 @@ def get_ticket_detail(sr_name) -> dict:
 		"expected_completion_date": str(sr.expected_completion_date) if sr.expected_completion_date else "",
 		"actual_completion_date": str(sr.get("actual_completion_date") or ""),
 		"source_warehouse": sr.source_warehouse or "",
+		# Where the device physically is, so the hub can offer the right move:
+		# send it away, or send it home.
+		"transfer_status": sr.get("transfer_status") or "",
+		"transferred_to_store": sr.get("transferred_to_store") or "",
+		"current_location": sr.get("current_location") or "",
 		"estimated_cost": flt(sr.estimated_cost),
 		"total_estimated_cost": flt(sr.get("total_estimated_cost") or 0),
 		"analysis_confirmed": cint(sr.get("analysis_confirmed")),
@@ -761,6 +1080,26 @@ def get_ticket_detail(sr_name) -> dict:
 
 
 # ── Step 1: Technical Analysis ────────────────────────────────────────────────
+
+def _invalidate_qc_checklist(service_order) -> int:
+	"""Clear recorded QC results so the next QC starts from a blank checklist.
+
+	A pass recorded before a late issue was found certified a smaller scope.
+	Leaving those results in place would let the re-run inherit ticks nobody
+	re-checked, so the results are cleared while the rows themselves stay —
+	the checklist template does not need rebuilding, only re-answering.
+	"""
+	rows = frappe.get_all(
+		"GoFix QC Checklist", filters={"parent": service_order}, pluck="name"
+	)
+	for name in rows:
+		frappe.db.set_value(
+			"GoFix QC Checklist", name,
+			{"result": "", "remarks": "", "fail_reason": ""},
+			update_modified=False,
+		)
+	return len(rows)
+
 
 @frappe.whitelist(methods=["POST"])
 def save_issue_lines(sr_name, issues_json) -> dict:
@@ -813,7 +1152,19 @@ def save_issue_lines(sr_name, issues_json) -> dict:
 		so_state = frappe.db.get_value(
 			"Sales Order", sr.service_order, ["qc_status", "workflow_state"], as_dict=True
 		)
-		if not gaps["ready_for_qc"] and so_state and so_state.workflow_state == "QC Awaiting":
+		# Reset whether QC is still awaiting OR has already passed: a repair
+		# certified before this issue existed was certified against a different
+		# scope, so the sign-off no longer covers the device and QC must be
+		# re-run from the start on the full set of work.
+		qc_reached = bool(
+			so_state
+			and (
+				so_state.workflow_state == "QC Awaiting"
+				or (so_state.qc_status or "") in ("Awaiting", "Pass")
+			)
+		)
+		if not gaps["ready_for_qc"] and qc_reached:
+			_invalidate_qc_checklist(sr.service_order)
 			frappe.db.set_value("Sales Order", sr.service_order, {
 				"qc_status": "Pending",
 				"workflow_state": "Work in Progress",
@@ -907,11 +1258,23 @@ def confirm_analysis(sr_name) -> dict:
 
 	sr.save()
 
+	updates = {}
 	if frappe.db.has_column("Service Request", "analysis_confirmed"):
-		frappe.db.set_value("Service Request", sr_name, "analysis_confirmed", 1, update_modified=False)
+		updates["analysis_confirmed"] = 1
 
-	_log_ops_stage(sr_name, "analysis", "confirm")
-	return {"ok": True, "stage": "confirm"}
+	# Confirming the analysis IS the repairability verdict. The technician has
+	# looked at the device and listed work that can be done, so the placeholder
+	# "Pending Analysis" is now answered — and it has to be, because the Service
+	# Order gate reads this field and a repair with no verdict can never be
+	# quoted. A real verdict already recorded (Not Repairable / BER, which take
+	# the spare-recovery path) is never overwritten.
+	if (sr.get("repairability_status") or "Pending Analysis") == "Pending Analysis":
+		updates["repairability_status"] = "Repairable"
+
+	frappe.db.set_value("Service Request", sr_name, updates, update_modified=False)
+
+	_log_ops_stage(sr_name, "analysis", "solutions")
+	return {"ok": True, "stage": "solutions"}
 
 
 # ── Step 2: Customer Confirmation ─────────────────────────────────────────────
@@ -975,16 +1338,98 @@ def send_confirmation_whatsapp(sr_name) -> dict:
 	return {"ok": True, "whatsapp_sent": sent}
 
 
+@frappe.whitelist()
+def get_estimate_breakdown(sr_name) -> dict:
+	"""Price the chosen repairs so Confirm can show a real number.
+
+	The Confirm step used to render a hand-typed ``estimated_cost``, which is
+	why it read Rs 0 -- nothing ever priced the ticket. This runs the same
+	engine the estimate versions use, so what the customer is asked to approve
+	is what the rate card actually says.
+
+	Returns the breakdown plus ``priced``: False when there is nothing to price
+	yet, so the UI can say so instead of showing a misleading zero.
+	"""
+	_assert_sr_permission(sr_name, "read")
+	sr = frappe.get_doc("Service Request", sr_name)
+
+	solutions = [
+		r for r in (sr.get("solution_lines") or [])
+		if r.status not in ("Cancelled", "Skipped") and r.repair_solution
+	]
+	if not solutions:
+		return {
+			"priced": False,
+			"reason": _("No repair has been chosen yet — pick the work on the Solutions step."),
+			"labour": 0, "parts": 0, "total": 0, "lines": [],
+		}
+
+	from gofix.gofix_services.doctype.gofix_pricing_rule.gofix_pricing_rule import (
+		calculate_estimate_from_rules,
+	)
+
+	result = calculate_estimate_from_rules(
+		issue_categories=[r.issue_category for r in (sr.get("issue_lines") or [])],
+		solutions=[
+			{"repair_solution": r.repair_solution, "issue_category": r.issue_category}
+			for r in solutions
+		],
+		brand=sr.get("brand"),
+		warranty_status=sr.get("warranty_status"),
+		company=sr.get("company"),
+		warranty_plan=sr.get("warranty_plan"),
+		device_item=sr.get("device_item"),
+	)
+	return {
+		"priced": True,
+		"labour": flt(result.get("labor_total")),
+		"parts": flt(result.get("spare_total")),
+		"total": flt(result.get("estimate_total")),
+		"lines": result.get("line_details") or [],
+		"stored": flt(sr.get("estimated_cost")),
+	}
+
+
 @frappe.whitelist(methods=["POST"])
 def mark_customer_confirmed(sr_name) -> dict:
-	"""Mark customer as having confirmed the estimate and issues list."""
+	"""Customer approves the diagnosed quote — this is where the job becomes an order.
+
+	By this point Analysis has confirmed what is wrong and Solutions has chosen
+	the work, so a price finally exists to approve. Recording that approval
+	raises the Service Order (the Sales Order), which is the correct moment for
+	it: SAP's service order and Dynamics' work order are both created when the
+	quotation is accepted, not at check-in.
+
+	A ticket that came through the remote Accept path already has its Service
+	Order, so this only marks the confirmation.
+	"""
 	_assert_sr_permission(sr_name, "write")
+	sr = frappe.get_doc("Service Request", sr_name)
 
 	if frappe.db.has_column("Service Request", "customer_confirmed"):
 		frappe.db.set_value("Service Request", sr_name, "customer_confirmed", 1, update_modified=True)
 
-	_log_ops_stage(sr_name, "confirm", "solutions")
-	return {"ok": True, "stage": "solutions"}
+	service_order = sr.service_order
+	if not service_order:
+		from gofix.gofix_services import orchestration
+
+		# Price the chosen solutions, then record the customer's acceptance of
+		# that figure. Approval is what creates the Service Order.
+		orchestration.create_estimate_version(sr_name, reason=None, send_to_customer=False)
+		orchestration.customer_approve_estimate(
+			sr_name, remarks=_("Customer confirmed the estimate at the Ops Hub")
+		)
+		sr.reload()
+		service_order = sr.service_order
+		if not service_order:
+			frappe.throw(
+				_("Customer confirmation recorded but no Service Order was created — "
+				  "check that analysis is confirmed and the estimate is approved."),
+				title=_("Service Order Not Created"),
+			)
+
+	_log_ops_stage(sr_name, "confirm", "assign")
+	return {"ok": True, "stage": "assign", "service_order": service_order}
 
 
 # ── Step 3: Solution Assignment ───────────────────────────────────────────────
@@ -1046,11 +1491,7 @@ def get_solutions_for_issue(issue_category) -> dict:
 @frappe.whitelist(methods=["POST"])
 def quick_create_solution(solution_name, issue_category, estimated_minutes=30, requires_spare=0, description="") -> dict:
 	"""Quick-create a Repair Solution from the Ops Hub solutions step."""
-	require_role_setting(
-		"service_manager_roles",
-		("Service Manager", "System Manager", "GoFix Floor Manager"),
-		action=_("create a repair solution"),
-	)
+	frappe.has_permission("Repair Solution", ptype="create", throw=True)
 
 	solution_name = (solution_name or "").strip()
 	if not solution_name:
@@ -1198,11 +1639,21 @@ def save_solution_assignment(sr_name, solutions_json) -> dict:
 		if sol.get("auto_add_spares"):
 			from gofix.gofix_services.api import is_spare_compatible_with_device
 
-			for sp in spare_mapping_by_sol.get(sol.get("repair_solution"), []):
-				# Never auto-add a spare that doesn't fit this device
-				# (brand / category / model applicability ladder).
-				if not is_spare_compatible_with_device(sp.spare_item, sr.device_item):
-					continue
+			# A repair consumes ONE part. Several grades of the same part fit the
+			# same device -- an iPhone 11 screen exists as Compatible and as
+			# Original -- so adding every fitting spare put both on the job card
+			# and billed the customer twice for one screen. Pick the same single
+			# spare the estimate quotes (cheapest fitting) so the quote and the
+			# job card cannot disagree; the alternatives stay swappable by hand.
+			fitting = [
+				sp for sp in spare_mapping_by_sol.get(sol.get("repair_solution"), [])
+				if is_spare_compatible_with_device(sp.spare_item, sr.device_item)
+			]
+			fitting.sort(
+				key=lambda sp: spare_price_map.get(sp.spare_item)
+				or spare_std_rate_map.get(sp.spare_item, 0.0)
+			)
+			for sp in fitting[:1]:
 				spare_rate = spare_price_map.get(sp.spare_item) or spare_std_rate_map.get(sp.spare_item, 0.0)
 				sr.append("spare_lines", {
 					"repair_solution": sol.get("repair_solution"),
@@ -1238,19 +1689,30 @@ def save_solution_assignment(sr_name, solutions_json) -> dict:
 
 	sr.save()
 
-	_log_ops_stage(sr_name, "solutions", "assign")
-	return {"ok": True, "solution_count": len(sr.solution_lines), "stage": "assign"}
+	_log_ops_stage(sr_name, "solutions", "confirm")
+	return {"ok": True, "solution_count": len(sr.solution_lines), "stage": "confirm"}
 
 
 # ── Step 4: Technician Assignment ─────────────────────────────────────────────
 
 @frappe.whitelist()
-def get_technicians_for_grade(minimum_grade=None, issue_category=None) -> dict:
-	"""Return active technicians, filtered by minimum grade level, with workload."""
+def get_technicians_for_grade(minimum_grade=None, issue_category=None, company=None) -> dict:
+	"""Return active technicians, filtered by minimum grade level, with workload.
+
+	Company-scoped: staff belong to a payroll before they belong to a store,
+	and a GoGizmo employee is not a GoFix technician. Defaults to the caller's
+	own company so an unqualified call cannot enumerate the whole group.
+	"""
+	frappe.has_permission("Employee", "read", throw=True)
+
 	row_limit = get_int_setting("token_queue_limit", 200)
+	company = company or frappe.defaults.get_user_default("Company")
+	emp_filters = {"status": "Active"}
+	if company:
+		emp_filters["company"] = company
 	employees = frappe.get_all(
 		"Employee",
-		filters={"status": "Active"},
+		filters=emp_filters,
 		fields=["name", "employee_name", "technician_grade", "designation"],
 		order_by="employee_name",
 		limit_page_length=row_limit,
@@ -1385,11 +1847,22 @@ def _solution_rows_for_assignment(sr, row_names=None) -> list:
 	selected = [row for row in rows if row.name in requested]
 	missing = requested - {row.name for row in selected}
 	if missing:
+		# Name the solution and say WHY it is not assignable — a child-row hash
+		# like "al24i2n8e6" tells the operator nothing. The usual cause is a
+		# stale browser tab: the row was Skipped/Cancelled after the page loaded.
+		by_name = {row.name: row for row in (sr.get("solution_lines") or [])}
+		described = []
+		for name in sorted(missing):
+			row = by_name.get(name)
+			if row:
+				described.append(_("{0} (status: {1})").format(row.repair_solution, _(row.status)))
+			else:
+				described.append(_("a row that no longer exists"))
 		frappe.throw(
-			_("Selected solution rows are not active on {0}: {1}").format(
-				sr.name, ", ".join(sorted(missing))
-			),
-			title=_("Invalid Solution Selection"),
+			_("These solutions on {0} can no longer be assigned: {1}. "
+			  "Refresh the page — a Skipped solution can be brought back with "
+			  "Restart on the Repair step.").format(sr.name, "; ".join(described)),
+			title=_("Solution Not Assignable"),
 		)
 	return selected
 
@@ -1595,9 +2068,43 @@ def advance_to_repair(sr_name) -> dict:
 	_assert_sr_permission(sr_name, "write")
 
 	sr = frappe.get_doc("Service Request", sr_name)
-	unassigned = [row for row in sr.get("solution_lines", []) if not row.technician and row.status != "Cancelled"]
+
+	# No bench time is spent on this device until the handset is known not to be
+	# reported stolen, the customer has agreed to any data access the repair
+	# needs, and the device can actually be booted for testing.
+	from gofix.compliance import assert_safe_to_start_work
+
+	assert_safe_to_start_work(sr, _("send this ticket to repair"))
+	# Skipped is not outstanding work — the same exclusion the Assign step and
+	# _solution_rows_for_assignment use. Counting it here made a ticket showing
+	# "1/1 assigned, 100%" refuse to advance.
+	outstanding = [
+		row for row in sr.get("solution_lines", [])
+		if row.status not in ("Cancelled", "Skipped")
+	]
+	assigned = [row for row in outstanding if row.technician]
+	unassigned = [row for row in outstanding if not row.technician]
+
+	# A repair is not one indivisible job. Different technicians take different
+	# solutions at different times — an L1 does the diagnosis while the screen
+	# is still on order, an L3 picks up the board work tomorrow. Requiring the
+	# whole ticket to be assigned before anyone may start is not how a service
+	# desk runs, so only a ticket with NOTHING assigned is held back.
+	if not assigned:
+		frappe.throw(
+			_("Assign at least one solution to a technician before starting repair."),
+			title=_("Nothing Assigned Yet"),
+		)
 	if unassigned:
-		frappe.throw(_("All solutions must be assigned before proceeding to repair."), title=_("Validation Error"))
+		frappe.msgprint(
+			_("Starting repair with {0} of {1} solutions assigned. Still unassigned: {2}. "
+			  "These can be assigned to another technician at any time.").format(
+				len(assigned), len(outstanding),
+				", ".join(row.repair_solution for row in unassigned),
+			),
+			title=_("Partially Assigned"),
+			indicator="orange",
+		)
 
 	_log_ops_stage(sr_name, "assign", "repair")
 	_mark_sr_in_service(sr_name)
@@ -1864,14 +2371,14 @@ def _assert_solution_parts_ready(sr_name, repair_solution) -> None:
 		if not item_flags.get("is_stock_item") or item_flags.get("gofix_universal_spare"):
 			continue
 		label = row.item_name or row.spare_item
-		if row.status in ("Awaiting Procurement", "Pending", "Reserved", "Issued"):
+		if row.status in ("Awaiting Procurement", "In Transit", "Pending", "Reserved", "Issued"):
 			frappe.throw(
 				_("{0} is not installed yet (status: {1}). Receive/install the part and record "
 				  "its serial via the spare line's ✎ button — or put this solution On Hold so "
 				  "other repairs can continue meanwhile.").format(label, _(row.status)),
 				title=_("Parts Not Installed"),
 			)
-		if row.status == "Consumed" and not (row.installed_part_serial or "").strip():
+		if row.status in ("Consumed", "Sold") and not (row.installed_part_serial or "").strip():
 			frappe.throw(
 				_("New part serial/IMEI is missing for {0}. Record it via the spare line's "
 				  "✎ button before marking this solution Done.").format(label),
@@ -1977,20 +2484,26 @@ def mark_spare_damaged(sr_name, spare_row_name, remarks="") -> dict:
 
 	if not remarks or not remarks.strip():
 		frappe.throw(_("Please provide a reason for marking the spare as damaged."), title=_("Validation Error"))
-	_bound_child_row(
+	row = _bound_child_row(
 		"SR Spare Line",
 		spare_row_name,
 		sr_name,
 		"spare_lines",
-		["name", "status"],
+		["name", "status", "spare_usage"],
 	)
-
-	frappe.db.set_value(
-		"SR Spare Line",
-		spare_row_name,
-		{"status": "Damaged", "remarks": remarks.strip()},
-		update_modified=True,
-	)
+	if row.spare_usage:
+		usage = frappe.get_doc("Spare Parts Usage", row.spare_usage)
+		if usage.docstatus == 1 and usage.part_status == "Consumed":
+			usage.recover_spare("Damaged by Technician", remarks.strip())
+		else:
+			usage.mark_defective("Technician Damage", remarks.strip(), "Dispose")
+	else:
+		frappe.db.set_value(
+			"SR Spare Line",
+			spare_row_name,
+			{"status": "Damaged", "remarks": remarks.strip()},
+			update_modified=True,
+		)
 	return {"ok": True}
 
 
@@ -2014,6 +2527,8 @@ def add_spare_to_ticket(sr_name, spare_item, qty, rate=0, repair_solution=None,
 
 	item = frappe.db.get_value("Item", spare_item, ["item_name", "stock_uom", "is_stock_item"], as_dict=True)
 	rate = flt(rate)
+	if not cint(item.get("is_stock_item")):
+		frappe.throw(_("Repair spares must be stock items."), title=_("Invalid Spare"))
 
 	# Auto-fetch selling price if rate not provided
 	if not rate:
@@ -2037,13 +2552,32 @@ def add_spare_to_ticket(sr_name, spare_item, qty, rate=0, repair_solution=None,
 		)
 
 	# ── Availability check ──────────────────────────────────────────────
+	# Serialize the availability check with competing reservations.  Standard
+	# Stock Reservation Entry does not support Service Request vouchers, so the
+	# draft Spare Parts Usage is our commitment record while ERPNext Bin remains
+	# the quantity authority.
+	frappe.db.sql(
+		"SELECT name FROM `tabBin` WHERE item_code = %s AND warehouse = %s FOR UPDATE",
+		(spare_item, warehouse),
+	)
 	avail = _get_spare_availability(spare_item, warehouse)
-	is_stock = cint(item.get("is_stock_item"))
-	in_stock = (avail["available_qty"] >= qty) if is_stock else True
+	in_stock = avail["available_qty"] >= qty
 
-	# When spare is in stock it is being consumed immediately for this repair.
-	# "Awaiting Procurement" is set only when the part needs to be ordered first.
-	status = "Consumed" if in_stock else "Awaiting Procurement"
+	# Not on the bench? Look across the network before buying one. A part idle
+	# on a sibling branch's shelf beats a purchase order and a waiting customer.
+	# `best_source` searches bench → zone hub → main hub → any other store, and
+	# counts only FREE stock, so a part promised to another ticket is skipped.
+	network_source = None
+	if not in_stock:
+		from gofix.spare_sourcing import best_source
+
+		network_source = best_source(
+			spare_item, warehouse, qty, sr.company, exclude_sr=sr_name
+		)
+
+	# The child row is the plan. Stock is consumed only by submitting the bound
+	# Spare Parts Usage execution record below.
+	status = "Reserved" if in_stock else "Awaiting Procurement"
 
 	sr.flags.ignore_validate_update_after_submit = True
 	sr.flags.ignore_mandatory = True
@@ -2065,44 +2599,89 @@ def add_spare_to_ticket(sr_name, spare_item, qty, rate=0, repair_solution=None,
 
 	sr.save()
 
-	# P1 FIX: Create Material Issue SE for consumed spare
-	if status == "Consumed":
-		_spare_dict = {
-			"item_code": spare_item,
-			"qty": qty,
+	usage_name = None
+	stock_entry = None
+	approval_required = False
+	if in_stock:
+		plan_row = sr.spare_lines[-1]
+		usage = frappe.get_doc({
+			"doctype": "Spare Parts Usage",
+			"service_request": sr.name,
+			"service_request_spare_line": plan_row.name,
 			"warehouse": warehouse,
-			"serial_no": None,
-			"doctype": "SR Spare Line",
-			"name": sr.spare_lines[-1].name if sr.spare_lines else None,
-		}
-		so_name = sr.service_order
-		try:
-			_se = frappe.new_doc("Stock Entry")
-			_se.stock_entry_type = "Material Issue"
-			_se.purpose = "Material Issue"
-			_se.company = frappe.db.get_value("Sales Order", so_name, "company") if so_name else (sr.company or frappe.defaults.get_user_default("Company"))
-			_se.posting_date = frappe.utils.today()
-			_se.custom_gofix_service_order = so_name
-			_se_item = _se.append("items", {
-				"item_code": _spare_dict.get("item_code"),
-				"qty": flt(_spare_dict.get("qty", 1)),
-				"s_warehouse": _spare_dict.get("warehouse") or (frappe.db.get_value("Sales Order", so_name, "set_warehouse") if so_name else warehouse),
-			})
-			if _spare_dict.get("serial_no"):
-				_se_item.serial_no = _spare_dict.get("serial_no")
-			frappe.has_permission("Stock Entry", "create", throw=True)
-			_se.insert()
-			_se.submit()
-			if _spare_dict.get("name"):
-				frappe.db.set_value(_spare_dict.get("doctype") or "SR Spare Line", _spare_dict.get("name"), "custom_stock_entry", _se.name)
-		except Exception:
-			frappe.log_error(frappe.get_traceback(), f"Spare SE failed for {_spare_dict.get('item_code')} on {so_name}")
-			frappe.throw(
-				_("The spare could not be issued from stock. No ticket changes were saved."),
-				title=_("Stock Issue Failed"),
-			)
+			"spare_part_item": spare_item,
+			"qty_used": qty,
+			"uom": item.stock_uom or "Nos",
+			"sales_price": rate,
+			"barcode_value": (installed_part_serial or "").strip(),
+			"installed_part_serial": (installed_part_serial or "").strip(),
+			"removed_part_serial": (removed_part_serial or "").strip(),
+			"part_source": "Store Stock",
+			"part_status": "Reserved",
+			"status": "Active",
+		})
+		usage.insert()
+		usage_name = usage.name
+		frappe.db.set_value(
+			"SR Spare Line",
+			plan_row.name,
+			{"spare_usage": usage.name, "status": "Reserved"},
+			update_modified=False,
+		)
+		approval_required = bool(usage.requires_approval and usage.approval_status != "Approved")
 
-	return {"ok": True, "status": status, "available_qty": avail["available_qty"]}
+	# Nothing free at the bench: raise the requisition NOW, on the technician's
+	# behalf, rather than leaving the line for someone to notice and chase. It is
+	# a transfer when the network has the part and a purchase when it does not,
+	# and either way it goes out released — see _raise_spare_requisition.
+	requisition = None
+	sourced_from = None
+	plan_line = sr.spare_lines[-1]
+	if not in_stock:
+		try:
+			if network_source:
+				sourced_from = network_source
+				requisition = _raise_spare_requisition(
+					sr, [plan_line],
+					mr_type="Material Transfer",
+					destination=warehouse,
+					source_warehouse=network_source["warehouse"],
+					reason=_("Free stock found at {0} ({1}).").format(
+						network_source["warehouse"], network_source["tier_label"]
+					),
+				)
+			else:
+				requisition = _raise_spare_requisition(
+					sr, [plan_line],
+					mr_type="Purchase",
+					destination=warehouse,
+					reason=_("No free stock at the bench, the hubs or any other store."),
+				)
+		except Exception:
+			# The spare line is the technician's request and must survive even if
+			# the requisition could not be raised; the ticket's spare request
+			# button retries it.
+			frappe.log_error(frappe.get_traceback(), f"GoFix: auto-requisition failed for {sr_name}")
+
+		if requisition:
+			updates = {"material_request": requisition}
+			if plan_line.meta.get_field("expected_date"):
+				updates["expected_date"] = add_days(
+					nowdate(), get_int_setting("spare_procurement_lead_days", 3)
+				)
+			frappe.db.set_value("SR Spare Line", plan_line.name, updates, update_modified=False)
+
+	return {
+		"ok": True,
+		"status": status,
+		"available_qty": avail["available_qty"],
+		"spare_line": plan_row.name if in_stock else plan_line.name,
+		"spare_usage": usage_name,
+		"stock_entry": stock_entry,
+		"approval_required": approval_required,
+		"material_request": requisition,
+		"sourced_from": sourced_from,
+	}
 
 
 @frappe.whitelist()
@@ -2412,39 +2991,15 @@ def get_spare_availability(item_code, warehouse) -> dict:
 
 
 def _get_spare_availability(item_code, warehouse) -> dict:
-	"""Check available qty for a spare in warehouse, accounting for reservations.
+	"""Bin / reserved / free breakdown for a spare at one warehouse.
 
-	available_qty = bin.actual_qty − already-reserved-on-other-tickets
+	Delegates to :mod:`gofix.spare_sourcing`, which owns the definition of
+	"available" for the whole app so the single-warehouse check here and the
+	network-wide search cannot drift apart.
 	"""
-	actual_qty = flt(
-		frappe.db.get_value("Bin", {"item_code": item_code, "warehouse": warehouse}, "actual_qty")
-	)
+	from gofix.spare_sourcing import get_spare_availability
 
-	# Count already committed (reserved or consumed) across all SRs whose
-	# repair is effectively happening at this warehouse — transferred devices
-	# reserve hub stock, not their origin store's.
-	reserved_qty = flt(frappe.db.sql("""
-		SELECT COALESCE(SUM(sl.qty), 0)
-		FROM `tabSR Spare Line` sl
-		JOIN `tabService Request` sr ON sr.name = sl.parent
-		WHERE sl.spare_item = %(item)s
-		  AND sl.status IN ('Reserved', 'Consumed')
-		  AND sl.parenttype = 'Service Request'
-		  AND (
-			CASE
-				WHEN sr.transfer_status IN ('In Transit', 'Received at Service Center')
-					AND COALESCE(sr.transferred_to_store, '') != ''
-				THEN sr.transferred_to_store
-				ELSE COALESCE(NULLIF(sr.current_location, ''), sr.source_warehouse)
-			END
-		  ) = %(wh)s
-	""", {"item": item_code, "wh": warehouse})[0][0])
-
-	return {
-		"actual_qty": actual_qty,
-		"reserved_qty": reserved_qty,
-		"available_qty": actual_qty - reserved_qty,
-	}
+	return get_spare_availability(item_code, warehouse)
 
 
 @frappe.whitelist(methods=["POST"])
@@ -2456,7 +3011,17 @@ def release_spare_reservation(sr_name, spare_row_name) -> dict:
 	sr.flags.ignore_mandatory = True
 
 	for row in sr.spare_lines:
-		if row.name == spare_row_name and row.status in ("Reserved", "Awaiting Procurement", "Pending"):
+		if row.name == spare_row_name and row.status in ("Reserved", "Awaiting Procurement", "In Transit", "Pending"):
+			usage_name = row.get("spare_usage") or frappe.db.get_value(
+				"Spare Parts Usage",
+				{"service_request_spare_line": row.name, "docstatus": ("<", 2)},
+				"name",
+			)
+			if usage_name:
+				usage = frappe.get_doc("Spare Parts Usage", usage_name)
+				if usage.docstatus != 0:
+					frappe.throw(_("Consumed spare usage {0} must be recovered, not removed.").format(usage.name))
+				usage.delete()
 			sr.remove(row)
 			sr.save()
 			return {"ok": True}
@@ -2464,19 +3029,134 @@ def release_spare_reservation(sr_name, spare_row_name) -> dict:
 	frappe.throw(_("Spare line not found or not in a removable state."))
 
 
+def _raise_spare_requisition(sr, lines, *, mr_type, destination, source_warehouse=None,
+                             reason="") -> str:
+	"""Raise ONE requisition for `lines` and release it to whoever must act.
+
+	Two shapes, same document:
+
+	* ``Material Transfer`` — the part exists somewhere in the network and is
+	  being pulled to the bench. No money is involved; the stock is already ours.
+	* ``Purchase`` — the part exists nowhere and has to be bought.
+
+	Both are released immediately (``custom_approval_status = "Approved"``,
+	then submitted) rather than parked for a stock manager. The approval gate
+	exists to weigh a discretionary purchase, and a GoFix spare requisition is
+	not one: the sourcing search has already proved there is no free stock
+	anywhere in the company, so the only alternatives are to buy the part or to
+	leave a customer's device on the bench. Somebody rubber-stamping an
+	unavoidable purchase adds delay, not control.
+
+	The release is recorded on the document — who it was raised for, which
+	ticket, and the sourcing evidence behind it — so it reads as a policy
+	decision with a reason rather than a silently bypassed gate.
+
+	NOTE this is deliberately narrow: it fires only for catalogued GoFix spares
+	requisitioned against a Service Request. Every other Material Request keeps
+	the standard approval gate, which is untouched.
+	"""
+	lead_days = get_int_setting("spare_procurement_lead_days", 3)
+	schedule_date = add_days(nowdate(), lead_days)
+
+	mr = frappe.new_doc("Material Request")
+	mr.material_request_type = mr_type
+	mr.company = sr.company or frappe.defaults.get_user_default("Company")
+	mr.service_request = sr.name
+	mr.transaction_date = nowdate()
+	mr.schedule_date = schedule_date
+	mr.set_warehouse = destination
+	if mr_type == "Material Transfer" and source_warehouse:
+		mr.set_from_warehouse = source_warehouse
+	mr.title = f"Spares for {sr.name} — {sr.customer_name or sr.customer}"
+	if mr.meta.get_field("custom_request_notes"):
+		mr.custom_request_notes = reason
+
+	for sl in lines:
+		row = {
+			"item_code": sl.spare_item,
+			"item_name": sl.item_name,
+			"qty": sl.qty,
+			"uom": sl.uom or "Nos",
+			"warehouse": destination,
+			"schedule_date": schedule_date,
+		}
+		if mr_type == "Material Transfer" and source_warehouse:
+			row["from_warehouse"] = source_warehouse
+		mr.append("items", row)
+
+	frappe.has_permission("Material Request", "create", throw=True)
+	mr.insert()
+
+	released = False
+	if mr.meta.get_field("custom_approval_status"):
+		mr.db_set("custom_approval_status", "Approved", update_modified=False)
+		mr.reload()
+	try:
+		mr.flags.ch_mr_approval_authorized = True
+		mr.submit()
+		released = True
+	except Exception:
+		# A requisition that cannot be released is still a requisition. Leave it
+		# for the purchase queue rather than losing the technician's request.
+		frappe.log_error(frappe.get_traceback(), f"GoFix: could not release {mr.name}")
+
+	mr.add_comment(
+		"Info",
+		_("Raised automatically for Service Request {0} on behalf of {1}. {2}").format(
+			f'<a href="/app/service-request/{sr.name}">{sr.name}</a>',
+			frappe.session.user,
+			reason,
+		),
+	)
+	if released and mr_type == "Purchase":
+		_notify_purchase_team(mr, sr)
+	return mr.name
+
+
+def _notify_purchase_team(mr, sr) -> None:
+	"""Tell whoever buys spares that a released requisition is waiting."""
+	try:
+		from ch_erp15.ch_erp15.store_request_api import _get_purchase_team_users
+
+		recipients = _get_purchase_team_users(mr.get("custom_store"), mr.company)
+	except Exception:
+		recipients = []
+	if not recipients:
+		return
+
+	notification = frappe.new_doc("Notification Log")
+	notification.subject = _("Spare purchase {0} released for repair {1}").format(mr.name, sr.name)
+	notification.email_content = _(
+		"No free stock for these spares anywhere in the network, so the requisition "
+		"was released straight to purchasing. Device: {0}. Customer: {1}."
+	).format(sr.device_item_name or sr.device_item or "—", sr.customer_name or sr.customer or "—")
+	notification.document_type = "Material Request"
+	notification.document_name = mr.name
+	notification.type = "Alert"
+	for user in recipients:
+		notification.for_user = user
+		notification.flags.ignore_permissions = True
+		notification.insert(ignore_permissions=True)
+		notification = frappe.copy_doc(notification)
+
+
 @frappe.whitelist(methods=["POST"])
 def raise_material_request(sr_name) -> dict:
-	"""Raise a single Material Request for all spares on this SR that need procurement.
+	"""Source every spare still awaiting procurement on this ticket.
 
-	Collects all spare_lines with status = 'Awaiting Procurement' and creates one MR
-	linked to the Service Request.
+	Each spare is searched across the network — bench, zone hub, main hub, then
+	any other store holding a free one — and requisitioned from wherever it is
+	nearest. Anything the network cannot supply is bought.
 	"""
 	_assert_sr_permission(sr_name, "write")
 	sr = frappe.get_doc("Service Request", sr_name)
 
-	pending_lines = [sl for sl in sr.spare_lines if sl.status == "Awaiting Procurement"]
+	pending_lines = [
+		sl for sl in sr.spare_lines
+		if sl.status == "Awaiting Procurement" and not sl.get("material_request")
+	]
 	if not pending_lines:
-		frappe.throw(_("No spares awaiting procurement on this ticket."))
+		frappe.throw(_("No spares awaiting sourcing on this ticket."))
 
 	# Procure to wherever the repair is physically happening (hub when the
 	# device has been transferred, else the source store).
@@ -2484,46 +3164,72 @@ def raise_material_request(sr_name) -> dict:
 	if not warehouse:
 		frappe.throw(_("Source warehouse not set on Service Request."))
 
-	mr = frappe.new_doc("Material Request")
-	mr.material_request_type = "Purchase"
-	mr.company = sr.company or frappe.defaults.get_user_default("Company")
-	mr.service_request = sr_name
-	mr.transaction_date = nowdate()
-	lead_days = get_int_setting("spare_procurement_lead_days", 3)
-	mr.schedule_date = add_days(nowdate(), lead_days)
-	mr.set_warehouse = warehouse
-	mr.title = f"Spares for {sr_name} — {sr.customer_name or sr.customer}"
+	from gofix.spare_sourcing import best_source
 
+	# Group by where each part is coming from: one requisition per source, so a
+	# transfer from one store does not get mixed with a purchase.
+	transfers, to_buy = {}, []
 	for sl in pending_lines:
-		mr.append("items", {
-			"item_code": sl.spare_item,
-			"item_name": sl.item_name,
-			"qty": sl.qty,
-			"uom": sl.uom or "Nos",
-			"warehouse": warehouse,
-			"schedule_date": add_days(nowdate(), lead_days),
-		})
+		source = best_source(sl.spare_item, warehouse, flt(sl.qty), sr.company, exclude_sr=sr.name)
+		if source and source["warehouse"] != warehouse:
+			transfers.setdefault(source["warehouse"], []).append((sl, source))
+		else:
+			to_buy.append(sl)
 
-	frappe.has_permission("Material Request", "create", throw=True)
-	mr.insert()
-	mr.submit()
+	raised = []
+	for source_wh, rows in transfers.items():
+		label = rows[0][1]["tier_label"]
+		mr_name = _raise_spare_requisition(
+			sr, [row[0] for row in rows],
+			mr_type="Material Transfer",
+			destination=warehouse,
+			source_warehouse=source_wh,
+			reason=_("Free stock found at {0} ({1}).").format(source_wh, label),
+		)
+		raised.append((mr_name, [row[0] for row in rows], _("transfer from {0}").format(label)))
 
-	# Update spare_lines with MR reference
+	if to_buy:
+		mr_name = _raise_spare_requisition(
+			sr, to_buy,
+			mr_type="Purchase",
+			destination=warehouse,
+			reason=_("No free stock at the bench, the hubs or any other store."),
+		)
+		raised.append((mr_name, to_buy, _("purchase")))
+
 	sr.flags.ignore_validate_update_after_submit = True
 	sr.flags.ignore_mandatory = True
-	for sl in pending_lines:
-		sl.material_request = mr.name
+	for mr_name, rows, _kind in raised:
+		for sl in rows:
+			sl.material_request = mr_name
+			# A first, provisional date from the configured lead time so the
+			# ticket can answer "when?" before a supplier has committed. The
+			# purchase order overwrites it with the real promise.
+			if sl.meta.get_field("expected_date"):
+				sl.expected_date = add_days(nowdate(), get_int_setting("spare_procurement_lead_days", 3))
 	sr.save()
 
+	summary = []
+	for mr_name, rows, kind in raised:
+		items = ", ".join(f"{sl.item_name or sl.spare_item} × {sl.qty:g}" for sl in rows)
+		summary.append(f"{mr_name} — {items} ({kind})")
+		sr.add_comment("Comment", _("Spare request {0} raised for {1} — {2}.").format(mr_name, items, kind))
+
 	frappe.msgprint(
-		_("Material Request {0} created for {1} spare(s).").format(
-			f'<a href="/app/material-request/{mr.name}">{mr.name}</a>',
-			len(pending_lines),
+		"<br>".join(
+			f'<a href="/app/material-request/{line.split(" — ")[0]}">{line}</a>' for line in summary
 		),
-		title=_("Material Request Created"),
+		title=_("Spare Requests Raised"),
 		indicator="green",
 	)
-	return {"ok": True, "material_request": mr.name, "count": len(pending_lines)}
+	return {
+		"ok": True,
+		"material_requests": [mr for mr, _r, _k in raised],
+		"material_request": raised[0][0] if raised else None,
+		"count": len(pending_lines),
+		"transfers": len(transfers),
+		"purchases": 1 if to_buy else 0,
+	}
 
 
 @frappe.whitelist(methods=["POST"])
@@ -2564,11 +3270,6 @@ def submit_for_qc(sr_name) -> dict:
 	This calls the existing workflow: sets qc_status=Awaiting on the SO and
 	populates the QC checklist template.
 	"""
-	require_role_setting(
-		"engineer_operation_roles",
-		("Sales Manager", "System Manager", "Service Manager", "Service Engineer"),
-		action=_("submit a repair for QC"),
-	)
 	_assert_sr_permission(sr_name, "write")
 
 	sr = frappe.get_doc("Service Request", sr_name)
@@ -2579,27 +3280,53 @@ def submit_for_qc(sr_name) -> dict:
 	# force-completes assigned solutions, but it must never paper over an
 	# issue that has no solution at all.
 	from gofix.gofix_services.doctype.service_request.service_request import (
+		close_issues_with_completed_solutions,
 		get_unresolved_issue_gaps,
 	)
+
+	# Work that is finished closes its fault automatically, so the technician
+	# does not have to tick the issue off by hand after doing the repair.
+	closed = close_issues_with_completed_solutions(sr)
+	if closed:
+		sr.flags.ignore_validate_update_after_submit = True
+		sr.flags.ignore_mandatory = True
+		sr.save()
 
 	gaps = get_unresolved_issue_gaps(sr)
 	if gaps["uncovered_issues"]:
 		frappe.throw(
-			_("Cannot submit for QC — these issues have no repair solution yet: {0}. "
-			  "Assign a solution (or cancel the issue with a reason) first.").format(
+			_("Cannot submit for QC — these issues are still open: {0}.<br><br>"
+			  "Every issue must be closed first, either by <b>completing a repair</b> "
+			  "for it, or by <b>rejecting it with a reason</b> (set the issue to "
+			  "Cancelled or Not Reproducible on the Analysis step). "
+			  "Skipping a repair does not close the issue behind it.").format(
 				", ".join(gaps["uncovered_issues"])
 			),
-			title=_("All Issues Must Be Solved Before QC"),
+			title=_("All Issues Must Be Closed Before QC"),
 		)
 
 	_assert_removed_part_details_complete(sr)
 
-	# Mark remaining In-Progress / Planned solutions as Completed (skip Cancelled)
+	# QC certifies finished work, so every solution must actually BE finished.
+	# This used to force-complete anything still Planned or In Progress, which
+	# meant pressing "Submit for QC" silently marked unfinished repairs as done
+	# and QC then signed off on work nobody had performed. Skipped and Cancelled
+	# rows are deliberate decisions and are not outstanding.
+	outstanding = [
+		row for row in sr.get("solution_lines", [])
+		if row.status in ("Planned", "In Progress", "On Hold")
+	]
+	if outstanding:
+		frappe.throw(
+			_("Cannot submit for QC — these repairs are not finished yet: {0}. "
+			  "Complete each one (or skip it with a reason) before QC.").format(
+				", ".join(f"{row.repair_solution} ({row.status})" for row in outstanding)
+			),
+			title=_("Repairs Still In Progress"),
+		)
+
 	sr.flags.ignore_validate_update_after_submit = True
 	sr.flags.ignore_mandatory = True
-	for row in sr.get("solution_lines", []):
-		if row.status in ("Planned", "In Progress"):
-			row.status = "Completed"
 	sr.save()
 
 	# Complete any open Job Assignments so QC guard passes. Go through
@@ -2650,11 +3377,7 @@ def submit_for_qc(sr_name) -> dict:
 @frappe.whitelist(methods=["POST"])
 def save_qc_results(sr_name, checklist_json) -> dict:
 	"""Save QC checklist results on the linked Sales Order."""
-	require_role_setting(
-		"qc_approval_roles",
-		("QC Manager", "Store Manager", "System Manager"),
-		action=_("save QC results"),
-	)
+	frappe.has_permission("Service Request", ptype="submit", throw=True)
 	_assert_sr_permission(sr_name, "write")
 
 	sr = frappe.get_doc("Service Request", sr_name)
@@ -2681,11 +3404,7 @@ def complete_qc(sr_name, qc_result) -> dict:
 	Pass: triggers SR → Completed, sends to invoice.
 	Fail: sets qc_status=Fail, ops stage becomes 'rework'.
 	"""
-	require_role_setting(
-		"qc_approval_roles",
-		("QC Manager", "Store Manager", "System Manager"),
-		action=_("complete QC"),
-	)
+	frappe.has_permission("Service Request", ptype="submit", throw=True)
 	_assert_sr_permission(sr_name, "write")
 
 	if qc_result not in ("Pass", "Fail"):
@@ -2713,6 +3432,48 @@ def complete_qc(sr_name, qc_result) -> dict:
 	_assert_removed_part_details_complete(sr)
 
 	so = frappe.get_doc("Sales Order", sr.service_order)
+	# A pass is a sign-off. Where a checklist exists it must be answered — the hub
+	# offers Pass/Fail as soon as the QC step opens, which let a ticket be
+	# certified with the checklist still reading "No QC checklist found".
+	# A Fail stays open — a technician must be able to reject a device without
+	# first ticking every box.
+	if qc_result == "Pass":
+		checks = frappe.get_all(
+			"GoFix QC Checklist",
+			filters={"parent": sr.service_order},
+			fields=["check_name", "result", "is_mandatory"],
+		)
+		# No checklist at all is not a failure to inspect — it means no QC
+		# template matched this ticket's solutions, so there is nothing to
+		# answer. Blocking the pass there strands the repair: the checklist can
+		# never appear, and the invoice can never be raised. The sign-off is
+		# recorded on the ticket either way.
+		#
+		# A checklist that DOES exist is a different matter, and the rules below
+		# still hold: every check answered, and no Fail among them.
+		if not checks:
+			frappe.msgprint(
+				_("No QC checklist applies to this ticket, so the pass is recorded "
+				  "on your sign-off alone."),
+				indicator="orange",
+				alert=True,
+			)
+		unanswered = [c.check_name for c in checks if not (c.result or "").strip()]
+		if unanswered:
+			frappe.throw(
+				_("QC cannot pass with unanswered checks: {0}.").format(", ".join(unanswered)),
+				title=_("QC Checklist Incomplete"),
+			)
+		failed = [c.check_name for c in checks if (c.result or "") == "Fail"]
+		if failed:
+			frappe.throw(
+				_("These checks are marked Fail, so QC cannot be passed: {0}. "
+				  "Record a QC Fail instead, or re-check them after rework.").format(
+					", ".join(failed)
+				),
+				title=_("Failed Checks Present"),
+			)
+
 	so.db_set("qc_status", qc_result, update_modified=True)
 	so.db_set("qc_checked_by", frappe.session.user, update_modified=False)
 	so.db_set("qc_datetime", now_datetime(), update_modified=False)
@@ -2722,8 +3483,7 @@ def complete_qc(sr_name, qc_result) -> dict:
 		# The existing hook update_service_request_on_qc should fire,
 		# but set Completed explicitly as safety net:
 		if sr.decision != "Completed":
-			frappe.db.set_value("Service Request", sr_name, "decision", "Completed", update_modified=True)
-			frappe.db.set_value("Service Request", sr_name, "status", "Completed", update_modified=False)
+			sr.db_set("decision", "Completed", update_modified=True)
 		if frappe.db.has_column("Service Request", "workflow_state"):
 			frappe.db.set_value("Service Request", sr_name, "workflow_state", "Completed", update_modified=False)
 	else:
@@ -2810,38 +3570,28 @@ def _get_company_cost(sr) -> dict:
 	parts_cost = 0.0
 	damaged_cost = 0.0
 
-	lines = sr.get("spare_lines") or []
-	for row in lines:
-		qty = flt(row.qty) or 1
-		cost_rate = _spare_cost_rate(row.spare_item, flt(row.rate))
-		if row.status == "Damaged":
-			damaged_cost += qty * cost_rate
-		elif row.status in ("Consumed", "Issued"):
-			parts_cost += qty * cost_rate
-
-	if not lines:
-		# Legacy flow records consumption in Spare Parts Usage with an
-		# explicit purchase_cost — use it directly.
-		try:
-			spu = frappe.get_all(
-				"Spare Parts Usage",
-				filters={
-					"service_request": sr.name,
-					"status": "Active",
-					"part_status": ("in", ["Consumed", "Issued"]),
-				},
-				fields=["qty_used", "purchase_cost"],
-			)
-			parts_cost = sum(flt(r.purchase_cost) * flt(r.qty_used) for r in spu)
-		except Exception:
-			frappe.log_error(
-				frappe.get_traceback(),
-				f"GoFix company-cost resolution failed for {sr.name}",
-			)
-			frappe.throw(
-				_("Company cost could not be verified. Billing is blocked until the cost ledger is available."),
-				frappe.ValidationError,
-			)
+	try:
+		spu = frappe.get_all(
+			"Spare Parts Usage",
+			filters={"service_request": sr.name, "docstatus": ("<", 2), "deleted": 0},
+			fields=["qty_used", "purchase_cost", "part_status", "docstatus"],
+		)
+		parts_cost = sum(
+			flt(r.purchase_cost) * flt(r.qty_used)
+			for r in spu
+			if r.docstatus == 1 and r.part_status == "Consumed"
+		)
+		damaged_cost = sum(
+			flt(r.purchase_cost) * flt(r.qty_used)
+			for r in spu
+			if r.part_status == "Defective"
+		)
+	except Exception:
+		frappe.log_error(frappe.get_traceback(), f"GoFix company-cost resolution failed for {sr.name}")
+		frappe.throw(
+			_("Company cost could not be verified. Billing is blocked until the cost ledger is available."),
+			frappe.ValidationError,
+		)
 
 	labour = _get_labour_cost(sr)
 	total = parts_cost + damaged_cost + labour["cost"]
@@ -3038,7 +3788,11 @@ def get_service_billing_line(sr_name) -> dict:
 		pass
 	except Exception as e:
 		at_home_store = False
-		custody_message = str(e)
+		# The throw is written for Desk, where frappe.bold() renders. This value
+		# is JSON for the POS dialog, which escapes what it is given — so the
+		# markup arrived on screen as literal <strong> tags. Strip it here and
+		# let each surface do its own emphasis.
+		custody_message = frappe.utils.strip_html(str(e)).strip()
 
 	s = get_invoice_summary(sr_name)
 
@@ -3094,11 +3848,7 @@ def set_final_cost(sr_name, final_cost, reason=None) -> dict:
 	Counter staff may RAISE (the exception + its SoD-guarded approval is the
 	control, same doctrine as POS free-sale) — hence the broad role list.
 	"""
-	require_role_setting(
-		"billing_roles",
-		("Sales Manager", "System Manager", "Service Manager", "Store Manager", "Store Executive"),
-		action=_("set a final service cost"),
-	)
+	frappe.has_permission("Sales Invoice", ptype="create", throw=True)
 	_assert_sr_permission(sr_name, "write")
 
 	sr = frappe.get_doc("Service Request", sr_name)
@@ -3140,7 +3890,7 @@ def set_final_cost(sr_name, final_cost, reason=None) -> dict:
 			exception_status = result.get("status") or "Pending"
 			updates["below_cost_exception_request"] = exception_name
 
-	frappe.db.set_value("Service Request", sr_name, updates, update_modified=True)
+	sr.db_set(updates, update_modified=True)
 
 	return {
 		"final_cost": final_cost,
@@ -3157,11 +3907,6 @@ def create_ops_hub_invoice(sr_name, remote_otp=None) -> dict:
 
 	Falls back to Sales Order items when SR has no service_items / spare_parts.
 	"""
-	require_role_setting(
-		"billing_roles",
-		("Sales Manager", "System Manager", "Service Manager", "Store Manager", "Store Executive"),
-		action=_("create a service invoice"),
-	)
 	_assert_sr_permission(sr_name, "write")
 
 	sr = frappe.get_doc("Service Request", sr_name)
@@ -3278,6 +4023,13 @@ def create_ops_hub_invoice(sr_name, remote_otp=None) -> dict:
 		"custom_gofix_service_order": sr.service_order or "",
 	})
 
+	# Store-wise P&L — same attribution as ServiceRequest.create_service_invoice,
+	# so a repair billed through the Ops Hub lands on the same store's Cost
+	# Center as one billed from the Service Request.
+	from ch_item_master.ch_core.cost_center import apply_cost_center
+
+	apply_cost_center(inv, warehouse=sr.get("source_warehouse"))
+
 	frappe.has_permission("Sales Invoice", "create", throw=True)
 	inv.insert()
 
@@ -3301,11 +4053,11 @@ def create_ops_hub_invoice(sr_name, remote_otp=None) -> dict:
 	# Link back to SR. workflow_state/decision are workflow-provisioned
 	# columns — absent on sites without the SR workflow, so write only
 	# the columns that exist.
-	updates = {"service_invoice": inv.name, "status": "Invoiced"}
+	updates = {"service_invoice": inv.name}
 	for optional_col in ("decision", "workflow_state"):
 		if frappe.db.has_column("Service Request", optional_col):
 			updates[optional_col] = "Invoiced"
-	frappe.db.set_value("Service Request", sr_name, updates, update_modified=True)
+	sr.db_set(updates, update_modified=True)
 
 	from gofix.gofix_services.api import auto_close_service_order_after_billing
 
@@ -3320,11 +4072,6 @@ def reassign_after_qc_fail(sr_name, technician, job_type="Repair", manager_notes
 
 	Only failed QC items are sent for rework — passed solutions stay intact.
 	"""
-	require_role_setting(
-		"service_manager_roles",
-		("Service Manager", "System Manager", "GoFix Floor Manager"),
-		action=_("reassign failed QC work"),
-	)
 	_assert_sr_permission(sr_name, "write")
 
 	sr = frappe.get_doc("Service Request", sr_name)
@@ -3456,7 +4203,7 @@ def go_back_to_stage(sr_name, target_stage) -> dict:
 # ── Not Repairable Flow ───────────────────────────────────────────────────────
 
 @frappe.whitelist(methods=["POST"])
-def mark_not_repairable(sr_name, status="Not Repairable", reason="") -> dict:
+def mark_not_repairable(sr_name, status="Not Repairable", reason="", reason_code=None) -> dict:
 	"""Mark a Service Request as Not Repairable / BER from the Ops Hub.
 
 	Orchestrates:
@@ -3466,8 +4213,29 @@ def mark_not_repairable(sr_name, status="Not Repairable", reason="") -> dict:
 	  4) Return list of consumed spares needing recovery
 	"""
 	_assert_sr_permission(sr_name, "write")
+
+	# A coded reason turns this into something countable. Where the caller gives
+	# one, the shared closure path owns the whole decision — ticket, order,
+	# custody and comment — so the counter and the workshop record it
+	# identically. The older free-text call still works for anything not yet
+	# passing a code.
+	if reason_code:
+		from gofix.repair_closure import close_without_repair
+
+		result = close_without_repair(sr_name, status, reason_code, note=reason)
+		result["pending_spares"] = []
+		result["needs_spare_recovery"] = False
+		result["message"] = _("Marked as {0}").format(status)
+		return result
+
+	# Without a code this stays the old two-outcome path: the customer-decision
+	# outcomes only exist in the coded flow, because recording one of those as
+	# free text is exactly what this replaced.
 	if status not in ("Not Repairable", "BER"):
-		frappe.throw(_("Status must be 'Not Repairable' or 'BER'"))
+		frappe.throw(
+			_("{0} can only be recorded with a coded reason.").format(status),
+			title=_("Reason Required"),
+		)
 
 	sr = frappe.get_doc("Service Request", sr_name)
 	if sr.decision in ("Delivered", "Withdrawn", "Cancelled"):
@@ -3478,12 +4246,16 @@ def mark_not_repairable(sr_name, status="Not Repairable", reason="") -> dict:
 	# 1) Update SR
 	sr.flags.ignore_validate_update_after_submit = True
 	sr.flags.ignore_mandatory = True
+	# Fitted parts come back out before the device does.
+	from gofix.spare_lifecycle import assert_spares_recovered
+
+	assert_spares_recovered(sr_name, _("mark this device {0}").format(status))
+
 	sr.set("repairability_status", status)
 	sr.set("repairability_reason", reason)
 	sr.set("repairability_decided_by", frappe.session.user)
 	sr.set("repairability_decided_at", frappe.utils.now_datetime())
 	sr.set("decision", "Rejected")
-	sr.set("status", "Rejected")
 	sr.set("rejection_reason", reason or f"Device is {status}")
 	sr.save()
 
@@ -3514,21 +4286,55 @@ def mark_not_repairable(sr_name, status="Not Repairable", reason="") -> dict:
 
 	_log_ops_stage(sr_name, current_stage, "closed")
 
-	# 4) Update serial lifecycle
+	# 4) Serial lifecycle — but only for stock we own.
+	#
+	# "Not Repairable" is not a state on CH Serial Lifecycle at all; its states
+	# are inventory states (In Stock, In Service, Scrapped...). Asking for one
+	# that does not exist threw "Cannot move from In Stock to Not Repairable" at
+	# the operator, and the except below swallowed the exception without
+	# clearing the message, so the dialog appeared anyway.
+	#
+	# A customer's handset is not our inventory. It sits in a Customer Device
+	# custody bin at nil valuation and goes home to its owner; none of the
+	# inventory states describe that, so it is left alone rather than given a
+	# meaningless one. Our own stock that cannot be repaired is Scrapped, which
+	# is a legal move from every state a device in for repair can be in.
 	serial_no = sr.get("serial_no")
-	if serial_no:
+	if serial_no and not sr.get("customer_device_warehouse"):
+		messages = len(frappe.message_log)
 		try:
 			from ch_item_master.ch_item_master.doctype.ch_serial_lifecycle.ch_serial_lifecycle import (
 				update_lifecycle_status_for_document as update_lifecycle_status,
 			)
 			update_lifecycle_status(
 				serial_no=serial_no,
-				new_status="Not Repairable",
+				new_status="Scrapped",
 				company=sr.company,
 				remarks=_("{0} — {1}").format(status, reason or ""),
 			)
-		except (ImportError, Exception):
+		except Exception:
+			# Catching a frappe.throw does not un-queue its message, so a
+			# swallowed failure would still pop a dialog. Drop what this block
+			# queued; the log is where the detail belongs.
+			del frappe.message_log[messages:]
 			frappe.log_error(frappe.get_traceback(), f"Not Repairable: lifecycle update failed for {sr_name}")
+
+	# 5) The device leaves our custody. A ticket that ends Not Repairable still
+	# has the customer's handset on a shelf, and nothing was issuing it back
+	# out — the custody bin only ever grew. Issue it, and hand the customer the
+	# receipt for it.
+	handback_entry = None
+	try:
+		from gofix.customer_device_stock import release_customer_device
+
+		handback_entry = release_customer_device(
+			sr, reason=_("Closed {0}: {1}").format(status, reason or _("no reason given"))
+		)
+		if handback_entry:
+			sr.db_set("customer_device_released_entry", handback_entry, update_modified=False)
+	except Exception:
+		frappe.log_error(frappe.get_traceback(),
+		                 f"Not Repairable: custody release failed for {sr_name}")
 
 	# 4) Check for consumed spares that need recovery
 	pending_spares = frappe.get_all("Spare Parts Usage",
@@ -3541,6 +4347,10 @@ def mark_not_repairable(sr_name, status="Not Repairable", reason="") -> dict:
 		"message": _("Marked as {0}").format(status),
 		"pending_spares": pending_spares,
 		"needs_spare_recovery": len(pending_spares) > 0,
+		# The document that says the customer has their device back. The counter
+		# prints it at handover; without it the only record of the device leaving
+		# is a stock movement nobody sees.
+		"handback_entry": handback_entry,
 	}
 
 
@@ -3591,7 +4401,6 @@ def return_unrepaired_device(sr_name, remarks="") -> dict:
 	sr.flags.ignore_validate_update_after_submit = True
 	sr.flags.ignore_mandatory = True
 	sr.set("decision", "Delivered")
-	sr.set("status", "Delivered")
 	sr.set("delivery_remarks", remarks or _("Device returned to customer — {0}").format(
 		sr.repairability_status))
 	sr.set("actual_completion_date", frappe.utils.today())

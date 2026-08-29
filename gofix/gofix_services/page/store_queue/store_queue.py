@@ -47,7 +47,6 @@ def get_queue(warehouse=None, search=None, date_from=None, date_to=None, stage_f
 	Unlike Ops Hub (which requires a Service Order), this shows ALL requests
 	including new intakes that haven't been accepted yet.
 	"""
-	require_role_setting("service_access_roles", action=_("view the store service queue"))
 	frappe.has_permission("Service Request", "read", throw=True)
 	company = active_company(company)
 
@@ -59,7 +58,7 @@ def get_queue(warehouse=None, search=None, date_from=None, date_to=None, stage_f
 	filters = [
 		["service_date", ">=", date_from],
 		["service_date", "<=", date_to],
-		["status", "not in", ["Cancelled"]],
+		["decision", "not in", ["Cancelled"]],
 	]
 
 	if company:
@@ -88,7 +87,7 @@ def get_queue(warehouse=None, search=None, date_from=None, date_to=None, stage_f
 			"name", "customer", "customer_name", "contact_number",
 			"device_item", "device_item_name", "serial_no", "brand",
 			"issue_category", "issue_description",
-			"decision", "status", "priority",
+			"decision", "priority",
 			"service_date", "expected_completion_date",
 			"source_warehouse", "current_location",
 			"service_order", "estimated_cost",
@@ -113,6 +112,7 @@ def get_queue(warehouse=None, search=None, date_from=None, date_to=None, stage_f
 
 	# Classify each SR into a queue stage
 	for sr in sr_list:
+		sr["status"] = sr.get("decision")
 		sr["queue_stage"] = _classify_queue_stage(sr)
 		sr["queue_stage_label"] = QUEUE_STAGES.get(sr["queue_stage"], sr["queue_stage"])
 		sr["days_open"] = (getdate(nowdate()) - getdate(sr["service_date"])).days if sr.get("service_date") else 0
@@ -148,7 +148,6 @@ QUEUE_STAGES = {
 def _classify_queue_stage(sr):
 	"""Classify SR into a queue stage for store executive view."""
 	decision = sr.get("decision", "")
-	status = sr.get("status", decision)
 
 	# Terminal states
 	if decision == "Delivered":
@@ -268,7 +267,7 @@ def get_request_detail(sr_name) -> dict:
 		"warranty_status": sr.warranty_status or "",
 		"warranty_plan_name": sr.get("warranty_plan_name") or "",
 		"decision": sr.decision,
-		"status": sr.status,
+		"status": sr.decision,
 		"priority": sr.priority,
 		"estimated_cost": flt(sr.estimated_cost),
 		"service_date": str(sr.service_date) if sr.service_date else "",

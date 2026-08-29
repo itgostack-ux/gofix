@@ -22,7 +22,7 @@ class TestReleaseAuthorizationRegressions(TestCase):
 	def test_app_access_is_configured_and_guest_is_denied(self):
 		with patch("gofix.config.has_role_setting", return_value=False) as allowed:
 			self.assertFalse(utils.has_app_permission("Guest"))
-			allowed.assert_called_once_with("app_access_roles", defaults=(), user="Guest")
+			allowed.assert_called_once_with("app_access_roles", user="Guest")
 
 	def test_manager_without_explicit_scope_gets_deny_query(self):
 		with (
@@ -72,9 +72,8 @@ class TestReleaseAuthorizationRegressions(TestCase):
 
 	def test_job_assignment_creation_denies_before_loading_service_request(self):
 		with (
-			patch.object(
-				job_assignment,
-				"require_role_setting",
+			patch(
+				"frappe.has_permission",
 				side_effect=frappe.PermissionError("denied"),
 			),
 			patch.object(job_assignment, "assert_service_request_access") as scope_guard,

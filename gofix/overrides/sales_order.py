@@ -16,12 +16,6 @@ from gofix.config import (
 
 class CustomSalesOrder(SalesOrder):
 	"""Extended Sales Order with Service Order sync"""
-
-	def has_permission(self, permtype="read", user=None):
-		if self.is_new():
-			return frappe.has_permission("Sales Order", permtype, user=user)
-		return super().has_permission(permtype)
-	
 	_SERVER_EVIDENCE_FIELDS = (
 		"estimate_approval_status",
 		"estimate_approved_datetime",

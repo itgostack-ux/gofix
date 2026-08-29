@@ -2,7 +2,7 @@
  "actions": [],
  "allow_import": 1,
  "allow_rename": 1,
- "autoname": "field:solution_name",
+ "autoname": "field:solution_code",
  "creation": "2026-04-04 12:00:00.000000",
  "doctype": "DocType",
  "editable_grid": 1,
@@ -19,6 +19,8 @@
   "estimated_minutes",
   "warranty_days",
   "requires_spare",
+  "section_break_applicability",
+  "applies_to",
   "section_break_skill",
   "minimum_grade",
   "skill_level",
@@ -36,8 +38,8 @@
    "in_standard_filter": 1,
    "label": "Solution Name",
    "reqd": 1,
-   "unique": 1,
-   "search_index": 1
+   "search_index": 1,
+   "description": "Display label. Two Issue Categories may each own a solution with the same label; the Solution Code is what makes them distinct."
   },
   {
    "fieldname": "issue_category",
@@ -57,7 +59,11 @@
    "fieldname": "solution_code",
    "fieldtype": "Data",
    "label": "Solution Code",
-   "description": "Short code for invoicing/reporting (e.g. SCR-REPL, BAT-REPL)"
+   "description": "Stable identity of this repair \u2014 this is the document name and the suffix of its GFR-* service Item. Generated from the solution name when left blank; do not recycle a retired code.",
+   "reqd": 1,
+   "unique": 1,
+   "bold": 1,
+   "in_list_view": 1
   },
   {
    "default": "1",
@@ -148,11 +154,23 @@
    "label": "Workmanship Warranty (Days)",
    "insert_after": "estimated_minutes",
    "description": "Warranty on the labour for this repair. The customer's cover is the shorter of this and the warranty on the parts fitted."
+  },
+  {
+   "fieldname": "section_break_applicability",
+   "fieldtype": "Section Break",
+   "label": "Applies To"
+  },
+  {
+   "fieldname": "applies_to",
+   "fieldtype": "Table",
+   "label": "Applies To Devices",
+   "options": "GoFix Solution Applicability",
+   "description": "Which devices this repair can be performed on. LEAVE EMPTY for a repair that applies to everything. A row matches when every column it fills in matches the device, so one row per device family is usually enough \u2014 Hinge Repair on Laptops, Strap Replacement on Watches."
   }
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-04-04 12:00:00.000000",
+ "modified": "2026-08-29 12:30:00.000000",
  "modified_by": "Administrator",
  "module": "GoFix Services",
  "name": "Repair Solution",
@@ -205,5 +223,6 @@
  "states": [],
  "title_field": "solution_name",
  "track_changes": 1,
- "search_fields": "solution_name,issue_category"
+ "search_fields": "solution_name,issue_category",
+ "show_title_field_in_link": 1
 }

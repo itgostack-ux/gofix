@@ -2455,6 +2455,120 @@ def is_spare_compatible_with_device(spare_item, device_item) -> bool:
 	return True
 
 
+def _device_profile(device_item) -> dict:
+	"""Every dimension an applicability row can be written against."""
+	row = frappe.db.get_value(
+		"Item", device_item,
+		["name", "brand", "ch_category", "ch_sub_category", "variant_of"],
+		as_dict=True,
+	)
+	if not row:
+		return {}
+	brand, category, sub = row.brand, row.ch_category, row.ch_sub_category
+	# A variant inherits what it does not override, exactly as the spare
+	# compatibility ladder already assumes.
+	if row.variant_of and not (brand and category and sub):
+		t = frappe.db.get_value(
+			"Item", row.variant_of, ["brand", "ch_category", "ch_sub_category"], as_dict=True
+		)
+		if t:
+			brand = brand or t.brand
+			category = category or t.ch_category
+			sub = sub or t.ch_sub_category
+	return {
+		"models": {m for m in (row.name, row.variant_of) if m},
+		"brand": (brand or "").strip().lower(),
+		"category": category,
+		"sub_category": sub,
+	}
+
+
+def get_solution_applicability(solutions) -> dict:
+	"""``{solution: [applicability row, ...]}`` for the given solutions.
+
+	One query for the whole picker — the alternative is a round trip per
+	solution per category, which is what makes a "just filter it" change slow.
+	"""
+	solutions = [s for s in (solutions or []) if s]
+	if not solutions or not frappe.db.table_exists("GoFix Solution Applicability"):
+		return {}
+	rows = frappe.db.sql(
+		"""
+		SELECT parent, device_category, device_sub_category, device_brand, device_model
+		FROM `tabGoFix Solution Applicability`
+		WHERE parenttype = 'Repair Solution' AND parent IN %(names)s
+		""",
+		{"names": tuple(solutions)},
+		as_dict=True,
+	)
+	out = {}
+	for r in rows:
+		out.setdefault(r.parent, []).append(r)
+	return out
+
+
+def _matches_rule(rule, profile) -> bool:
+	"""A rule matches when every column it FILLS IN matches the device.
+
+	Blank column = "any", so a one-column row ("Laptops") is the common case and
+	a fully-specified row pins an exact model of an exact brand.
+	"""
+	if not any((rule.get("device_category"), rule.get("device_sub_category"),
+			rule.get("device_brand"), rule.get("device_model"))):
+		# Narrows nothing. The parent strips these on save; one that reached the
+		# table by import must not silently match every device.
+		return False
+	if rule.get("device_model") and rule["device_model"] not in profile["models"]:
+		return False
+	if rule.get("device_category") and rule["device_category"] != profile["category"]:
+		return False
+	if rule.get("device_sub_category") and rule["device_sub_category"] != profile["sub_category"]:
+		return False
+	if rule.get("device_brand") and rule["device_brand"].strip().lower() != profile["brand"]:
+		return False
+	return True
+
+
+def does_solution_apply_to_device(repair_solution, device_item, rules=None) -> bool:
+	"""Return True if ``repair_solution`` may be performed on ``device_item``.
+
+	Applicability ladder, mirroring the spare-fitment one:
+	  1. Solution declares no rows      → universal, applies to everything.
+	  2. Device cannot be resolved      → applies (never hide work over missing
+	     master data; the spare ladder fails open the same way).
+	  3. Any declared row matches       → applies.
+	  4. Otherwise                      → does NOT apply.
+
+	This is what stops a phone being offered Hinge Repair and Strap
+	Replacement — laptop and watch operations that shared its Issue Category.
+	"""
+	if not repair_solution:
+		return True
+
+	if rules is None:
+		rules = get_solution_applicability([repair_solution]).get(repair_solution, [])
+	if not rules:
+		return True
+	if not device_item:
+		return True
+
+	profile = _device_profile(device_item)
+	if not profile or not (profile["models"] or profile["category"]
+			or profile["sub_category"] or profile["brand"]):
+		return True
+
+	return any(_matches_rule(r, profile) for r in rules)
+
+
+@frappe.whitelist()
+def check_solution_applicability(repair_solution, device_item) -> dict:
+	"""Whitelisted wrapper so the client can check before assigning."""
+	_require_reference_read(_("check solution applicability"), ("Repair Solution", "Item"))
+	frappe.has_permission("Repair Solution", "read", repair_solution, throw=True)
+	frappe.has_permission("Item", "read", device_item, throw=True)
+	return {"applies": does_solution_apply_to_device(repair_solution, device_item)}
+
+
 @frappe.whitelist()
 def check_spare_compatibility(spare_item, device_item) -> dict:
 	"""Whitelisted wrapper so the client can verify compatibility before adding."""

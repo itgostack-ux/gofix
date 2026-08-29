@@ -2612,6 +2612,7 @@ class GoFixOpsHub {
 
 	async _load_solutions_for_categories(d) {
 		const self = this;
+		const esc = frappe.utils.escape_html;
 		const activeIssues = (d.issue_lines || []).filter(r => r.status !== "Deleted");
 		const categories = [...new Set(activeIssues.map(i => i.issue_category).filter(Boolean))];
 		if (!categories.length) {
@@ -2619,36 +2620,64 @@ class GoFixOpsHub {
 			return;
 		}
 
-		let allHtml = "";
-		for (const cat of categories) {
-			const esc = frappe.utils.escape_html;
-			try {
-				const sols = await frappe.xcall(`${API}.get_solutions_for_issue`, { issue_category: cat });
-				const rows = (sols || []).map(s => `
+		// Solutions borrowed from another Issue Category. The picker asks the
+		// server for one category at a time, so a reused solution would vanish
+		// on the next reload unless it is carried here. Scoped to one job.
+		if (this._extraSolutionsFor !== d.name) {
+			this._extraSolutionsFor = d.name;
+			this._extraSolutions = {};
+		}
+
+		// Reloading the picker (after adding a solution) used to wipe every tick
+		// the user had already made. Carry them across the rebuild.
+		const wasChecked = new Set();
+		this.parent.find(".goh-sol-check:checked").each(function () {
+			wasChecked.add(`${$(this).data("category")} ${$(this).data("solution")}`);
+		});
+
+		const solRow = (s, cat, borrowedFrom) => {
+			const checked = (wasChecked.has(`${cat} ${s.name}`) || borrowedFrom) ? " checked" : "";
+			return `
 					<label class="goh-sol-option">
-						<input type="checkbox" class="goh-sol-check"
+						<input type="checkbox" class="goh-sol-check"${checked}
 							data-solution="${esc(s.name)}" data-category="${esc(cat)}"
 							data-code="${esc(s.solution_code || "")}" data-minutes="${s.estimated_minutes || 0}"
 							data-requires-spare="${s.requires_spare ? 1 : 0}">
 						<span class="goh-sol-name">${esc(s.solution_name || s.name)}</span>
 						<span class="text-muted small ml-2">${s.estimated_minutes || 0}min</span>
 						${s.requires_spare ? `<span class="goh-badge badge-yellow ml-1">${__("Spare")}</span>` : ""}
-					</label>
-				`).join("");
-				allHtml += `
-					<div class="goh-sol-category" data-category="${esc(cat)}">
-						<h6 class="goh-sol-cat-title"><i class="fa fa-tag"></i> ${esc(cat)}</h6>
-						${rows}
-						<button class="btn btn-xs btn-default goh-add-sol-btn mt-1" data-category="${esc(cat)}"><i class="fa fa-plus"></i> ${__("Add Solution")}</button>
-					</div>`;
-			} catch (_) {
-				allHtml += `
-					<div class="goh-sol-category" data-category="${esc(cat)}">
-						<h6 class="goh-sol-cat-title"><i class="fa fa-tag"></i> ${esc(cat)}</h6>
-						<p class="text-muted small">${__("No pre-defined solutions.")}</p>
-						<button class="btn btn-xs btn-default goh-add-sol-btn mt-1" data-category="${esc(cat)}"><i class="fa fa-plus"></i> ${__("Add Solution")}</button>
-					</div>`;
+						${borrowedFrom ? `<span class="goh-badge badge-blue ml-1" title="${__("Borrowed from another issue category")}">${esc(borrowedFrom)}</span>` : ""}
+					</label>`;
+		};
+
+		let allHtml = "";
+		for (const cat of categories) {
+			let rows = "";
+			let failed = false;
+			try {
+				const sols = await frappe.xcall(`${API}.get_solutions_for_issue`, {
+					issue_category: cat,
+					device_item: d.device_item || null,
+				});
+				rows = (sols || []).map(s => solRow(s, cat, null)).join("");
+			} catch (e) {
+				failed = true;
 			}
+
+			const borrowed = (this._extraSolutions[cat] || [])
+				.map(s => solRow(s, cat, s.owner_issue_category || __("Reused")))
+				.join("");
+
+			const body = (rows + borrowed) || (failed
+				? `<p class="text-muted small">${__("Could not load solutions.")}</p>`
+				: `<p class="text-muted small">${__("No solutions apply to this device in this category.")}</p>`);
+
+			allHtml += `
+					<div class="goh-sol-category" data-category="${esc(cat)}">
+						<h6 class="goh-sol-cat-title"><i class="fa fa-tag"></i> ${esc(cat)}</h6>
+						${body}
+						<button class="btn btn-xs btn-default goh-add-sol-btn mt-1" data-category="${esc(cat)}"><i class="fa fa-plus"></i> ${__("Add Solution")}</button>
+					</div>`;
 		}
 		this.parent.find("#goh-sol-picker").html(allHtml);
 
@@ -2665,26 +2694,83 @@ class GoFixOpsHub {
 				],
 				primary_action_label: __("Create & Select"),
 				primary_action: v => {
-					frappe.xcall(`${API}.quick_create_solution`, {
+					const call = (on_duplicate) => frappe.xcall(`${API}.quick_create_solution`, {
 						solution_name: v.solution_name,
 						issue_category: cat,
 						estimated_minutes: v.estimated_minutes || 30,
 						requires_spare: v.requires_spare ? 1 : 0,
 						description: v.description || "",
-					}).then(r => {
+						on_duplicate: on_duplicate || null,
+					});
+
+					call(null).then(r => {
 						dlg.hide();
-						if (r.exists) {
-							frappe.show_alert({ message: __("Solution '{0}' already exists — added to list.", [v.solution_name]), indicator: "blue" });
-						} else {
-							frappe.show_alert({ message: __("Solution created!"), indicator: "green" });
+						if (r.status === "exists_elsewhere") {
+							self._resolve_duplicate_solution(d, cat, r, call);
+							return;
 						}
-						// Reload solutions picker to show the new one
+						self._announce_solution_result(r, cat);
 						self._load_solutions_for_categories(d);
 					});
 				},
 			});
 			dlg.show();
 		});
+	}
+
+	/** Tell the user exactly what the server did — never claim more than that. */
+	_announce_solution_result(r, cat) {
+		const label = r.solution_name || r.name;
+		if (r.status === "created") {
+			frappe.show_alert({ message: __("Solution '{0}' created and selected.", [label]), indicator: "green" });
+		} else if (r.status === "reactivated") {
+			frappe.show_alert({ message: __("Solution '{0}' already existed here but was inactive — reactivated and selected.", [label]), indicator: "orange" });
+		} else if (r.status === "reused") {
+			frappe.show_alert({ message: __("Reusing '{0}' from {1} on this job.", [label, r.owner_issue_category]), indicator: "blue" });
+		} else {
+			frappe.show_alert({ message: __("Solution '{0}' already exists in {1} — tick it below.", [label, cat]), indicator: "blue" });
+		}
+	}
+
+	/**
+	 * The label is taken by a solution filed under a different Issue Category.
+	 * Name the category and let the user choose, rather than silently doing
+	 * nothing and reporting success.
+	 */
+	_resolve_duplicate_solution(d, cat, r, call) {
+		const self = this;
+		const esc = frappe.utils.escape_html;
+		const owners = (r.existing || []).map(e => e.issue_category);
+		const dlg = new frappe.ui.Dialog({
+			title: __("'{0}' already exists", [r.solution_name]),
+			fields: [{
+				fieldtype: "HTML",
+				options: `
+					<p>${__("A repair solution called <b>{0}</b> is already filed under <b>{1}</b>.",
+						[esc(r.solution_name), esc(owners.join(", "))])}</p>
+					<p class="text-muted small">${__("<b>Reuse</b> puts that same solution on this job — one catalogue entry, one service item, one price. <b>Create separate</b> makes a second solution owned by {0}, which is right only when the work genuinely differs.", [esc(cat)])}</p>`,
+			}],
+			primary_action_label: __("Reuse existing"),
+			primary_action: () => {
+				call("reuse").then(res => {
+					dlg.hide();
+					self._extraSolutions[cat] = (self._extraSolutions[cat] || [])
+						.filter(x => x.name !== res.name)
+						.concat([res]);
+					self._announce_solution_result(res, cat);
+					self._load_solutions_for_categories(d);
+				});
+			},
+			secondary_action_label: __("Create separate for {0}", [cat]),
+			secondary_action: () => {
+				call("duplicate").then(res => {
+					dlg.hide();
+					self._announce_solution_result(res, cat);
+					self._load_solutions_for_categories(d);
+				});
+			},
+		});
+		dlg.show();
 	}
 
 	_refresh_all() {

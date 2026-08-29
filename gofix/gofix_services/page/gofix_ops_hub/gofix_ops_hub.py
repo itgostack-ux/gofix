@@ -1435,8 +1435,12 @@ def mark_customer_confirmed(sr_name) -> dict:
 # ── Step 3: Solution Assignment ───────────────────────────────────────────────
 
 @frappe.whitelist()
-def get_solutions_for_issue(issue_category) -> dict:
-	"""Return active repair solutions for an issue category."""
+def get_solutions_for_issue(issue_category, device_item=None) -> dict:
+	"""Return active repair solutions for an issue category.
+
+	``device_item`` narrows the list to solutions that actually apply to the
+	device on the bench (see Fix 3 — solution applicability).
+	"""
 	solutions = frappe.get_all(
 		"Repair Solution",
 		filters={"issue_category": issue_category, "is_active": 1},
@@ -1449,6 +1453,25 @@ def get_solutions_for_issue(issue_category) -> dict:
 
 	if not solutions:
 		return solutions
+
+	# Applicability — a repair catalogue is scoped by device family, not just by
+	# issue. Without this a phone is offered Hinge Repair and Strap Replacement
+	# because they happen to share the Physical Damage category.
+	if device_item:
+		from gofix.gofix_services.api import (
+			does_solution_apply_to_device,
+			get_solution_applicability,
+		)
+
+		rules_by_sol = get_solution_applicability([s.name for s in solutions])
+		solutions = [
+			s for s in solutions
+			if does_solution_apply_to_device(
+				s.name, device_item, rules=rules_by_sol.get(s.name, [])
+			)
+		]
+		if not solutions:
+			return solutions
 
 	# Batch-fetch all technician grades needed
 	grade_ids = list({s.minimum_grade for s in solutions if s.minimum_grade})
@@ -1488,20 +1511,120 @@ def get_solutions_for_issue(issue_category) -> dict:
 	return solutions
 
 
+def _repair_solution_payload(solution) -> dict:
+	"""The row shape the Ops Hub solution picker renders, from a name or doc."""
+	if isinstance(solution, str):
+		solution = frappe.db.get_value(
+			"Repair Solution",
+			solution,
+			["name", "solution_name", "solution_code", "issue_category",
+			 "estimated_minutes", "requires_spare", "is_active"],
+			as_dict=True,
+		) or {}
+	return {
+		"name": solution.get("name"),
+		"solution_name": solution.get("solution_name") or solution.get("name"),
+		"solution_code": solution.get("solution_code") or "",
+		"issue_category": solution.get("issue_category"),
+		"estimated_minutes": cint(solution.get("estimated_minutes")),
+		"requires_spare": cint(solution.get("requires_spare")),
+		"is_active": cint(solution.get("is_active")),
+	}
+
+
+def _find_solutions_by_name(solution_name) -> list:
+	"""Every Repair Solution carrying this label, in any Issue Category.
+
+	Matched on the ``solution_name`` FIELD, never on the docname: the docname is
+	a stable code and says nothing about what the solution is called.
+	"""
+	return frappe.get_all(
+		"Repair Solution",
+		filters={"solution_name": solution_name},
+		fields=["name", "solution_name", "solution_code", "issue_category",
+			"estimated_minutes", "requires_spare", "is_active"],
+		order_by="creation",
+	)
+
+
 @frappe.whitelist(methods=["POST"])
-def quick_create_solution(solution_name, issue_category, estimated_minutes=30, requires_spare=0, description="") -> dict:
-	"""Quick-create a Repair Solution from the Ops Hub solutions step."""
+def quick_create_solution(
+	solution_name,
+	issue_category,
+	estimated_minutes=30,
+	requires_spare=0,
+	description="",
+	on_duplicate=None,
+) -> dict:
+	"""Quick-create a Repair Solution from the Ops Hub solutions step.
+
+	A solution label only means something inside its Issue Category — "Display
+	Change" is a legitimate name under both Screen & Display and Physical
+	Damage — so the duplicate check is (name, category), not a global docname
+	lookup. When the label is already taken under a *different* category the
+	caller is told exactly which one and decides what to do, via
+	``on_duplicate``:
+
+	* ``"reuse"``     — use that existing solution on this job as-is.
+	* ``"duplicate"`` — create a separate solution owned by this category.
+
+	Without a decision the call is a no-op that returns ``exists_elsewhere``.
+	The old code returned a bare ``exists`` for any name collision and the
+	picker — filtered by category — then silently dropped the solution, so the
+	user was told "added to list" and given nothing.
+	"""
 	frappe.has_permission("Repair Solution", ptype="create", throw=True)
 
-	solution_name = (solution_name or "").strip()
+	solution_name = " ".join((solution_name or "").split())
 	if not solution_name:
 		frappe.throw(_("Solution name is required."), title=_("Validation Error"))
 	if not issue_category:
 		frappe.throw(_("Issue category is required."), title=_("Validation Error"))
+	if not frappe.db.exists("Issue Category", issue_category):
+		frappe.throw(_("Issue Category {0} does not exist.").format(issue_category),
+			title=_("Validation Error"))
 
-	# Check if already exists
-	if frappe.db.exists("Repair Solution", solution_name):
-		return {"name": solution_name, "exists": True}
+	matches = _find_solutions_by_name(solution_name)
+	here = [m for m in matches if m.issue_category == issue_category]
+	elsewhere = [m for m in matches if m.issue_category != issue_category]
+
+	# Already ours. An inactive one is invisible to the picker, which reads as
+	# "it exists but I can't select it" — so reactivate rather than dead-end.
+	if here:
+		existing = here[0]
+		reactivated = False
+		if not cint(existing.is_active):
+			frappe.db.set_value("Repair Solution", existing.name, "is_active", 1)
+			existing.is_active = 1
+			reactivated = True
+		payload = _repair_solution_payload(existing)
+		payload.update({"status": "reactivated" if reactivated else "selected", "exists": True})
+		return payload
+
+	if elsewhere and on_duplicate not in ("reuse", "duplicate"):
+		return {
+			"status": "exists_elsewhere",
+			"exists": True,
+			"solution_name": solution_name,
+			"issue_category": issue_category,
+			"existing": [_repair_solution_payload(m) for m in elsewhere],
+		}
+
+	if elsewhere and on_duplicate == "reuse":
+		existing = elsewhere[0]
+		if not cint(existing.is_active):
+			frappe.db.set_value("Repair Solution", existing.name, "is_active", 1)
+			existing.is_active = 1
+		payload = _repair_solution_payload(existing)
+		# The job line is filed under the category the technician is working in;
+		# the solution master keeps its own.
+		payload.update({
+			"status": "reused",
+			"exists": True,
+			"owner_issue_category": existing.issue_category,
+			"issue_category": issue_category,
+		})
+		return payload
 
 	doc = frappe.new_doc("Repair Solution")
 	doc.solution_name = solution_name
@@ -1511,15 +1634,10 @@ def quick_create_solution(solution_name, issue_category, estimated_minutes=30, r
 	doc.description = description or ""
 	doc.is_active = 1
 	doc.insert()
-	return {
-		"name": doc.name,
-		"solution_name": doc.solution_name,
-		"solution_code": doc.solution_code or "",
-		"issue_category": doc.issue_category,
-		"estimated_minutes": doc.estimated_minutes,
-		"requires_spare": doc.requires_spare,
-		"exists": False,
-	}
+
+	payload = _repair_solution_payload(doc.as_dict())
+	payload.update({"status": "created", "exists": False})
+	return payload
 
 
 @frappe.whitelist(methods=["POST"])

@@ -62,6 +62,11 @@ RATE_CARD = {
 	"Strap Replacement": (150, 90),
 	"Board-Level Repair": (2000, 90),
 	"Motherboard Diagnosis": (0, 0),
+	# DEAD ENTRY: no "Swapping Board" Repair Solution has ever existed, so this
+	# rate has never been applied. The spare sub-category Mobile Spares-Swapping
+	# Board maps to Board-Level Repair (BRD-REP), which is priced on its own
+	# line above. Left in place because deleting it would look like a price
+	# change; resolve it deliberately rather than by accident.
 	"Swapping Board": (1500, 90),
 	"Antenna / Network IC Repair": (1200, 90),
 	"WiFi / Bluetooth Module Replacement": (900, 90),
@@ -123,9 +128,13 @@ def execute():
 def _seed_workmanship_warranty():
 	if not frappe.get_meta("Repair Solution").get_field("warranty_days"):
 		return
+	from gofix.catalogue_sync import resolve_solution
+
 	n = 0
-	for name, (_labour, days) in RATE_CARD.items():
-		if not frappe.db.exists("Repair Solution", name):
+	for label, (_labour, days) in RATE_CARD.items():
+		# RATE_CARD is keyed by the human label; the document is keyed by code.
+		name = resolve_solution(label)
+		if not name:
 			continue
 		if frappe.db.get_value("Repair Solution", name, "warranty_days"):
 			continue
@@ -165,15 +174,18 @@ def _seed_pricing_rules():
 			"GoFix Pricing Rule", fields=["repair_solution", "device_brand"]
 		)
 	}
+	from gofix.catalogue_sync import resolve_solution
+
 	created = 0
-	for name, (labour, _days) in RATE_CARD.items():
-		if not frappe.db.exists("Repair Solution", name):
+	for label, (labour, _days) in RATE_CARD.items():
+		name = resolve_solution(label)
+		if not name:
 			continue
 		issue_category = frappe.db.get_value("Repair Solution", name, "issue_category")
 
 		# base tier — matches any brand not covered by a premium rule
 		if (name, "") not in existing:
-			_make_rule(name, issue_category, None, labour, priority=100)
+			_make_rule(name, issue_category, None, labour, priority=100, label=label)
 			created += 1
 
 		# premium tier — more specific, so it wins on the specificity score
@@ -183,7 +195,7 @@ def _seed_pricing_rules():
 			_make_rule(
 				name, issue_category, brand,
 				round(flt(labour) * PREMIUM_MULTIPLIER / 10) * 10,
-				priority=10,
+				priority=10, label=label,
 			)
 			created += 1
 	frappe.logger("gofix").info(f"GoFix: created {created} pricing rule(s)")
@@ -211,9 +223,11 @@ def _unscope_seeded_rules():
 		frappe.logger("gofix").info(f"GoFix: unscoped {len(rows)} seeded pricing rule(s)")
 
 
-def _make_rule(solution, issue_category, brand, labour, priority):
+def _make_rule(solution, issue_category, brand, labour, priority, label=None):
 	doc = frappe.new_doc("GoFix Pricing Rule")
-	doc.rule_name = f"{solution} — {brand or 'Standard'}"[:140]
+	# `solution` is the docname (a code); the rule NAME is read by humans, so
+	# title it with the label.
+	doc.rule_name = f"{label or solution} — {brand or 'Standard'}"[:140]
 	doc.is_active = 1
 	# Leave company blank so the card applies to every company. new_doc()
 	# otherwise inherits the session default, which silently scopes the rule to

@@ -237,6 +237,28 @@ def validate_solution_spare_mapping(doc, method=None):
 		)
 
 
+def resolve_solution(label, issue_category=None):
+	"""Docname of a Repair Solution from a docname, a solution code, or a label.
+
+	The document name is the ``solution_code``. Seed maps and mapping tables
+	written before that re-key refer to solutions by their old
+	label-as-docname, so every lookup that starts from a human-written string
+	goes through here and keeps working on either side of the change.
+	"""
+	label = cstr(label).strip()
+	if not label:
+		return None
+	if frappe.db.exists("Repair Solution", label):
+		return label
+	found = frappe.db.get_value("Repair Solution", {"solution_code": label}, "name")
+	if found:
+		return found
+	filters = {"solution_name": label}
+	if issue_category:
+		filters["issue_category"] = issue_category
+	return frappe.db.get_value("Repair Solution", filters, "name")
+
+
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 def _mapping_ready() -> bool:

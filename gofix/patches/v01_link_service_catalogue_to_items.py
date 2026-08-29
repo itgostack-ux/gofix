@@ -83,11 +83,15 @@ def _seed_item_solution_links():
 	if not frappe.get_meta("Item").get_field("gofix_repair_solutions"):
 		return
 
-	valid = {
-		sub: sol
-		for sub, sol in SUB_CATEGORY_TO_SOLUTION.items()
-		if frappe.db.exists("Repair Solution", sol)
-	}
+	# The map is written with human labels; Repair Solution is keyed by
+	# solution_code. Resolve once, here, and work in docnames from then on.
+	from gofix.catalogue_sync import resolve_solution
+
+	valid = {}
+	for sub, sol in SUB_CATEGORY_TO_SOLUTION.items():
+		resolved = resolve_solution(sol)
+		if resolved:
+			valid[sub] = resolved
 	if not valid:
 		return
 

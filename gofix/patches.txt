@@ -1,6 +1,7 @@
 [pre_model_sync]
 # Patches added in this section will be executed before doctypes are migrated
 # Read docs to understand patches: https://frappeframework.com/docs/v14/user/en/database-migrations
+gofix.patches.v04_repair_solution_code_identity # 2026-08-29 - fill/dedupe solution_code before it becomes the unique document name
 
 [post_model_sync]
 # Patches added in this section will be executed after doctypes are migrated
@@ -32,3 +33,5 @@ gofix.patches.configure_repair_quarantine_warehouses # 2026-08-06 - segregate su
 gofix.patches.v01_link_service_catalogue_to_items
 gofix.patches.v02_seed_market_standard_pricing
 gofix.patches.v03_employee_warehouse_ignore_user_permissions # 2026-08-29 - Employee.gofix_service_warehouse was hiding every employee from users with a Warehouse User Permission
+gofix.patches.v05_rekey_repair_solution_on_code # 2026-08-29 - Repair Solution is keyed by solution_code, so one label can serve several Issue Categories
+gofix.patches.v06_seed_solution_applicability # 2026-08-29 - repair solutions declare the device families they apply to

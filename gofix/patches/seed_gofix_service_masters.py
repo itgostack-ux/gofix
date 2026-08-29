@@ -357,12 +357,17 @@ def _migrate_legacy_grades() -> None:
 
 
 def _seed_solutions() -> None:
+	from gofix.catalogue_sync import resolve_solution
+
 	for name, category, code, minutes, requires_spare, skill in _SOLUTIONS:
 		if not frappe.db.exists("Issue Category", category):
 			continue
+		# Repair Solution is keyed by solution_code. Resolve rather than assume,
+		# so this seeder is idempotent on a site that has not yet been re-keyed
+		# (docname == label) as well as on one that has (docname == code).
 		_upsert(
 			"Repair Solution",
-			name,
+			resolve_solution(code) or resolve_solution(name, category) or code,
 			{
 				"solution_name": name,
 				"issue_category": category,

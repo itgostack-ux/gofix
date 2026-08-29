@@ -30,6 +30,21 @@ def create_employee_custom_fields():
 				"options": "Warehouse",
 				"insert_after": "technician_grade",
 				"description": "Warehouse (store or hub) where this technician is based — technician pickers show staff of the ticket's repair location first",
+				# This is a DESCRIPTIVE attribute ("where is this technician
+				# based"), never an authorisation control — access is decided by
+				# CH User Scope and the role matrix. Without this flag Frappe
+				# treats it as one, and with
+				# System Settings -> Apply Strict User Permissions ON it emits
+				#     `gofix_service_warehouse in (<allowed warehouses>)`
+				# with NO `ifnull(field,'') = ''` escape. The field is empty on
+				# almost every employee, so every user holding a Warehouse User
+				# Permission — which ch_erp15 creates from each CH User Scope
+				# store row — saw ZERO employees in every desk list, silently and
+				# with no error. That broke Frappe HR, ch_hrms, and this app's own
+				# technician picker (technician_intelligence.recommend_technicians
+				# reads Employee through frappe.get_list). System Manager did not
+				# help: that role bypasses ROLE permissions, not USER permissions.
+				"ignore_user_permissions": 1,
 			},
 		]
 	}

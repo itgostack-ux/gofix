@@ -31,3 +31,4 @@ gofix.patches.classify_repair_status_log_events # 2026-08-06 - separate lifecycl
 gofix.patches.configure_repair_quarantine_warehouses # 2026-08-06 - segregate supplier-return and damaged repair stock
 gofix.patches.v01_link_service_catalogue_to_items
 gofix.patches.v02_seed_market_standard_pricing
+gofix.patches.v03_employee_warehouse_ignore_user_permissions # 2026-08-29 - Employee.gofix_service_warehouse was hiding every employee from users with a Warehouse User Permission

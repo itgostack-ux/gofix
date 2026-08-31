@@ -10,7 +10,25 @@ REPAIR_CATEGORY = "Repair Services"
 REPAIR_SUB_CATEGORY = "Repair Services-Mobile Repair Labour"
 
 
+def _ensure_services_item_group() -> None:
+	# ERPNext only creates the "Services" Item Group via its interactive setup
+	# wizard (erpnext/setup/setup_wizard/operations/install_fixtures.py) — a
+	# site provisioned by scripting bench install-app directly (no wizard)
+	# never gets it, even though "All Item Groups" (a core fixture) always
+	# exists. Without this, the very first migrate after install crashes here
+	# with "Could not find Item Group: Services".
+	if frappe.db.exists("Item Group", "Services"):
+		return
+	frappe.get_doc({
+		"doctype": "Item Group",
+		"item_group_name": "Services",
+		"parent_item_group": "All Item Groups",
+		"is_group": 0,
+	}).insert(ignore_permissions=True, ignore_if_duplicate=True)
+
+
 def _ensure_repair_taxonomy() -> None:
+	_ensure_services_item_group()
 	income_account = frappe.db.get_value(
 		"Company", {"gofix_enabled": 1}, "default_income_account"
 	)

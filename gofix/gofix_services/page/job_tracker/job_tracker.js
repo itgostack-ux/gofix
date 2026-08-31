@@ -72,6 +72,18 @@ this.parent.html(`
 <div class="jt-search-bar">
 <input type="text" id="jt-search" class="form-control input-sm jt-search-input"
 placeholder="${__('Search SR, customer, device, serial…')}">
+<!-- The date range lived only in the page toolbar, which does not render on
+     this page, so the board silently showed the last 30 days with no way to
+     see that or change it — closed tickets outside the window looked missing
+     rather than filtered. -->
+<label class="jt-range-label">${__('From')}</label>
+<input type="date" id="jt-date-from" class="form-control input-sm jt-date"
+value="${this._filters.date_from}">
+<label class="jt-range-label">${__('To')}</label>
+<input type="date" id="jt-date-to" class="form-control input-sm jt-date"
+value="${this._filters.date_to}">
+<button class="btn btn-xs btn-default" id="jt-range-all"
+title="${__('Show every ticket regardless of date')}">${__('All time')}</button>
 </div>
 <div class="jt-board" id="jt-board">
 <div class="jt-loading"><i class="fa fa-spinner fa-spin fa-2x"></i><br>${__('Loading…')}</div>
@@ -88,6 +100,24 @@ placeholder="${__('Search SR, customer, device, serial…')}">
 </div>
 </div>
 `);
+
+const _reload_range = () => {
+this._filters.date_from = document.getElementById('jt-date-from').value;
+this._filters.date_to = document.getElementById('jt-date-to').value;
+this._load();
+};
+this.parent.find('#jt-date-from, #jt-date-to').on('change', _reload_range);
+this.parent.find('#jt-range-all').on('click', () => {
+// "Nothing in Withdrawn" almost always means "nothing withdrawn in the last
+// 30 days". One click to prove which it is.
+const from = '2000-01-01';
+const to = frappe.datetime.add_days(frappe.datetime.nowdate(), 3650);
+document.getElementById('jt-date-from').value = from;
+document.getElementById('jt-date-to').value = to;
+this._filters.date_from = from;
+this._filters.date_to = to;
+this._load();
+});
 
 let _st;
 this.parent.find('#jt-search').on('input', e => {

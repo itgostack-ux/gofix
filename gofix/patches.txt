@@ -39,3 +39,4 @@ gofix.patches.v07_add_swapping_board_solution # 2026-08-29 - the rate card price
 gofix.patches.v08_disambiguate_target_store_label # 2026-08-29 - two Purchase Order fields were both labelled "Target Store"
 gofix.patches.v09_seed_pause_reasons # 2026-08-31 - coded reasons for a paused repair, so hold time is readable
 gofix.patches.v10_fix_workflow_condition_db_count # 2026-08-31 - workflow condition called frappe.db.count, which is not in the workflow safe-eval globals; every Sales Order save raised NoneType is not callable
+gofix.patches.v11_recode_customer_closures_as_withdrawn # 2026-08-31 - customer-driven closures wrote decision=Cancelled, so the Rejection Register counted them as our refusals and the Job Tracker Withdrawn column could never fill

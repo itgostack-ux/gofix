@@ -261,7 +261,7 @@ class StoreQueue {
 				(ev) => `
 			<tr>
 				<td>V${ev.version_number}</td>
-				<td>${frappe.format(ev.estimate_amount, { fieldtype: "Currency" })}</td>
+				<td>${format_currency(ev.estimate_amount)}</td>
 				<td><span class="indicator-pill ${ev.status === "Customer Approved" ? "green" : ev.status === "Customer Rejected" ? "red" : "orange"}">${ev.status}</span></td>
 				<td>${ev.reason_for_revision || ""}</td>
 				<td>${ev.created_at ? frappe.datetime.prettyDate(ev.created_at) : ""}</td>
@@ -286,7 +286,7 @@ class StoreQueue {
 					<div class="col-md-4">
 						<p><b>Status:</b> ${detail.decision}</p>
 						<p><b>Repairability:</b> ${detail.repairability_status || "Pending"}</p>
-						<p><b>Estimate:</b> ${frappe.format(detail.estimated_cost, { fieldtype: "Currency" })} (V${detail.latest_estimate_version || 0})</p>
+						<p><b>Estimate:</b> ${format_currency(detail.estimated_cost)} (V${detail.latest_estimate_version || 0})</p>
 						<p><b>Paused:</b> ${detail.repair_paused ? detail.repair_pause_reason : "No"}</p>
 					</div>
 					<div class="col-md-4">

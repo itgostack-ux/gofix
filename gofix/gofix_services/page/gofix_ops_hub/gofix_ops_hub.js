@@ -421,8 +421,8 @@ class GoFixOpsHub {
 			done:      () => this._html_done(d),
 		};
 
-		contentHtml = (renderer[d.ops_stage] || (() =>
-			`<div class="goh-section p-3 text-muted">${__("Ticket is")} <b>${esc(d.decision)}</b>. ${__("No further action needed.")}</div>`
+		renderer.closed = () => this._html_closed_history(d);
+		contentHtml = (renderer[d.ops_stage] || (() => this._html_closed_history(d)
 		))();
 
 		this.parent.find("#goh-main").html(`
@@ -618,13 +618,32 @@ class GoFixOpsHub {
 		const pcolor = PRIORITY_COLOR[d.priority] || "#94a3b8";
 		const badge = STAGE_BADGE[d.ops_stage] || STAGE_BADGE.draft;
 
-		const sla_html = d.expected_completion_date ? (() => {
+		// The promise made to the customer is a DATETIME. This badge used to read
+		// expected_completion_date, a date with no time of day, so it measured to
+		// midnight and disagreed with the countdown a few pixels below it —
+		// "Due Soon (3h)" against "09:28:11 left" for the same ticket. Both now
+		// come from the same server-computed countdown; the legacy date is only
+		// a fallback for tickets raised before a promise was ever recorded.
+		const sla_html = (() => {
+			const c = d.countdown;
+			if (c && c.promised && typeof c.seconds_left === "number") {
+				const h = (c.seconds_left / 3600);
+				const cls = c.state === "overdue" || c.state === "missed" ? "goh-sla-breach"
+					: c.state === "due_soon" ? "goh-sla-warn"
+					: c.state === "met" ? "goh-sla-ok" : (h < 24 ? "goh-sla-warn" : "goh-sla-ok");
+				const label = c.state === "missed" ? __("Promise Missed")
+					: c.state === "met" ? __("Delivered On Time")
+					: c.state === "overdue" ? __("Overdue")
+					: h < 24 ? __("Due Soon") : __("On Track");
+				return `<span class="goh-sla-pill ${cls}">${label} (${Math.abs(h).toFixed(1)}h)</span>`;
+			}
+			if (!d.expected_completion_date) return "";
 			const exp = frappe.datetime.str_to_obj(d.expected_completion_date);
 			const diffH = ((exp - new Date()) / 3600000).toFixed(1);
 			const cls = diffH < 0 ? "goh-sla-breach" : diffH < 24 ? "goh-sla-warn" : "goh-sla-ok";
 			const label = diffH < 0 ? __("SLA Breached") : diffH < 24 ? __("Due Soon") : __("On Track");
-			return `<span class="goh-sla-pill ${cls}">${label} (${Math.abs(diffH)}h)</span>`;
-		})() : "";
+			return `<span class="goh-sla-pill ${cls}" title="${__("No exact promise recorded — measured to end of day.")}">${label} (${Math.abs(diffH)}h)</span>`;
+		})();
 
 		return `
 			<div class="goh-banner">
@@ -1101,6 +1120,78 @@ class GoFixOpsHub {
 	 * finished it is more intake evidence, at QC and billing it is the outgoing
 	 * record the customer is charged against.
 	 */
+	/**
+	 * What happened before the ticket was closed.
+	 *
+	 * A closed ticket used to render one line — "Ticket is Rejected. No further
+	 * action needed." — and threw away everything the payload already carries:
+	 * which faults were found, what was tried, by whom, how long it took, and
+	 * what it cost in parts. That is exactly the record someone needs when the
+	 * customer asks why, or when the same device comes back. Nothing here is
+	 * editable; the ticket is closed.
+	 */
+	_html_closed_history(d) {
+		const esc = frappe.utils.escape_html;
+		const hm = (h) => {
+			const m = Math.max(0, Math.round((h || 0) * 60));
+			return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m`;
+		};
+
+		// How far the work actually got, from the recorded stage moves.
+		const moves = (d.status_log || []).filter(r => r.event_type === "Operations Stage");
+		const reached = moves.length ? esc(moves[moves.length - 1].to_status) : __("not started");
+
+		const issues = (d.issue_lines || []).filter(i => i.issue_category);
+		const sols = d.solution_lines || [];
+		const spares = d.spare_lines || [];
+		const t = d.time_summary || {};
+
+		const row = (cells) => `<tr>${cells.map(c => `<td style="padding:4px 8px">${c}</td>`).join("")}</tr>`;
+		const table = (head, rows) => rows.length ? `
+			<table class="table table-sm" style="margin:6px 0 0">
+				<thead><tr>${head.map(h => `<th style="padding:4px 8px;font-size:11px;text-transform:uppercase;color:var(--text-muted)">${h}</th>`).join("")}</tr></thead>
+				<tbody>${rows.join("")}</tbody>
+			</table>` : `<div class="text-muted small" style="margin-top:4px">${__("None recorded")}</div>`;
+
+		return `
+			<div class="goh-section p-3">
+				<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+					<b>${__("Ticket is")} ${esc(d.decision)}</b>
+					${d.rejection_reason ? `<span class="goh-badge badge-red">${esc(d.rejection_reason)}</span>` : ""}
+					<span class="text-muted small">${__("Reached")}: <b>${reached}</b></span>
+					<span class="text-muted small">${__("Worked")}: <b>${hm(t.total_hours)}</b></span>
+				</div>
+				<div class="text-muted small" style="margin-bottom:10px">
+					${__("Closed — kept as the record of what was attempted.")}
+				</div>
+
+				${this._html_device_photos(d)}
+
+				<b class="small">${__("Faults identified")}</b>
+				${table([__("Issue"), __("Reported by"), __("Status")],
+					issues.map(i => row([esc(i.issue_category), esc(i.reported_by || "—"),
+						`<span class="goh-badge badge-muted">${esc(i.status || "")}</span>`])))}
+
+				<b class="small" style="display:block;margin-top:12px">${__("Work attempted")}</b>
+				${table([__("Solution"), __("Technician"), __("Status")],
+					sols.map(s => row([
+						`<span title="${esc(s.repair_solution || "")}">${esc(s.solution_name || s.repair_solution || "")}</span>`,
+						esc(s.technician_name || "—"),
+						`<span class="goh-badge badge-muted">${esc(s.status || "")}</span>`])))}
+
+				<b class="small" style="display:block;margin-top:12px">${__("Parts consumed")}</b>
+				${table([__("Spare"), __("Qty"), __("Status")],
+					spares.map(s => row([esc(s.spare_item_name || s.spare_item || ""),
+						esc(String(s.qty || "")),
+						`<span class="goh-badge badge-muted">${esc(s.status || "")}</span>`])))}
+
+				${(t.by_technician || []).length ? `
+					<b class="small" style="display:block;margin-top:12px">${__("Time by technician")}</b>
+					<div style="margin-top:4px">${(t.by_technician || []).map(x =>
+						`<span class="goh-badge badge-muted ml-1">${esc(x.technician_name)} ${hm(x.hours)}</span>`).join("")}</div>` : ""}
+			</div>`;
+	}
+
 	_html_device_photos(d) {
 		const p = d.device_photos || { intake: [], outtake: [] };
 		const stage = ["qc", "invoice", "done"].includes(d.ops_stage) ? "Outtake" : "Intake";
@@ -1216,7 +1307,27 @@ class GoFixOpsHub {
 			         data-start="${esc(a.start_datetime || "")}"
 			         data-server-now="${esc(a.server_now || "")}"
 			         data-banked="${a.actual_hours || 0}"></span>`
-			: `<span class="text-muted small">${__("Unassigned — nobody is recorded as working on this.")}</span>`;
+			: (() => {
+				// "Unassigned" read as "nobody was ever assigned", directly under a
+				// bar showing that a named technician had already put 18 minutes
+				// into this ticket from the POS counter. Distinguish never-assigned
+				// from finished-and-handed-back, or the counter believes the POS
+				// assignment failed to map.
+				const done = (((d.time_summary || {}).by_technician) || [])
+					.filter(x => x.stages && x.stages.includes("Diagnosis"));
+				if (done.length) {
+					// State the fact, not the absence. Once diagnosis is done, who
+					// did it is the useful information; "nobody working on it now"
+					// re-reported the same thing the bar above already shows and
+					// read like a problem. Every technician who diagnosed is named,
+					// so a fault found later by someone else is credited too.
+					const who = done.map(x => esc(x.technician_name)).join(", ");
+					return `<span class="text-muted small">${
+						__("Diagnosed by {0}", [who])}</span>`;
+				}
+				return `<span class="text-muted small">${
+					__("Not yet assigned — nobody has worked on this ticket.")}</span>`;
+			})();
 
 		return `
 			<div class="goh-section" style="padding:8px 12px;margin-bottom:10px;
@@ -2982,7 +3093,47 @@ class GoFixOpsHub {
 							<button class="btn btn-xs btn-default ml-2 goh-print-invoice" data-invoice="${esc(s.service_invoice)}"><i class="fa fa-print"></i> ${__("Print")}</button>
 						</div>`
 						: `<div class="mt-3">
-							<button class="btn btn-sm btn-primary" id="goh-create-invoice"><i class="fa fa-file-text-o"></i> ${__("Create Invoice")}</button>
+							<!-- The hub owns the PRICE and the device's LOCATION; the POS
+							     owns the tender. Both have to be settleable here, or the
+							     counter is handed a ticket it cannot bill: a price nobody
+							     agreed, or a device sitting in another store. -->
+							<div class="goh-invoice-prep" style="margin-bottom:10px">
+								<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+									<b class="small">${__("Final Price")}</b>
+									<input type="number" step="0.01" min="0" class="form-control input-sm"
+										id="goh-final-price" style="max-width:150px"
+										value="${s.customer_total || 0}">
+									<input type="text" class="form-control input-sm" id="goh-final-price-reason"
+										style="max-width:260px" placeholder="${__("Reason (required to change)")}">
+									<button class="btn btn-sm btn-default" id="goh-set-final-price">
+										<i class="fa fa-check"></i> ${__("Set Price")}
+									</button>
+								</div>
+								<div class="text-muted small" style="margin-top:4px">
+									${__("This is what the counter will charge. Below cost-to-company it needs an approved exception before it can be billed.")}
+								</div>
+								${d.transferred_to_store && d.transferred_to_store !== d.source_warehouse ? `
+									<div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border-color)">
+										<span class="goh-badge badge-orange"><i class="fa fa-truck"></i>
+											${__("Device is at")} ${esc(d.transferred_to_store)}</span>
+										<span class="text-muted small ml-2">
+											${__("It has to come back before the customer can collect and pay.")}
+										</span>
+										<button class="btn btn-xs btn-default ml-2" id="goh-invoice-return-store">
+											<i class="fa fa-undo"></i> ${__("Return To Store")}
+										</button>
+									</div>` : ""}
+							</div>
+
+							<div class="goh-bill-at-pos" style="padding:10px 12px;border:1px solid var(--border-color);border-radius:8px;background:var(--bg-color)">
+								<div><i class="fa fa-shopping-cart"></i> <b>${__("Bill this repair at the POS counter")}</b></div>
+								<div class="text-muted small" style="margin-top:4px">
+									${__("Add the ticket to the POS cart to take payment. It can go on one invoice with accessories, plans, discounts and vouchers — and the money reaches the till settlement.")}
+								</div>
+								<button class="btn btn-sm btn-primary mt-2" id="goh-open-pos-billing">
+									<i class="fa fa-external-link"></i> ${__("Open POS Billing")}
+								</button>
+							</div>
 							<span class="text-muted ml-2">${__("Or invoice at POS during handover.")}</span>
 						   </div>`
 					}
@@ -3012,22 +3163,71 @@ class GoFixOpsHub {
 					}
 				});
 
-				// Bind create-invoice button
+				// Billing moved to the POS counter. An invoice raised here carries no
+				// pos_profile and no payment rows, so the settlement query cannot see
+				// it and the cash never reaches the drawer. Send the user to the till
+				// instead of quietly creating an unreconcilable invoice.
+				this.parent.find("#goh-set-final-price").on("click", (e) => {
+					const btn = $(e.currentTarget);
+					const price = parseFloat(this.parent.find("#goh-final-price").val());
+					const reason = (this.parent.find("#goh-final-price-reason").val() || "").trim();
+					if (!(price >= 0)) {
+						frappe.show_alert({ message: __("Enter a price"), indicator: "orange" });
+						return;
+					}
+					btn.prop("disabled", true).html('<i class="fa fa-spinner fa-spin"></i>');
+					frappe.xcall(`${API}.set_final_cost`, {
+						sr_name: d.name, final_cost: price, reason: reason,
+					}).then((r) => {
+						frappe.show_alert({
+							message: __("Final price set to {0}", [format_currency(price)]),
+							indicator: "green",
+						});
+						self._refresh_all();
+					}).catch((err) => {
+						btn.prop("disabled", false).html('<i class="fa fa-check"></i> ' + __("Set Price"));
+						frappe.msgprint({
+							title: __("Price Not Set"),
+							message: err.message || __("The final price could not be recorded."),
+							indicator: "red",
+						});
+					});
+				});
+
+				this.parent.find("#goh-invoice-return-store").on("click", () => {
+					const home = d.source_warehouse
+						? String(d.source_warehouse).split(" - ")[0] : __("the origin store");
+					frappe.confirm(
+						__("Send this device back to {0} so the customer can collect and pay there?", [home]),
+						() => {
+							frappe.xcall("gofix.gofix_services.api.return_service_transfer",
+								{ service_request: d.name })
+								.then(() => {
+									frappe.show_alert({
+										message: __("{0} is on its way back to {1}.", [d.name, home]),
+										indicator: "green",
+									});
+									self._refresh_all();
+								})
+								.catch((err) => frappe.msgprint({
+									title: __("Could not return the device"),
+									message: err.message || __("The transfer could not be raised."),
+									indicator: "red",
+								}));
+						}
+					);
+				});
+
 				if (!s.service_invoice) {
-					this.parent.find("#goh-create-invoice").on("click", () => {
-						frappe.confirm(
-							__(`Create Sales Invoice for <b>${format_currency(s.customer_total)}</b>?`),
-							() => {
-								const btn = this.parent.find("#goh-create-invoice");
-								btn.prop("disabled", true).html('<i class="fa fa-spinner fa-spin"></i>');
-								frappe.xcall(`${API}.create_ops_hub_invoice`, { sr_name: d.name })
-									.then(r => {
-										frappe.show_alert({ message: __(`Invoice ${r.invoice} created — ₹${format_number(r.grand_total)}`), indicator: "green" });
-										self._refresh_all();
-									})
-									.catch(() => btn.prop("disabled", false).html('<i class="fa fa-file-text-o"></i> ' + __("Create Invoice")));
-							}
-						);
+					this.parent.find("#goh-open-pos-billing").on("click", () => {
+						// Carry the ticket so the counter does not search for it again.
+						try {
+							localStorage.setItem("ch_pos_pending_repair_bill", d.name);
+						} catch (e) {
+							// A private window without storage is not a reason to block
+							// billing — the counter can still find the ticket by number.
+						}
+						frappe.set_route("ch-pos-app", "repair");
 					});
 				}
 			});

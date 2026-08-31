@@ -54,206 +54,243 @@
 {%- endmacro %}
 
 <style>
+	/* GoFix service invoice — presentation only. Every field the previous
+	   format carried is still bound in the markup below; this restyles the
+	   page so it reads as a brand document rather than a data dump.
+	   Principles: one accent, hairline rules, generous whitespace, a single
+	   numeric grid, and a hierarchy that leads the eye to the amount due. */
 	.gfi {
-		color: #111827;
-		font-family: Arial, Helvetica, sans-serif;
+		--ink: #14161a;
+		--ink-soft: #5b6472;
+		--ink-faint: #98a1b0;
+		--rule: #e4e7ec;
+		--rule-strong: #c9ced8;
+		--accent: #7a1420;
+		--tint: #faf7f5;
+		color: var(--ink);
+		font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
 		font-size: 10.5px;
-		line-height: 1.35;
+		font-variant-numeric: tabular-nums;
+		line-height: 1.5;
 	}
 	.gfi * { box-sizing: border-box; }
+
+	/* ── Masthead ─────────────────────────────────────────────────────── */
 	.gfi .topbar {
-		align-items: stretch;
-		border: 1.5px solid #111827;
+		align-items: flex-end;
+		border-bottom: 2px solid var(--accent);
 		display: flex;
-		margin-bottom: 8px;
+		margin-bottom: 18px;
+		padding-bottom: 14px;
 	}
-	.gfi .brand {
-		border-right: 1px solid #111827;
-		flex: 1 1 auto;
-		padding: 10px 12px;
-	}
+	.gfi .brand { flex: 1 1 auto; padding: 0; }
 	.gfi .brand-name {
-		color: #b91c1c;
-		font-size: 20px;
-		font-weight: 800;
-		letter-spacing: 0;
-		line-height: 1.05;
-		margin-bottom: 4px;
-		text-transform: uppercase;
-	}
-	.gfi .brand-sub {
-		color: #374151;
-		font-size: 10px;
-		font-weight: 600;
-		text-transform: uppercase;
-	}
-	.gfi .invoice-title {
-		display: flex;
-		flex: 0 0 210px;
-		flex-direction: column;
-		justify-content: center;
-		padding: 10px 12px;
-		text-align: right;
-	}
-	.gfi .invoice-title h1 {
-		font-size: 21px;
-		font-weight: 800;
-		letter-spacing: 0;
-		line-height: 1;
-		margin: 0 0 6px;
-		text-transform: uppercase;
-	}
-	.gfi .copy-label {
-		border: 1px solid #d1d5db;
-		color: #374151;
-		display: inline-block;
-		font-size: 9px;
-		font-weight: 700;
-		padding: 2px 6px;
-		text-transform: uppercase;
-	}
-	.gfi .grid-2 {
-		display: grid;
-		gap: 8px;
-		grid-template-columns: 1fr 1fr;
-		margin-bottom: 8px;
-	}
-	.gfi .box {
-		border: 1px solid #cbd5e1;
-		min-height: 94px;
-		padding: 8px 10px;
-	}
-	.gfi .box-title {
-		color: #111827;
-		font-size: 9px;
-		font-weight: 800;
+		color: var(--accent);
+		font-family: Georgia, "Times New Roman", serif;
+		font-size: 25px;
+		font-weight: 400;
+		letter-spacing: 0.06em;
+		line-height: 1.1;
 		margin-bottom: 5px;
 		text-transform: uppercase;
 	}
-	.gfi .strong { font-weight: 800; }
-	.gfi .muted { color: #6b7280; }
-	.gfi .danger { color: #b91c1c; font-weight: 700; }
+	.gfi .brand-sub {
+		color: var(--ink-soft);
+		font-size: 8.5px;
+		font-weight: 400;
+		letter-spacing: 0.18em;
+		margin-bottom: 8px;
+		text-transform: uppercase;
+	}
+	.gfi .invoice-title {
+		flex: 0 0 220px;
+		padding: 0 0 0 20px;
+		text-align: right;
+	}
+	.gfi .invoice-title h1 {
+		font-family: Georgia, "Times New Roman", serif;
+		font-size: 21px;
+		font-weight: 400;
+		letter-spacing: 0.16em;
+		line-height: 1;
+		margin: 0 0 8px;
+		text-transform: uppercase;
+	}
+	.gfi .copy-label {
+		border: 1px solid var(--rule-strong);
+		color: var(--ink-soft);
+		display: inline-block;
+		font-size: 7.5px;
+		font-weight: 600;
+		letter-spacing: 0.12em;
+		padding: 3px 8px;
+		text-transform: uppercase;
+	}
+
+	/* ── Meta strip ───────────────────────────────────────────────────── */
 	.gfi .meta {
 		border-collapse: collapse;
-		margin-bottom: 8px;
+		margin-bottom: 18px;
 		width: 100%;
 	}
 	.gfi .meta td {
-		border: 1px solid #cbd5e1;
-		padding: 5px 7px;
+		border: 0;
+		border-bottom: 1px solid var(--rule);
+		padding: 7px 14px 7px 0;
 		vertical-align: top;
 		width: 25%;
 	}
 	.gfi .label {
-		color: #6b7280;
+		color: var(--ink-faint);
 		display: block;
-		font-size: 8.5px;
-		font-weight: 800;
+		font-size: 7.5px;
+		font-weight: 600;
+		letter-spacing: 0.14em;
+		margin-bottom: 2px;
 		text-transform: uppercase;
 	}
-	.gfi .value {
-		color: #111827;
-		font-size: 10.5px;
-		font-weight: 700;
-		margin-top: 1px;
+	.gfi .value { font-size: 10.5px; font-weight: 600; }
+
+	/* ── Parties ──────────────────────────────────────────────────────── */
+	.gfi .grid-2 {
+		display: grid;
+		gap: 22px;
+		grid-template-columns: 1fr 1fr;
+		margin-bottom: 20px;
 	}
+	.gfi .box {
+		background: var(--tint);
+		border: 0;
+		border-left: 2px solid var(--rule-strong);
+		min-height: 0;
+		padding: 12px 16px;
+	}
+	.gfi .box-title {
+		color: var(--ink-faint);
+		font-size: 7.5px;
+		font-weight: 600;
+		letter-spacing: 0.14em;
+		margin-bottom: 7px;
+		text-transform: uppercase;
+	}
+	.gfi .strong { font-weight: 700; }
+	.gfi .muted { color: var(--ink-soft); }
+	.gfi .danger { color: var(--accent); font-weight: 600; }
+
+	/* ── Section rule ─────────────────────────────────────────────────── */
 	.gfi .section {
-		background: #111827;
-		color: #ffffff;
-		font-size: 9px;
-		font-weight: 800;
-		margin: 9px 0 0;
-		padding: 4px 7px;
+		background: transparent;
+		border-bottom: 1px solid var(--rule-strong);
+		color: var(--ink);
+		font-size: 8px;
+		font-weight: 700;
+		letter-spacing: 0.16em;
+		margin: 22px 0 0;
+		padding: 0 0 5px;
 		text-transform: uppercase;
 	}
-	.gfi table.lines {
-		border-collapse: collapse;
-		margin: 0;
-		width: 100%;
-	}
+
+	/* ── Line items ───────────────────────────────────────────────────── */
+	.gfi table.lines { border-collapse: collapse; margin: 0; width: 100%; }
 	.gfi .lines th {
-		background: #f3f4f6;
-		border: 1px solid #cbd5e1;
-		color: #111827;
-		font-size: 8.3px;
-		font-weight: 800;
-		padding: 5px 4px;
+		background: transparent;
+		border: 0;
+		border-bottom: 1px solid var(--rule-strong);
+		color: var(--ink-faint);
+		font-size: 7.5px;
+		font-weight: 600;
+		letter-spacing: 0.1em;
+		padding: 8px 6px;
 		text-align: left;
 		text-transform: uppercase;
-		vertical-align: middle;
+		vertical-align: bottom;
 	}
 	.gfi .lines td {
-		border: 1px solid #dbe3ee;
-		padding: 5px 4px;
+		border: 0;
+		border-bottom: 1px solid var(--rule);
+		padding: 9px 6px;
 		vertical-align: top;
 	}
+	.gfi .lines tbody tr:last-child td { border-bottom: 1px solid var(--rule-strong); }
 	.gfi .right { text-align: right; }
 	.gfi .center { text-align: center; }
 	.gfi .nowrap { white-space: nowrap; }
-	.gfi .item-desc {
-		font-size: 10px;
-		font-weight: 700;
-	}
-	.gfi .small {
-		font-size: 9px;
-		line-height: 1.35;
-	}
+	.gfi .item-desc { font-size: 10.5px; font-weight: 600; }
+	.gfi .small { font-size: 9px; line-height: 1.45; }
+
+	/* ── Summary ──────────────────────────────────────────────────────── */
 	.gfi .summary-wrap {
 		display: grid;
-		gap: 8px;
-		grid-template-columns: 1fr 280px;
-		margin-top: 8px;
+		gap: 22px;
+		grid-template-columns: 1fr 290px;
+		margin-top: 18px;
 	}
 	.gfi .terms {
-		border: 1px solid #cbd5e1;
-		padding: 8px 10px;
+		border: 0;
+		border-top: 1px solid var(--rule);
+		padding: 12px 0 0;
 	}
-	.gfi .summary {
-		border-collapse: collapse;
-		width: 100%;
-	}
+	.gfi .summary { border-collapse: collapse; width: 100%; }
 	.gfi .summary td {
-		border: 1px solid #cbd5e1;
-		padding: 5px 7px;
+		border: 0;
+		border-bottom: 1px solid var(--rule);
+		padding: 7px 0;
 	}
+	.gfi .summary td:last-child { text-align: right; font-weight: 600; }
 	.gfi .summary .grand td {
-		background: #111827;
-		color: #ffffff;
-		font-size: 12px;
-		font-weight: 800;
+		border-bottom: 0;
+		border-top: 2px solid var(--accent);
+		color: var(--accent);
+		font-family: Georgia, "Times New Roman", serif;
+		font-size: 15px;
+		font-weight: 700;
+		padding-top: 10px;
 	}
 	.gfi .pay-chip {
-		border: 1px solid #16a34a;
-		color: #166534;
+		border: 1px solid #1f7a3d;
+		color: #1f7a3d;
 		display: inline-block;
-		font-size: 9px;
-		font-weight: 800;
-		margin-top: 3px;
-		padding: 2px 6px;
+		font-size: 8px;
+		font-weight: 700;
+		letter-spacing: 0.08em;
+		margin-top: 4px;
+		padding: 2px 8px;
 		text-transform: uppercase;
 	}
+
+	/* ── Footer ───────────────────────────────────────────────────────── */
 	.gfi .footer {
 		align-items: end;
 		display: grid;
-		gap: 8px;
-		grid-template-columns: 1fr 220px;
-		margin-top: 12px;
+		gap: 22px;
+		grid-template-columns: 1fr 230px;
+		margin-top: 26px;
 	}
 	.gfi .signature {
-		border: 1px solid #cbd5e1;
-		min-height: 72px;
-		padding: 8px;
+		border: 0;
+		border-top: 1px solid var(--rule);
+		min-height: 78px;
+		padding: 10px 0 0;
 		text-align: center;
 	}
 	.gfi .signature-line {
-		border-top: 1px solid #111827;
-		margin-top: 36px;
-		padding-top: 4px;
+		border-top: 1px solid var(--ink);
+		color: var(--ink-soft);
+		font-size: 9px;
+		margin-top: 40px;
+		padding-top: 5px;
 	}
+
 	@media print {
 		.gfi { font-size: 10px; }
-		.gfi .section { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-		.gfi .summary .grand td { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+		/* Keep the accent rules and the tinted party blocks when printed —
+		   without this the hierarchy collapses to undifferentiated grey. */
+		.gfi .topbar, .gfi .summary .grand td, .gfi .box, .gfi .section {
+			-webkit-print-color-adjust: exact;
+			print-color-adjust: exact;
+		}
+		.gfi .lines tr { page-break-inside: avoid; }
+		.gfi thead { display: table-header-group; }
 	}
 </style>
 

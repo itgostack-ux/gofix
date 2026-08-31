@@ -144,7 +144,7 @@ metadata and writes through the ordinary document API, and the kit gained `DocFo
 so a create never costs the user their place in the list behind it.
 
 Three properties make a generic write endpoint defensible rather than reckless, and each is
-asserted by `test_ui_forms.py` (12 tests) rather than assumed:
+asserted by `test_ui_forms.py` (22 tests) rather than assumed:
 
 * **An allowlist per app** — `ch_ui_editable_doctypes` in each app's hooks. `User`, `Role` and
   `System Settings` are refused outright.
@@ -155,8 +155,28 @@ asserted by `test_ui_forms.py` (12 tests) rather than assumed:
   form spec, and a crafted payload carrying `budget_amount` does not land. A spec that merely
   marks a field read-only is a suggestion, and payloads ignore suggestions.
 
-Table, Attach and HTML fields are deliberately not rendered; those link to the desk form, which is
-honest about what it can edit rather than silently dropping a child table.
+**Child tables, attachments and HTML fields render in place** (added after review — the first cut
+sent those fields to the desk form). `ChildTable` is an editable grid, `FileField` uploads through
+Frappe's own `upload_file`, and HTML/Heading fields render as the display-only content they are.
+Three things about the grid are worth stating because each was a way to get it quietly wrong:
+
+* **Child permissions resolve against the parent.** A child doctype has no DocPerms of its own.
+  Building the grid from the child's own permissions returns nothing and renders an empty
+  table — which reads as "no data", not as a bug. `_child_spec` compares each child field's
+  permlevel against the *parent's* readable and writable sets, and `_clean_rows` applies the same
+  rule on the way back in, so what the form let the user edit is exactly what the server accepts.
+* **A row's `name` survives the round trip.** Without it Frappe deletes the row and inserts a
+  replacement: the values look right and every reference to that row is dead — a sign-off's
+  approval history among them. New rows carry a `new-` placeholder the server strips, so an
+  insert and an update stay distinguishable without the client having to guess.
+* **Read-only tables stay read-only.** `readiness_results`, `date_revisions` and `audit_log` are
+  computed. They are shown and never writable, and a payload carrying rows for them is dropped
+  rather than refused.
+
+The grid also holds row identity in a `WeakMap` rather than on the row. Stamping a key onto the
+object would ride along into the save payload, and emitting a stripped copy instead would make the
+incoming watcher rebuild the list on every keystroke and pull focus out of the cell being typed
+in.
 
 The Opening page also gained real workflow buttons, built from
 `ui_forms.workflow_actions` — the transitions the *server* says are available, so a button can
@@ -179,7 +199,8 @@ endpoints — scope, capabilities and the entry gate all stay where the desk and
 portal already enforce them.
 
 Nine screens: Overview, Register, Verification, Maintenance, Transfers, Leases, Capex, Statutory,
-Reports, plus asset detail. Measured live: 180 assets, ₹3.96cr gross block, 44% verification
+Reports, plus asset detail. `/asset-hub`, the old desk page, is now a doorway that redirects here,
+so there is one Assets view rather than two that disagree. Measured live: 180 assets, ₹3.96cr gross block, 44% verification
 coverage by value, 4 alerts.
 
 Deliberately **not** a package named `ch_assets/api/`: `ch_assets/api.py` already exists, and that

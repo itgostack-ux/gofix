@@ -40,8 +40,14 @@ from gofix.security import assert_service_request_access
 CLOSE_OUTCOMES = {
 	"Not Repairable": {"decision": "Rejected", "repairability": "Not Repairable"},
 	"BER": {"decision": "Rejected", "repairability": "BER"},
-	"Customer Declined": {"decision": "Cancelled", "repairability": "Customer Declined"},
-	"Customer Cancelled": {"decision": "Cancelled", "repairability": "Customer Declined"},
+	# The customer's own decision lands on Withdrawn, not Cancelled. Both used
+	# to write Cancelled, which the Rejection Register counts as OURS — so every
+	# customer who walked away was reported as a repair we refused, hiding
+	# exactly the capability-vs-price split this module exists to keep apart.
+	# The Job Tracker's Withdrawn column reads the same field and could never
+	# fill for the same reason.
+	"Customer Declined": {"decision": "Withdrawn", "repairability": "Customer Declined"},
+	"Customer Cancelled": {"decision": "Withdrawn", "repairability": "Customer Declined"},
 }
 
 #: Decisions that mean the job is already over.

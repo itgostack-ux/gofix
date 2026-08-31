@@ -165,7 +165,7 @@ class ServiceHub {
 	_render_kpis(kpis) {
 		const cards = kpis.map((k) => {
 			const val = k.fmt === "currency"
-				? frappe.format(k.value, { fieldtype: "Currency" })
+				? format_currency(k.value)
 				: k.value;
 			return `<div class="hub-kpi-card" style="--kpi-color:${k.color}" data-kpi="${k.key}">
 				<div class="hub-kpi-value">${val}</div>
@@ -244,7 +244,7 @@ class ServiceHub {
 								<div class="hub-mini-kpi-label">${__("Avg TAT (days)")}</div>
 							</div>
 							<div class="hub-mini-kpi" style="--mini-color:#3b82f6">
-								<div class="hub-mini-kpi-value">${frappe.format(fc.revenue_mtd || 0, {fieldtype:"Currency"})}</div>
+								<div class="hub-mini-kpi-value">${format_currency(fc.revenue_mtd || 0)}</div>
 								<div class="hub-mini-kpi-label">${__("Service Revenue MTD")}</div>
 							</div>
 						</div>
@@ -340,7 +340,7 @@ class ServiceHub {
 			<td>${r.customer_name || r.customer || ""}</td>
 			<td>${r.device_item_name || r.device_item || ""}</td>
 			<td>${r.completed_on ? frappe.datetime.str_to_user(r.completed_on) : "-"}</td>
-			<td class="text-right">${frappe.format(r.estimated_cost || 0, {fieldtype:"Currency"})}</td>
+			<td class="text-right">${format_currency(r.estimated_cost || 0)}</td>
 		</tr>`).join("")}</tbody></table></div>`;
 	}
 

@@ -1036,6 +1036,36 @@ class SparePartsUsage(Document):
 		store_of = lambda wh: frappe.db.get_value(  # noqa: E731
 			"CH Store", {"warehouse": wh}, "name"
 		)
+		# One consignment per route per day, not one per part. Each damaged spare
+		# used to raise its OWN draft manifest on the identical
+		# store-quarantine -> hub route, so a shop that damaged five parts left
+		# five separate drafts for the same van on the same day, and they piled up
+		# unsent. Logistics carries a box, not a part: join the open draft for this
+		# route if there is one.
+		existing = frappe.db.get_value(
+			"CH Transfer Manifest",
+			{
+				"docstatus": 0,
+				"status": "Draft",
+				"company": company,
+				"source_warehouse": from_warehouse,
+				"destination_warehouse": to_warehouse,
+				"manifest_date": nowdate(),
+			},
+			"name",
+		)
+		note = _("Quarantined spare {0} returning from repair {1}").format(
+			self.spare_part_item, self.service_request
+		)
+		if existing:
+			doc = frappe.get_doc("CH Transfer Manifest", existing)
+			doc.append("transfers", {"stock_entry": se.name})
+			if doc.meta.has_field("notes"):
+				doc.notes = "\n".join(filter(None, [doc.get("notes"), note]))
+			doc.flags.ignore_permissions = True
+			doc.save(ignore_permissions=True)
+			return doc.name
+
 		doc = frappe.new_doc("CH Transfer Manifest")
 		doc.manifest_date = nowdate()
 		doc.company = company
@@ -1044,9 +1074,7 @@ class SparePartsUsage(Document):
 		doc.source_store = store_of(from_warehouse)
 		doc.destination_store = store_of(to_warehouse)
 		if doc.meta.has_field("notes"):
-			doc.notes = _("Quarantined spare {0} returning from repair {1}").format(
-				self.spare_part_item, self.service_request
-			)
+			doc.notes = note
 		doc.append("transfers", {"stock_entry": se.name})
 		doc.flags.ignore_permissions = True
 		doc.insert(ignore_mandatory=True, ignore_permissions=True)

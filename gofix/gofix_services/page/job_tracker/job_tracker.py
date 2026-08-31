@@ -27,10 +27,14 @@ def get_board_data(warehouse=None, date_from=None, date_to=None, search=None, co
 	if not date_to:
 		date_to = nowdate()
 
+	# Every decision is shown. Delivered, Cancelled and Rejected used to be
+	# filtered out here while the board carried no column for them either, so a
+	# ticket closed any of those ways vanished from the tracker completely —
+	# no card, no count, nowhere to look. A board whose purpose is "where is
+	# every job" must not hide the ones that ended.
 	filters = [
 		["service_date", ">=", date_from],
 		["service_date", "<=", date_to],
-		["decision", "not in", ["Delivered", "Cancelled", "Rejected"]],
 	]
 	if company:
 		filters.append(["company", "=", company])
@@ -232,5 +236,9 @@ def _default_columns():
 		{"status": "In Service", "label": "In Service", "color": "#f59e0b", "icon": "fa-wrench"},
 		{"status": "Completed",  "label": "Completed",  "color": "#10b981", "icon": "fa-check-circle"},
 		{"status": "Invoiced",   "label": "Invoiced",   "color": "#8b5cf6", "icon": "fa-file-text"},
+		{"status": "Delivered",  "label": "Delivered",  "color": "#059669", "icon": "fa-truck"},
 		{"status": "Withdrawn",  "label": "Withdrawn",  "color": "#ef4444", "icon": "fa-times"},
+		{"status": "Rejected",   "label": "Rejected",   "color": "#dc2626", "icon": "fa-ban"},
+		{"status": "Cancelled",  "label": "Cancelled",  "color": "#9ca3af", "icon": "fa-minus-circle"},
+		{"status": "Expired",    "label": "Expired",    "color": "#a1a1aa", "icon": "fa-hourglass-end"},
 	]

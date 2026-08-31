@@ -14,7 +14,7 @@ import json
 
 import frappe
 from frappe import _
-from frappe.utils import add_days, cint, flt, get_datetime, now_datetime, nowdate, time_diff_in_hours
+from frappe.utils import add_days, cint, flt, get_datetime, getdate, now_datetime, nowdate, time_diff_in_hours
 
 from gofix.config import get_int_setting, get_user_roles, has_role_setting, require_role_setting
 from gofix.gofix_services.store_context import (
@@ -4137,9 +4137,18 @@ def set_promised_completion(sr_name, promised_datetime, reason=None) -> dict:
 	})
 	sr.promised_completion_datetime = new_dt
 	# Keep the legacy Date column agreeing with the promise so existing reports
-	# and list filters do not disagree with the countdown.
+	# and list filters do not disagree with the countdown. It must never fall
+	# before service_date: that Date field carries its own validation, and a
+	# promise revised BACKWARDS — recording that a deadline was missed — would
+	# otherwise be rejected outright. Just after midnight, "two hours ago" is
+	# yesterday, so this is reachable in normal use, not only in tests. The
+	# datetime promise stays the truth; only the derived date is clamped.
 	if sr.meta.get_field("expected_completion_date"):
-		sr.expected_completion_date = new_dt.date()
+		legacy = new_dt.date()
+		service_date = sr.get("service_date")
+		if service_date and legacy < getdate(service_date):
+			legacy = getdate(service_date)
+		sr.expected_completion_date = legacy
 	sr.save(ignore_permissions=True)
 
 	return {"ok": True, "changed": True, **get_completion_countdown(sr)}
@@ -4890,13 +4899,37 @@ def set_final_cost(sr_name, final_cost, reason=None) -> dict:
 
 @frappe.whitelist(methods=["POST"])
 def create_ops_hub_invoice(sr_name, remote_otp=None) -> dict:
-	"""Create a Sales Invoice directly from the Ops Hub invoice stage.
+	"""Refused: a repair is billed at the POS counter, not from the Ops Hub.
 
-	Falls back to Sales Order items when SR has no service_items / spare_parts.
+	An invoice raised here is an ordinary Sales Invoice — no ``pos_profile`` and
+	no ``Sales Invoice Payment`` rows — so the settlement query can never see it.
+	A store could take 8,000 rupees for a repair and close the till showing only
+	its opening float, with nothing reconciling the difference. Billing through
+	the POS cart puts the repair on the same invoice as accessories, VAS plans,
+	discounts and vouchers, takes the tender, and lands in the drawer.
+
+	The whole function is refused rather than only the button: an endpoint that
+	silently breaks cash reconciliation must not stay reachable by anything that
+	still knows its name.
 	"""
 	_assert_sr_permission(sr_name, "write")
 
 	sr = frappe.get_doc("Service Request", sr_name)
+
+	if not sr.service_invoice:
+		frappe.throw(
+			_("Repairs are billed at the POS counter, not from the Ops Hub.<br><br>"
+			  "Open <b>POS → Repair</b>, add <b>{0}</b> to the cart, and take payment "
+			  "there. The repair can be billed together with accessories, plans, "
+			  "discounts and vouchers on one invoice, and the money then appears in "
+			  "the till settlement.<br><br>"
+			  "If the device is at another store, bill it from <b>that store's POS</b> — "
+			  "Repair Closure captures the customer's OTP consent for off-store "
+			  "billing. Remote billing is allowed; billing from the hub is not, "
+			  "because only a POS tender reaches a till.<br><br>"
+			  "An invoice raised here would not reach the drawer.").format(sr_name),
+			title=_("Bill At The POS Counter"),
+		)
 
 	if sr.service_invoice:
 		frappe.throw(_("Invoice {0} already exists for {1}.").format(sr.service_invoice, sr_name), title=_("Validation Error"))

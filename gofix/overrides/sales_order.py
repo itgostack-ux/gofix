@@ -606,8 +606,8 @@ def move_service_order_to_qc_if_ready(doc):
 			doc.db_set("workflow_state", "Work in Progress", update_modified=False)
 			doc.add_comment(
 				"Comment",
-				_("QC entry blocked — unresolved: {0}").format(
-					", ".join(gaps["uncovered_issues"] + gaps["open_solutions"])
+				_("QC entry blocked — work still open: {0}").format(
+					", ".join(gaps["open_solutions"]) or _("no solutions selected")
 				))
 			return
 

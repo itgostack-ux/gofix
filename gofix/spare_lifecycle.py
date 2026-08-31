@@ -139,7 +139,7 @@ def spares_awaiting_recovery(sr_name: str) -> list:
 	dispositioned, or it walks out of the building with the customer and nobody
 	knows where it went. These are the rows still waiting for that decision.
 	"""
-	return frappe.get_all(
+	rows = frappe.get_all(
 		"Spare Parts Usage",
 		filters={
 			"service_request": sr_name,
@@ -147,8 +147,23 @@ def spares_awaiting_recovery(sr_name: str) -> list:
 			"deleted": 0,
 			"status": "Active",
 		},
-		fields=["name", "spare_part_item", "item_name", "qty_used", "uom"],
+		fields=["name", "spare_part_item", "item_name", "qty_used", "uom",
+			"service_request_spare_line"],
 	)
+	if not rows:
+		return rows
+
+	# A part the customer has been invoiced for and paid is theirs: it is
+	# accounted for, and demanding it be taken back out is wrong. Settlement
+	# records that on the ticket line (status Sold) but leaves part_status at
+	# Consumed -- `part_status` has no Sold option -- so the sold lines have to
+	# be subtracted here or a fully-paid ticket can never be closed.
+	sold_lines = set(frappe.get_all(
+		"SR Spare Line",
+		filters={"parent": sr_name, "parenttype": "Service Request", "status": SOLD},
+		pluck="name",
+	))
+	return [r for r in rows if r.get("service_request_spare_line") not in sold_lines]
 
 
 def assert_spares_recovered(sr_name: str, action: str) -> None:

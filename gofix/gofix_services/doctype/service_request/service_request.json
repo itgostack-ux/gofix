@@ -82,6 +82,8 @@
   "section_estimate",
   "estimated_cost",
   "expected_completion_date",
+  "promised_completion_datetime",
+  "eta_revisions",
   "customer_remarks",
   "column_break_estimate",
   "internal_remarks",
@@ -119,6 +121,8 @@
   "final_cost",
   "column_break_final_billing",
   "below_cost_exception_request",
+  "section_device_photos",
+  "device_photos",
   "section_serial_substitution",
   "original_serial_no",
   "replacement_serial_no",
@@ -205,22 +209,22 @@
    "read_only": 1
   },
   {
+   "fetch_from": "customer.ch_customer_id",
    "fieldname": "ch_customer_id",
    "fieldtype": "Int",
+   "in_standard_filter": 1,
    "label": "Customer ID",
-   "fetch_from": "customer.ch_customer_id",
-   "read_only": 1,
-   "search_index": 1,
    "no_copy": 0,
-   "in_standard_filter": 1
+   "read_only": 1,
+   "search_index": 1
   },
   {
+   "fetch_from": "customer.ch_membership_id",
    "fieldname": "ch_membership_id",
    "fieldtype": "Data",
    "label": "Membership ID",
-   "fetch_from": "customer.ch_membership_id",
-   "read_only": 1,
-   "no_copy": 0
+   "no_copy": 0,
+   "read_only": 1
   },
   {
    "fieldname": "customer_type",
@@ -230,12 +234,12 @@
    "read_only": 1
   },
   {
+   "description": "Auto-classified: New = first visit, Regular = returning, VIP = 10+ visits",
    "fieldname": "visit_type",
    "fieldtype": "Select",
    "label": "Visit Type",
    "options": "New\nRegular\nVIP",
-   "read_only": 1,
-   "description": "Auto-classified: New = first visit, Regular = returning, VIP = 10+ visits"
+   "read_only": 1
   },
   {
    "fieldname": "contact_number",
@@ -288,11 +292,11 @@
    "label": "Billing & Shipping Address"
   },
   {
+   "description": "Auto-populated from customer's active billing address",
    "fieldname": "billing_address_display",
    "fieldtype": "Small Text",
    "label": "Billing Address",
-   "read_only": 1,
-   "description": "Auto-populated from customer's active billing address"
+   "read_only": 1
   },
   {
    "fieldname": "billing_gstin",
@@ -337,22 +341,22 @@
    "label": "Store & Location Information"
   },
   {
+   "description": "Store where customer walked in",
    "fieldname": "source_warehouse",
    "fieldtype": "Link",
    "in_standard_filter": 1,
    "label": "Store/Warehouse",
    "options": "Warehouse",
    "reqd": 1,
-   "description": "Store where customer walked in",
    "search_index": 1
   },
   {
+   "description": "Current warehouse where device is located",
    "fieldname": "current_location",
    "fieldtype": "Link",
    "label": "Current Location",
    "options": "Warehouse",
-   "read_only": 1,
-   "description": "Current warehouse where device is located"
+   "read_only": 1
   },
   {
    "fieldname": "column_break_location",
@@ -374,13 +378,13 @@
    "read_only": 1
   },
   {
+   "description": "2-digit state code for GST",
    "fetch_from": "warehouse_address.gst_state_number",
    "fieldname": "state_code",
    "fieldtype": "Data",
    "label": "State Code",
    "length": 2,
-   "read_only": 1,
-   "description": "2-digit state code for GST"
+   "read_only": 1
   },
   {
    "collapsible": 1,
@@ -395,12 +399,12 @@
    "options": "Walkin Source"
   },
   {
+   "description": "Mark as Accepted when customer confirms leaving device for repair",
    "fieldname": "walkin_status",
    "fieldtype": "Select",
    "in_standard_filter": 1,
    "label": "Walk-in Status",
    "options": "Accepted\nWithdrawn",
-   "description": "Mark as Accepted when customer confirms leaving device for repair",
    "search_index": 1
   },
   {
@@ -427,12 +431,13 @@
    "label": "Device Information"
   },
   {
+   "description": "Optional at intake \u2014 a counter often cannot identify the catalogue item from what the customer says. Required before solutions are assigned, because spare compatibility is matched against it.",
    "fieldname": "device_item",
    "fieldtype": "Link",
    "in_list_view": 1,
    "label": "Device Item",
    "options": "Item",
-   "reqd": 1
+   "reqd": 0
   },
   {
    "fetch_from": "device_item.item_name",
@@ -459,16 +464,17 @@
   },
   {
    "default": "Good",
+   "description": "Condition of the device as received. Single source of truth: gofix.constants.device_condition.DEVICE_CONDITIONS.",
    "fieldname": "device_condition",
    "fieldtype": "Select",
    "label": "Device Condition",
-   "options": "Good\nDamaged\nBroken\nWater Damaged"
+   "options": "Good\nMinor Scratches\nCracked Screen\nDamaged\nWater Damaged\nBroken"
   },
   {
+   "description": "Detailed description of device physical condition",
    "fieldname": "product_condition_desc",
    "fieldtype": "Small Text",
-   "label": "Product Condition Description",
-   "description": "Detailed description of device physical condition"
+   "label": "Product Condition Description"
   },
   {
    "fieldname": "accessories_received",
@@ -488,49 +494,49 @@
    "read_only": 1
   },
   {
+   "description": "Auto-populated from CH Sold Plan lookup. The active warranty plan covering this device.",
    "fieldname": "warranty_plan",
    "fieldtype": "Link",
    "label": "Warranty Plan",
    "options": "CH Warranty Plan",
-   "read_only": 1,
-   "description": "Auto-populated from CH Sold Plan lookup. The active warranty plan covering this device."
+   "read_only": 1
   },
   {
+   "description": "The specific Active VAS Plans row being consumed by this Service Request. Auto-resolved from serial_no + warranty_plan. On submit, claims_used is incremented on this row (unless a linked CH Warranty Claim handles it).",
    "fieldname": "active_warranty_plan",
    "fieldtype": "Link",
    "label": "Active VAS Plan (Consumed)",
    "options": "Active VAS Plans",
-   "read_only": 1,
-   "description": "The specific Active VAS Plans row being consumed by this Service Request. Auto-resolved from serial_no + warranty_plan. On submit, claims_used is incremented on this row (unless a linked CH Warranty Claim handles it)."
+   "read_only": 1
   },
   {
+   "description": "When present, claim consumption on the Active VAS Plan is bumped by the CH Warranty Claim closure \u2014 not by this Service Request \u2014 to prevent double-counting.",
    "fieldname": "warranty_claim",
    "fieldtype": "Link",
    "label": "CH Warranty Claim",
    "options": "CH Warranty Claim",
-   "read_only": 1,
-   "description": "When present, claim consumption on the Active VAS Plan is bumped by the CH Warranty Claim closure \u2014 not by this Service Request \u2014 to prevent double-counting."
-  },
-  {
-   "fieldname": "warranty_plan_name",
-   "fieldtype": "Data",
-   "label": "Warranty Plan Name",
-   "fetch_from": "warranty_plan.plan_name",
    "read_only": 1
   },
   {
+   "fetch_from": "warranty_plan.plan_name",
+   "fieldname": "warranty_plan_name",
+   "fieldtype": "Data",
+   "label": "Warranty Plan Name",
+   "read_only": 1
+  },
+  {
+   "description": "Customer must pay this amount per claim under the warranty plan.",
    "fieldname": "warranty_deductible",
    "fieldtype": "Currency",
    "label": "Warranty Deductible",
-   "read_only": 1,
-   "description": "Customer must pay this amount per claim under the warranty plan."
+   "read_only": 1
   },
   {
+   "description": "How the device was received for service.",
    "fieldname": "mode_of_service",
    "fieldtype": "Select",
    "label": "Mode of Service",
-   "options": "\nWalk-in\nPickup\nCourier\nOn-site",
-   "description": "How the device was received for service."
+   "options": "\nWalk-in\nPickup\nCourier\nOn-site"
   },
   {
    "collapsible": 1,
@@ -539,32 +545,32 @@
    "label": "Device Security & Backup"
   },
   {
+   "description": "Encrypted at rest. Revealable by technicians to test after repair. Do not retain longer than the service lifecycle.",
    "fieldname": "password",
    "fieldtype": "Password",
-   "label": "Device Password/PIN",
-   "description": "Encrypted at rest. Revealable by technicians to test after repair. Do not retain longer than the service lifecycle."
+   "label": "Device Password/PIN"
   },
   {
+   "description": "Encrypted at rest. Pattern lock unlock sequence \u2014 revealable by technicians; do not retain beyond the service lifecycle.",
    "fieldname": "pattern",
    "fieldtype": "Password",
-   "label": "Device Pattern",
-   "description": "Encrypted at rest. Pattern lock unlock sequence \u2014 revealable by technicians; do not retain beyond the service lifecycle."
+   "label": "Device Pattern"
   },
   {
    "fieldname": "column_break_security",
    "fieldtype": "Column Break"
   },
   {
+   "description": "Details of what data was backed up",
    "fieldname": "backup_info",
    "fieldtype": "Small Text",
-   "label": "Backup Information",
-   "description": "Details of what data was backed up"
+   "label": "Backup Information"
   },
   {
+   "description": "IMEI from device settings (may differ from receipt)",
    "fieldname": "actual_imei",
    "fieldtype": "Data",
-   "label": "Actual IMEI",
-   "description": "IMEI from device settings (may differ from receipt)"
+   "label": "Actual IMEI"
   },
   {
    "fieldname": "section_issue_info",
@@ -598,19 +604,19 @@
    "label": "Estimate & Remarks"
   },
   {
+   "allow_on_submit": 1,
+   "description": "Initial cost estimate for customer",
    "fieldname": "estimated_cost",
    "fieldtype": "Currency",
    "label": "Estimated Cost",
-   "options": "Company:company:default_currency",
-   "description": "Initial cost estimate for customer",
-   "allow_on_submit": 1
+   "options": "Company:company:default_currency"
   },
   {
+   "allow_on_submit": 1,
+   "description": "Expected delivery date for the repaired device",
    "fieldname": "expected_completion_date",
    "fieldtype": "Date",
-   "label": "Expected Completion Date",
-   "description": "Expected delivery date for the repaired device",
-   "allow_on_submit": 1
+   "label": "Expected Completion Date"
   },
   {
    "fieldname": "customer_remarks",
@@ -632,10 +638,10 @@
    "label": "Accept / Reject Decision"
   },
   {
+   "allow_on_submit": 1,
    "default": "Draft",
    "fieldname": "decision",
    "fieldtype": "Select",
-   "allow_on_submit": 1,
    "in_list_view": 1,
    "in_standard_filter": 1,
    "label": "Decision",
@@ -668,12 +674,12 @@
    "read_only": 1
   },
   {
+   "description": "Auto-created when Service Request is Accepted",
    "fieldname": "service_order",
    "fieldtype": "Link",
    "label": "Service Order",
    "options": "Sales Order",
-   "read_only": 1,
-   "description": "Auto-created when Service Request is Accepted"
+   "read_only": 1
   },
   {
    "fieldname": "section_dates",
@@ -689,10 +695,10 @@
   },
   {
    "default": "Now",
+   "description": "Exact date and time when device was received",
    "fieldname": "received_datetime",
    "fieldtype": "Datetime",
-   "label": "Received Date & Time",
-   "description": "Exact date and time when device was received"
+   "label": "Received Date & Time"
   },
   {
    "fieldname": "column_break_dates",
@@ -735,10 +741,10 @@
    "fieldtype": "Column Break"
   },
   {
+   "description": "Request number from website/online appointment",
    "fieldname": "request_number",
    "fieldtype": "Data",
-   "label": "Request Number",
-   "description": "Request number from website/online appointment"
+   "label": "Request Number"
   },
   {
    "fieldname": "tracking_token",
@@ -746,8 +752,8 @@
    "hidden": 1,
    "label": "Tracking Token Digest",
    "no_copy": 1,
-   "read_only": 1,
    "permlevel": 1,
+   "read_only": 1,
    "unique": 1
   },
   {
@@ -756,8 +762,8 @@
    "hidden": 1,
    "label": "Tracking Token Salt",
    "no_copy": 1,
-   "read_only": 1,
-   "permlevel": 1
+   "permlevel": 1,
+   "read_only": 1
   },
   {
    "default": "0",
@@ -767,154 +773,154 @@
    "read_only": 1
   },
   {
+   "collapsible": 1,
+   "description": "Issues identified by technician during diagnosis (may differ from customer report)",
    "fieldname": "section_technician_findings",
    "fieldtype": "Section Break",
-   "label": "Technician Findings",
-   "collapsible": 1,
-   "description": "Issues identified by technician during diagnosis (may differ from customer report)"
+   "label": "Technician Findings"
   },
   {
+   "allow_on_submit": 1,
+   "description": "Technician fills this during diagnosis. Compare with Issue Specified By Customer.",
    "fieldname": "technician_identified_issues",
    "fieldtype": "Text Editor",
-   "label": "Issues Identified By Technician",
-   "allow_on_submit": 1,
-   "description": "Technician fills this during diagnosis. Compare with Issue Specified By Customer."
+   "label": "Issues Identified By Technician"
   },
   {
+   "description": "Customer-reported and technician-found issues. Each issue links to allowed solutions and spares.",
    "fieldname": "section_issue_tracking",
    "fieldtype": "Section Break",
-   "label": "Issue Tracking",
-   "description": "Customer-reported and technician-found issues. Each issue links to allowed solutions and spares."
+   "label": "Issue Tracking"
   },
   {
+   "allow_on_submit": 1,
    "fieldname": "issue_lines",
    "fieldtype": "Table",
    "label": "Issue Lines",
-   "options": "SR Issue Line",
-   "allow_on_submit": 1
+   "options": "SR Issue Line"
   },
   {
+   "description": "Repair solutions chosen for the reported issues. Only solutions mapped to the above issues are allowed.",
    "fieldname": "section_solutions",
    "fieldtype": "Section Break",
-   "label": "Solutions Applied",
-   "description": "Repair solutions chosen for the reported issues. Only solutions mapped to the above issues are allowed."
+   "label": "Solutions Applied"
   },
   {
+   "allow_on_submit": 1,
    "fieldname": "solution_lines",
    "fieldtype": "Table",
    "label": "Solution Lines",
-   "options": "SR Solution Line",
-   "allow_on_submit": 1
+   "options": "SR Solution Line"
   },
   {
+   "description": "Spare parts required for the selected solutions. Only mapped spares are allowed.",
    "fieldname": "section_spares_tracking",
    "fieldtype": "Section Break",
-   "label": "Spares for Solutions",
-   "description": "Spare parts required for the selected solutions. Only mapped spares are allowed."
+   "label": "Spares for Solutions"
   },
   {
+   "allow_on_submit": 1,
    "fieldname": "spare_lines",
    "fieldtype": "Table",
    "label": "Spare Lines",
-   "options": "SR Spare Line",
-   "allow_on_submit": 1
+   "options": "SR Spare Line"
   },
   {
+   "collapsible": 1,
    "fieldname": "section_advance_payment",
    "fieldtype": "Section Break",
-   "label": "Advance Payment",
-   "collapsible": 1
+   "label": "Advance Payment"
   },
   {
+   "allow_on_submit": 1,
+   "description": "Advance collected from customer at intake",
    "fieldname": "advance_amount",
    "fieldtype": "Currency",
    "label": "Advance Amount",
-   "options": "Company:company:default_currency",
-   "allow_on_submit": 1,
-   "description": "Advance collected from customer at intake"
+   "options": "Company:company:default_currency"
   },
   {
+   "allow_on_submit": 1,
+   "depends_on": "eval:doc.advance_amount > 0",
    "fieldname": "advance_received_via",
    "fieldtype": "Select",
    "label": "Advance Received Via",
-   "options": "\nCash\nUPI\nCard\nBank Transfer",
-   "depends_on": "eval:doc.advance_amount > 0",
-   "allow_on_submit": 1
+   "options": "\nCash\nUPI\nCard\nBank Transfer"
   },
   {
    "fieldname": "column_break_advance",
    "fieldtype": "Column Break"
   },
   {
+   "allow_on_submit": 1,
    "fieldname": "advance_payment_entry",
    "fieldtype": "Link",
    "label": "Advance Payment Entry",
    "options": "Payment Entry",
-   "read_only": 1,
-   "allow_on_submit": 1
+   "read_only": 1
   },
   {
+   "allow_on_submit": 1,
+   "description": "Amount refunded when repair not possible",
    "fieldname": "advance_refund_amount",
    "fieldtype": "Currency",
    "label": "Refund Amount",
    "options": "Company:company:default_currency",
-   "read_only": 1,
-   "allow_on_submit": 1,
-   "description": "Amount refunded when repair not possible"
+   "read_only": 1
   },
   {
+   "allow_on_submit": 1,
    "fieldname": "advance_refund_reason",
    "fieldtype": "Small Text",
    "label": "Refund Reason",
-   "read_only": 1,
-   "allow_on_submit": 1
+   "read_only": 1
   },
   {
+   "allow_on_submit": 1,
    "fieldname": "advance_refund_date",
    "fieldtype": "Date",
    "label": "Refund Date",
-   "read_only": 1,
-   "allow_on_submit": 1
+   "read_only": 1
   },
   {
+   "allow_on_submit": 1,
    "fieldname": "advance_refund_entry",
    "fieldtype": "Link",
    "label": "Refund Payment Entry",
    "options": "Payment Entry",
-   "read_only": 1,
-   "allow_on_submit": 1
+   "read_only": 1
   },
   {
+   "collapsible": 1,
+   "depends_on": "eval:['Pickup','Courier','On-site'].includes(doc.mode_of_service)",
    "fieldname": "section_pickup_delivery",
    "fieldtype": "Section Break",
-   "label": "Pickup & Delivery Tracking",
-   "collapsible": 1,
-   "depends_on": "eval:['Pickup','Courier','On-site'].includes(doc.mode_of_service)"
+   "label": "Pickup & Delivery Tracking"
   },
   {
+   "depends_on": "eval:doc.mode_of_service=='Pickup' || doc.mode_of_service=='On-site'",
    "fieldname": "pickup_address",
    "fieldtype": "Small Text",
-   "label": "Pickup Address",
-   "depends_on": "eval:doc.mode_of_service=='Pickup' || doc.mode_of_service=='On-site'"
+   "label": "Pickup Address"
   },
   {
+   "allow_on_submit": 1,
    "fieldname": "pickup_scheduled_datetime",
    "fieldtype": "Datetime",
-   "label": "Pickup Scheduled",
-   "allow_on_submit": 1
+   "label": "Pickup Scheduled"
   },
   {
+   "allow_on_submit": 1,
    "fieldname": "pickup_completed_datetime",
    "fieldtype": "Datetime",
    "label": "Pickup Completed",
-   "read_only": 1,
-   "allow_on_submit": 1
+   "read_only": 1
   },
   {
+   "allow_on_submit": 1,
    "fieldname": "pickup_agent",
    "fieldtype": "Link",
    "label": "Pickup Courier",
-   "allow_on_submit": 1,
    "options": "Courier Partner"
   },
   {
@@ -922,102 +928,102 @@
    "fieldtype": "Column Break"
   },
   {
+   "allow_on_submit": 1,
    "fieldname": "return_courier_name",
    "fieldtype": "Link",
    "label": "Return Courier",
-   "allow_on_submit": 1,
    "options": "Courier Partner"
   },
   {
+   "allow_on_submit": 1,
    "fieldname": "return_tracking_number",
    "fieldtype": "Data",
-   "label": "Return Tracking Number",
-   "allow_on_submit": 1
+   "label": "Return Tracking Number"
   },
   {
+   "allow_on_submit": 1,
    "fieldname": "return_dispatched_date",
    "fieldtype": "Date",
-   "label": "Return Dispatched Date",
-   "allow_on_submit": 1
+   "label": "Return Dispatched Date"
   },
   {
+   "allow_on_submit": 1,
    "fieldname": "return_delivered_date",
    "fieldtype": "Date",
-   "label": "Return Delivered Date",
-   "allow_on_submit": 1
+   "label": "Return Delivered Date"
   },
   {
+   "collapsible": 1,
+   "description": "Track device transfers between stores and zone service centers",
    "fieldname": "section_service_transfer",
    "fieldtype": "Section Break",
-   "label": "Inter-Store Transfer",
-   "collapsible": 1,
-   "description": "Track device transfers between stores and zone service centers"
+   "label": "Inter-Store Transfer"
   },
   {
+   "allow_on_submit": 1,
+   "description": "Destination store or zone service center",
    "fieldname": "transferred_to_store",
    "fieldtype": "Link",
    "label": "Transferred To",
-   "options": "Warehouse",
-   "allow_on_submit": 1,
-   "description": "Destination store or zone service center"
+   "options": "Warehouse"
   },
   {
+   "allow_on_submit": 1,
+   "default": "",
    "fieldname": "transfer_status",
    "fieldtype": "Select",
    "label": "Transfer Status",
-   "options": "\nNot Transferred\nIn Transit\nReceived at Service Center\nRepair Complete\nReturn In Transit\nReturned to Store",
-   "allow_on_submit": 1,
-   "default": ""
+   "options": "\nNot Transferred\nIn Transit\nReceived at Service Center\nRepair Complete\nReturn In Transit\nReturned to Store"
   },
   {
+   "allow_on_submit": 1,
    "fieldname": "transfer_date",
    "fieldtype": "Date",
-   "label": "Transfer Date",
-   "allow_on_submit": 1
+   "label": "Transfer Date"
   },
   {
    "fieldname": "column_break_transfer",
    "fieldtype": "Column Break"
   },
   {
+   "allow_on_submit": 1,
    "fieldname": "transfer_received_date",
    "fieldtype": "Date",
-   "label": "Received At Service Center",
-   "allow_on_submit": 1
+   "label": "Received At Service Center"
   },
   {
+   "allow_on_submit": 1,
    "fieldname": "transfer_return_date",
    "fieldtype": "Date",
-   "label": "Returned To Store",
-   "allow_on_submit": 1
+   "label": "Returned To Store"
   },
   {
+   "allow_on_submit": 1,
    "fieldname": "transfer_reason",
    "fieldtype": "Small Text",
-   "label": "Transfer Reason",
-   "allow_on_submit": 1
+   "label": "Transfer Reason"
   },
   {
+   "collapsible": 1,
    "fieldname": "section_assignment",
    "fieldtype": "Section Break",
-   "label": "Assignment",
-   "collapsible": 1
+   "label": "Assignment"
   },
   {
+   "allow_on_submit": 1,
+   "description": "Auto-populated from Job Assignment",
    "fieldname": "service_engineer",
    "fieldtype": "Link",
    "label": "Service Engineer",
    "options": "Employee",
-   "allow_on_submit": 1,
-   "read_only": 1,
-   "description": "Auto-populated from Job Assignment"
+   "read_only": 1
   },
   {
+   "allow_on_submit": 1,
    "fieldname": "assigned_to_user",
    "fieldtype": "Link",
    "label": "Assigned To User",
    "options": "User",
-   "allow_on_submit": 1,
    "read_only": 1
   },
   {
@@ -1025,72 +1031,72 @@
    "fieldtype": "Column Break"
   },
   {
+   "allow_on_submit": 1,
    "fieldname": "assigned_to_team",
    "fieldtype": "Data",
    "label": "Assigned To Team",
-   "allow_on_submit": 1,
    "read_only": 1
   },
   {
+   "collapsible": 1,
    "fieldname": "section_repair_tracking",
    "fieldtype": "Section Break",
-   "label": "Repair Tracking",
-   "collapsible": 1
+   "label": "Repair Tracking"
   },
   {
+   "allow_on_submit": 1,
    "fieldname": "actual_completion_date",
    "fieldtype": "Date",
    "label": "Actual Completion Date",
-   "read_only": 1,
-   "allow_on_submit": 1
+   "read_only": 1
   },
   {
+   "allow_on_submit": 1,
    "fieldname": "service_invoice",
    "fieldtype": "Link",
    "label": "Service Invoice",
    "options": "Sales Invoice",
-   "read_only": 1,
-   "allow_on_submit": 1
+   "read_only": 1
   },
   {
+   "allow_on_submit": 1,
    "default": "0",
    "fieldname": "data_backup_disclaimer",
    "fieldtype": "Check",
-   "label": "Customer Acknowledges Data May Be Lost",
-   "allow_on_submit": 1
+   "label": "Customer Acknowledges Data May Be Lost"
   },
   {
+   "allow_on_submit": 1,
    "default": "0",
    "fieldname": "unclaimed_flag",
    "fieldtype": "Check",
    "label": "Unclaimed Device",
-   "read_only": 1,
-   "allow_on_submit": 1
+   "read_only": 1
   },
   {
    "fieldname": "column_break_repair_track",
    "fieldtype": "Column Break"
   },
   {
+   "allow_on_submit": 1,
    "fieldname": "unclaimed_date",
    "fieldtype": "Date",
    "label": "Unclaimed Since",
-   "read_only": 1,
-   "allow_on_submit": 1
+   "read_only": 1
   },
   {
+   "allow_on_submit": 1,
    "default": "30",
    "fieldname": "repair_warranty_days",
    "fieldtype": "Int",
-   "label": "Repair Warranty (Days)",
-   "allow_on_submit": 1
+   "label": "Repair Warranty (Days)"
   },
   {
+   "allow_on_submit": 1,
    "fieldname": "repair_warranty_expiry",
    "fieldtype": "Date",
    "label": "Repair Warranty Expiry",
-   "read_only": 1,
-   "allow_on_submit": 1
+   "read_only": 1
   },
   {
    "fieldname": "total_estimated_cost",
@@ -1100,18 +1106,18 @@
    "read_only": 1
   },
   {
+   "allow_on_submit": 1,
    "fieldname": "total_spares_used_count",
    "fieldtype": "Int",
    "label": "Total Spares Used",
-   "read_only": 1,
-   "allow_on_submit": 1
+   "read_only": 1
   },
   {
+   "allow_on_submit": 1,
    "fieldname": "billable_spares_count",
    "fieldtype": "Int",
    "label": "Billable Spares",
-   "read_only": 1,
-   "allow_on_submit": 1
+   "read_only": 1
   },
   {
    "fieldname": "section_remarks",
@@ -1167,10 +1173,10 @@
    "fieldname": "discount_approved_by",
    "fieldtype": "Link",
    "label": "Discount Approved By",
-   "options": "User",
    "no_copy": 1,
-   "read_only": 1,
-   "permlevel": 1
+   "options": "User",
+   "permlevel": 1,
+   "read_only": 1
   },
   {
    "fieldname": "discount_approval_reason",
@@ -1181,10 +1187,10 @@
    "fieldname": "discount_exception_request",
    "fieldtype": "Link",
    "label": "Exception Request",
-   "options": "CH Exception Request",
-   "read_only": 1,
    "no_copy": 1,
-   "permlevel": 1
+   "options": "CH Exception Request",
+   "permlevel": 1,
+   "read_only": 1
   },
   {
    "collapsible": 1,
@@ -1211,10 +1217,23 @@
    "read_only": 1
   },
   {
+   "collapsible": 1,
+   "fieldname": "section_device_photos",
+   "fieldtype": "Section Break",
+   "label": "Device Photos"
+  },
+  {
+   "description": "Condition evidence. Intake photos are taken when the device is handed over; outtake photos before the customer is billed.",
+   "fieldname": "device_photos",
+   "fieldtype": "Table",
+   "label": "Device Photos",
+   "options": "GoFix Device Photo"
+  },
+  {
+   "collapsible": 1,
    "fieldname": "section_serial_substitution",
    "fieldtype": "Section Break",
-   "label": "Serial Substitution",
-   "collapsible": 1
+   "label": "Serial Substitution"
   },
   {
    "fieldname": "original_serial_no",
@@ -1239,57 +1258,57 @@
    "fieldname": "substitution_approved_by",
    "fieldtype": "Link",
    "label": "Substitution Approved By",
-   "options": "User",
    "no_copy": 1,
-   "read_only": 1,
-   "permlevel": 1
+   "options": "User",
+   "permlevel": 1,
+   "read_only": 1
   },
   {
    "fieldname": "substitution_exception_request",
    "fieldtype": "Link",
    "label": "Substitution Exception",
-   "options": "CH Exception Request",
-   "read_only": 1,
    "no_copy": 1,
-   "permlevel": 1
+   "options": "CH Exception Request",
+   "permlevel": 1,
+   "read_only": 1
   },
   {
+   "collapsible": 1,
    "fieldname": "section_status_log",
    "fieldtype": "Section Break",
-   "label": "Status Transition Log",
-   "collapsible": 1
+   "label": "Status Transition Log"
   },
   {
+   "allow_on_submit": 1,
    "fieldname": "status_log",
    "fieldtype": "Table",
-   "allow_on_submit": 1,
    "label": "Status Log",
    "options": "GoFix Status Log",
    "read_only": 1
   },
   {
+   "collapsible": 1,
+   "depends_on": "eval:doc.is_repeat_complaint",
    "fieldname": "section_repeat_complaint",
    "fieldtype": "Section Break",
-   "label": "Repeat Complaint",
-   "collapsible": 1,
-   "depends_on": "eval:doc.is_repeat_complaint"
+   "label": "Repeat Complaint"
   },
   {
    "default": "0",
+   "description": "Auto-detected: same device + same issue within 30 days",
    "fieldname": "is_repeat_complaint",
    "fieldtype": "Check",
-   "label": "Is Repeat Complaint",
-   "read_only": 1,
    "in_standard_filter": 1,
-   "description": "Auto-detected: same device + same issue within 30 days"
+   "label": "Is Repeat Complaint",
+   "read_only": 1
   },
   {
+   "depends_on": "eval:doc.is_repeat_complaint",
    "fieldname": "previous_service_request",
    "fieldtype": "Link",
    "label": "Previous Service Request",
    "options": "Service Request",
-   "read_only": 1,
-   "depends_on": "eval:doc.is_repeat_complaint"
+   "read_only": 1
   },
   {
    "fieldname": "column_break_repeat",
@@ -1297,17 +1316,33 @@
   },
   {
    "default": "0",
+   "description": "Number of previous service requests for same device + issue",
    "fieldname": "repeat_complaint_count",
    "fieldtype": "Int",
    "label": "Repeat Count",
-   "read_only": 1,
-   "description": "Number of previous service requests for same device + issue"
+   "read_only": 1
+  },
+  {
+   "allow_on_submit": 1,
+   "description": "The date AND time promised to the customer. This is the authoritative deadline the countdown runs against. expected_completion_date is a Date and cannot express a time of day, so it can never drive a countdown.",
+   "fieldname": "promised_completion_datetime",
+   "fieldtype": "Datetime",
+   "in_standard_filter": 1,
+   "label": "Promised Completion"
+  },
+  {
+   "description": "Every time the promise moved, with who, when and why.",
+   "fieldname": "eta_revisions",
+   "fieldtype": "Table",
+   "label": "Promise Revisions",
+   "options": "GoFix ETA Revision",
+   "read_only": 1
   }
  ],
  "index_web_pages_for_search": 1,
  "is_submittable": 1,
  "links": [],
- "modified": "2026-07-19 12:00:00.000000",
+ "modified": "2026-08-31 19:00:00.000000",
  "modified_by": "Administrator",
  "module": "GoFix Services",
  "name": "Service Request",
@@ -1315,125 +1350,126 @@
  "owner": "Administrator",
  "permissions": [
   {
-   "role": "System Manager",
-   "read": 1,
-   "write": 1,
+   "amend": 1,
+   "cancel": 1,
    "create": 1,
    "delete": 1,
-   "submit": 1,
-   "cancel": 1,
-   "amend": 1,
    "email": 1,
    "export": 1,
    "import": 1,
    "print": 1,
+   "read": 1,
    "report": 1,
-   "share": 1
-  },
-  {
    "role": "System Manager",
+   "share": 1,
+   "submit": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
    "permlevel": 1,
    "read": 1,
-   "write": 1,
-   "create": 1
+   "role": "System Manager",
+   "write": 1
   },
   {
-   "role": "Service Manager",
    "permlevel": 1,
-   "read": 1
-  },
-  {
-   "role": "Sales Manager",
-   "permlevel": 1,
-   "read": 1
-  },
-  {
-   "role": "Sales Manager",
    "read": 1,
-   "write": 1,
+   "role": "Service Manager"
+  },
+  {
+   "permlevel": 1,
+   "read": 1,
+   "role": "Sales Manager"
+  },
+  {
    "create": 1,
    "delete": 1,
-   "submit": 1,
    "email": 1,
    "export": 1,
    "print": 1,
+   "read": 1,
    "report": 1,
-   "share": 1
+   "role": "Sales Manager",
+   "share": 1,
+   "submit": 1,
+   "write": 1
   },
   {
+   "create": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
    "role": "Sales User",
-   "read": 1,
-   "write": 1,
-   "create": 1,
+   "share": 1,
    "submit": 1,
+   "write": 1
+  },
+  {
    "email": 1,
    "export": 1,
    "print": 1,
+   "read": 1,
    "report": 1,
-   "share": 1
-  },
-  {
    "role": "Customer",
-   "read": 1,
-   "email": 1,
-   "export": 1,
-   "print": 1,
-   "report": 1,
    "share": 1
   },
   {
-   "role": "Service Manager",
-   "read": 1,
-   "write": 1,
+   "amend": 1,
+   "cancel": 1,
    "create": 1,
    "delete": 1,
-   "submit": 1,
-   "cancel": 1,
-   "amend": 1,
    "email": 1,
    "export": 1,
    "print": 1,
+   "read": 1,
    "report": 1,
-   "share": 1
+   "role": "Service Manager",
+   "share": 1,
+   "submit": 1,
+   "write": 1
   },
   {
+   "create": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
    "role": "Service Engineer",
-   "read": 1,
-   "write": 1,
-   "create": 1,
+   "share": 1,
    "submit": 1,
-   "email": 1,
-   "export": 1,
-   "print": 1,
-   "report": 1,
-   "share": 1
+   "write": 1
   },
   {
-   "role": "Service User",
-   "read": 1,
-   "write": 1,
    "create": 1,
    "email": 1,
    "export": 1,
    "print": 1,
+   "read": 1,
    "report": 1,
-   "share": 1
+   "role": "Service User",
+   "share": 1,
+   "write": 1
   },
   {
-   "role": "Service Viewer",
-   "read": 1,
    "email": 1,
    "export": 1,
    "print": 1,
+   "read": 1,
    "report": 1,
+   "role": "Service Viewer",
    "share": 1
   },
   {
-   "role": "GoFix Floor Manager",
    "read": 1,
+   "role": "GoFix Floor Manager",
    "write": 1
   }
  ],
+ "search_fields": "customer,customer_name,serial_no,device_item,decision",
  "sort_field": "modified",
  "sort_order": "DESC",
  "states": [
@@ -1462,6 +1498,5 @@
    "title": "Draft"
   }
  ],
- "track_changes": 1,
- "search_fields": "customer,customer_name,serial_no,device_item,decision"
+ "track_changes": 1
 }

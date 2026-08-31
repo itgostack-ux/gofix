@@ -9,6 +9,16 @@ from gofix.security import get_user_service_scope
 
 
 def _check_hub_access() -> None:
+    require_role_setting(
+        "app_access_roles",
+        ("Service Manager", "Service Engineer", "Service Viewer", "Service User"),
+        action=_("open the GoFix app"),
+    )
+    require_role_setting(
+        "service_dashboard_roles",
+        ("Service Manager", "Service Viewer", "GoFix Floor Manager"),
+        action=_("view the Service Hub"),
+    )
     frappe.has_permission("Service Request", ptype="read", throw=True)
 
 

@@ -4,7 +4,10 @@
 import frappe
 from frappe import _
 from frappe.model.document import Document
-from frappe.utils import add_days, cint, flt, getdate, now_datetime, nowdate, today
+from frappe.model.naming import getseries
+from frappe.utils import (
+	add_days, cint, cstr, flt, getdate, now_datetime, nowdate, today,
+)
 
 from gofix.config import get_int_setting, get_setting, is_privileged_user, require_role_setting
 from gofix.security import assert_service_request_access
@@ -65,6 +68,143 @@ class ServiceRequest(Document):
 		if evidence.status not in ("Approved", "Auto-Approved"):
 			return None
 		return evidence.approver or evidence.resolved_by
+
+	# ── Document numbering ────────────────────────────────────────────────
+	#
+	# SR CC SS LLL YYMMDD NNNN  ->  SRGF331682608310001
+	#   |  |  |  |    |     |
+	#   |  |  |  |    |     +-- counter, per store per day
+	#   |  |  |  |    +-------- date
+	#   |  |  |  +------------- location  (CH Store id)
+	#   |  |  +---------------- state     (GST state number)
+	#   |  +------------------- company   (Company.abbr)
+	#   +----------------------- fixed literal
+	#
+	# Deliberately unseparated and fixed-width (19 chars): the ticket number IS
+	# the barcode stuck on the customer's device, and a contiguous alphanumeric
+	# string is what scans cleanly and parses by offset. Every segment is
+	# zero-padded to a constant length, so the number can be split back apart
+	# without a delimiter.
+	#
+	# Every component is resolved at naming time from master data, and the
+	# counter is drawn with frappe's `getseries`, which is an atomic
+	# INSERT .. ON DUPLICATE KEY UPDATE on `tabSeries`. Two tickets raised in
+	# the same second, in the same store, cannot collide, and a deleted ticket
+	# never frees a number for reuse.
+	#
+	# Existing tickets keep the names they were created with. Renaming live
+	# Service Requests would rewrite every Sales Order, Invoice, Job Assignment
+	# and Custody Log that points at them for no operational gain, so the change
+	# is deliberately forward-only.
+
+	NUMBER_PREFIX = "SR"
+	UNKNOWN_COMPANY = "XX"
+	UNKNOWN_STATE = "00"
+	UNKNOWN_STORE = "000"
+	COMPANY_CODE_LEN = 2
+	COUNTER_DIGITS = 4
+
+	def autoname(self):
+		self.name = self.build_service_request_number()
+
+	def build_service_request_number(self) -> str:
+		company_code = self._company_code()
+		state_code = self._gst_state_code()
+		store_code = self._store_code()
+		date_str = now_datetime().strftime("%y%m%d")
+
+		prefix = f"{self.NUMBER_PREFIX}{company_code}{state_code}{store_code}{date_str}"
+		counter = cint(getseries(prefix, self.COUNTER_DIGITS))
+		return f"{prefix}{counter:0{self.COUNTER_DIGITS}d}"
+
+	def _company_code(self) -> str:
+		"""Company abbreviation (GF, BM). Never the company name — it changes."""
+		abbr = frappe.db.get_value("Company", self.company, "abbr") if self.company else None
+		code = self._sanitise(abbr, self.UNKNOWN_COMPANY)
+		# Fixed width, because there is no delimiter to find the boundary with.
+		return code.ljust(self.COMPANY_CODE_LEN, "X")[:self.COMPANY_CODE_LEN]
+
+	def _gst_state_code(self) -> str:
+		"""GST state number of the store the device was received at.
+
+		Read here rather than from self.state_code: naming runs before
+		validate(), so fetch_warehouse_details() has not populated that field
+		yet on a new document.
+		"""
+		code = None
+		warehouse = self.source_warehouse
+		if warehouse:
+			address = frappe.db.get_value("Warehouse", warehouse, "address")
+			if address:
+				code = frappe.db.get_value("Address", address, "gst_state_number")
+		if not code and self.company:
+			company_address = frappe.db.get_value(
+				"Dynamic Link",
+				{"link_doctype": "Company", "link_name": self.company,
+				 "parenttype": "Address"},
+				"parent",
+			)
+			if company_address:
+				code = frappe.db.get_value("Address", company_address, "gst_state_number")
+		code = self._sanitise(code, self.UNKNOWN_STATE)
+		return code.rjust(2, "0")[:2]
+
+	def _store_code(self) -> str:
+		"""Numeric CH Store id, zero-padded.
+
+		The store's own code (GF-ANNANAGAR) is up to 22 characters and already
+		repeats the company abbreviation, so the short numeric id is used to
+		keep the ticket number speakable.
+		"""
+		if not self.source_warehouse:
+			return self.UNKNOWN_STORE
+		store_id = frappe.db.get_value("CH Store", {"warehouse": self.source_warehouse}, "store_id")
+		if not store_id:
+			# The ticket may carry a non-Sellable bin; climb to the owning store.
+			group = frappe.db.get_value("Warehouse", self.source_warehouse, "parent_warehouse")
+			if group:
+				store_id = frappe.db.get_value("CH Store", {"warehouse_group": group}, "store_id")
+		if not store_id:
+			return self.UNKNOWN_STORE
+		return str(cint(store_id)).rjust(3, "0")[-3:]
+
+	@classmethod
+	def parse_number(cls, name: str) -> dict:
+		"""Split a ticket number back into its parts.
+
+		The format carries no delimiter, so this is the counterpart to
+		build_service_request_number: it is what proves the fixed widths are
+		sufficient. Returns {} for a legacy or unrecognised number rather than
+		raising — historic tickets are named SR-YYMMDD-#### and must stay
+		readable.
+		"""
+		text = cstr(name)
+		expected = (
+			2 + cls.COMPANY_CODE_LEN + 2 + 3 + 6 + cls.COUNTER_DIGITS
+		)
+		if len(text) != expected or not text.startswith(cls.NUMBER_PREFIX):
+			return {}
+		i = len(cls.NUMBER_PREFIX)
+		company = text[i:i + cls.COMPANY_CODE_LEN]; i += cls.COMPANY_CODE_LEN
+		state = text[i:i + 2]; i += 2
+		store = text[i:i + 3]; i += 3
+		date = text[i:i + 6]; i += 6
+		counter = text[i:]
+		if not (state.isdigit() and store.isdigit() and date.isdigit() and counter.isdigit()):
+			return {}
+		return {
+			"company_code": company,
+			"state_code": state,
+			"store_code": store,
+			"date": f"20{date[0:2]}-{date[2:4]}-{date[4:6]}",
+			"counter": cint(counter),
+		}
+
+	@staticmethod
+	def _sanitise(value, fallback: str) -> str:
+		"""Keep only characters that are safe in a document name."""
+		cleaned = "".join(ch for ch in cstr(value).upper() if ch.isalnum())
+		return cleaned or fallback
 
 	def before_insert(self):
 		"""Set defaults before first insert"""
@@ -458,8 +598,20 @@ class ServiceRequest(Document):
 		except ImportError:
 			# ch_item_master not installed — use basic Serial No lookup
 			self._fallback_warranty_from_serial(serial)
+		except frappe.PermissionError:
+			# The VAS scope guard fails closed when it cannot establish which
+			# company a serial belongs to. For a serial that was never sold with
+			# a plan -- an internal GoFix unit, a walk-in device -- that is the
+			# expected answer, not a fault: there is no cover to find. Falling
+			# back is right; logging it as an error was not.
+			#
+			# It had written 448 Error Log rows, which is the real damage: a log
+			# full of an expected condition is a log nobody reads, and the
+			# genuine failures below were sitting in it unnoticed.
+			self._fallback_warranty_from_serial(serial)
 		except Exception:
-			# GF-6 fix: Any other error (DB, config, etc) — fallback gracefully instead of blocking
+			# Anything else -- a database or configuration fault -- is a real
+			# error and still logged, but must not block intake.
 			frappe.log_error(frappe.get_traceback(), f"Warranty lookup failed for {self.serial_no}")
 			self._fallback_warranty_from_serial(serial)
 
@@ -926,9 +1078,18 @@ class ServiceRequest(Document):
 				indicator="green")
 			
 			return so.name
-		except Exception:
+		except Exception as exc:
 			frappe.log_error(frappe.get_traceback(), f"Error creating Service Order for {self.name}")
-			frappe.throw(_("The Service Order could not be created. Review the server error log."), title=_("Service Request Error"))
+			# Say WHY. "Review the server error log" sent a counter clerk to a
+			# place they cannot reach for a message that was usually a plain
+			# validation error they could have fixed themselves — a device
+			# condition the Sales Order did not accept, a missing address.
+			detail = frappe.utils.strip_html(str(exc)).strip()
+			frappe.throw(
+				_("The Service Order could not be created: {0}").format(
+					detail or _("no reason was reported; see the server error log.")),
+				title=_("Service Order Not Created"),
+			)
 
 	def calculate_costs(self):
 		"""Calculate total costs from service items and spare parts"""
@@ -1104,9 +1265,9 @@ class ServiceRequest(Document):
 		gaps = get_unresolved_issue_gaps(self)
 		if not gaps["ready_for_qc"]:
 			frappe.throw(
-				_("Cannot invoice — these are still open: {0}. Every issue must be "
-				  "fixed or rejected with a reason before the customer is billed.").format(
-					", ".join(gaps["uncovered_issues"] + gaps["open_solutions"])
+				_("Cannot invoice — this work is still open: {0}. Every solution that "
+				  "was selected must be finished before the customer is billed.").format(
+					", ".join(gaps["open_solutions"]) or _("no solutions selected")
 				),
 				title=_("Open Issues Remain"),
 			)
@@ -1136,18 +1297,32 @@ class ServiceRequest(Document):
 
 		apply_cost_center(invoice, warehouse=self.get("source_warehouse"))
 
-		# Apply advance if exists
-		if self.advance_amount:
+		# Apply the advance, net of any refund already posted. An "advances" row
+		# must reference a real Payment Entry — ERPNext resolves any non-Journal
+		# reference through tabPayment Entry, so a "Service Request" reference can
+		# never reconcile. The receipt PE is minted lazily here because the intake
+		# flow records only advance_amount (the refund path already posts a PE).
+		net_advance = flt(self.advance_amount) - flt(self.get("advance_refund_amount"))
+		if net_advance > 0:
 			invoice.is_pos = 0
-			invoice.append("advances", {
-				"reference_type": "Service Request",
-				"reference_name": self.name,
-				"advance_amount": self.advance_amount,
-				"allocated_amount": min(self.advance_amount, invoice.grand_total)
-			})
-		
+
 		frappe.has_permission("Sales Invoice", "create", throw=True)
 		invoice.insert()
+
+		if net_advance > 0:
+			pe = self._ensure_advance_payment_entry(net_advance, posting_date)
+			available = flt(pe.unallocated_amount) or flt(pe.paid_amount)
+			allocation = min(net_advance, available, flt(invoice.grand_total))
+			if allocation > 0:
+				invoice.append("advances", {
+					"reference_type": "Payment Entry",
+					"reference_name": pe.name,
+					"remarks": pe.remarks,
+					"advance_amount": available,
+					"allocated_amount": allocation,
+				})
+				invoice.save()
+
 		invoice.submit()
 		
 		self._set_optional_field("service_invoice", invoice.name)
@@ -1158,6 +1333,80 @@ class ServiceRequest(Document):
 		auto_close_service_order_after_billing(service_order=self.service_order)
 
 		frappe.msgprint(_("Service Invoice {0} created successfully").format(invoice.name))
+
+	def _ensure_advance_payment_entry(self, amount, posting_date):
+		"""Return the submitted Payment Entry recording this SR's advance receipt,
+		minting it lazily when the collection step never posted one.
+
+		Mirrors process_advance_refund's account/mode resolution and is idempotent
+		via the advance_payment_entry field and the deterministic reference_no.
+		"""
+		existing = (self.get("advance_payment_entry") or "").strip()
+		if existing and frappe.db.get_value("Payment Entry", existing, "docstatus") == 1:
+			return frappe.get_doc("Payment Entry", existing)
+
+		reference_no = f"Advance-{self.name}"
+		found = frappe.get_all(
+			"Payment Entry",
+			filters={
+				"payment_type": "Receive",
+				"party_type": "Customer",
+				"party": self.customer,
+				"company": self.company,
+				"reference_no": reference_no,
+				"docstatus": 1,
+			},
+			pluck="name",
+			order_by="creation asc, name asc",
+			limit_page_length=1,
+		)
+		if found:
+			self.db_set("advance_payment_entry", found[0], update_modified=False)
+			return frappe.get_doc("Payment Entry", found[0])
+
+		mop_map = {"Cash": "Cash", "UPI": "Cash", "Card": "Cash", "Bank Transfer": "Bank Draft"}
+		erp_mode = mop_map.get(self.get("advance_received_via") or "Cash", "Cash")
+
+		company_account = frappe.db.get_value("Company", self.company, "default_cash_account") or \
+			frappe.db.get_value("Company", self.company, "default_bank_account")
+		if not company_account:
+			frappe.throw(_("Please set default Cash or Bank account for company {0}").format(self.company),
+				title=_("Advance Receipt Error"))
+
+		try:
+			from erpnext.accounts.party import get_party_account
+			customer_account = get_party_account("Customer", self.customer, self.company)
+		except Exception:
+			customer_account = frappe.db.get_value("Company", self.company, "default_receivable_account")
+		if not customer_account:
+			frappe.throw(_("Please set default Receivable account for company {0}").format(self.company),
+				title=_("Advance Receipt Error"))
+
+		from ch_item_master.ch_core.cost_center import apply_cost_center
+
+		pe = frappe.new_doc("Payment Entry")
+		pe.payment_type = "Receive"
+		pe.party_type = "Customer"
+		pe.party = self.customer
+		pe.company = self.company
+		pe.posting_date = posting_date
+		pe.mode_of_payment = erp_mode
+		pe.paid_from = customer_account
+		pe.paid_from_account_currency = frappe.get_cached_value("Account", customer_account, "account_currency")
+		pe.paid_to = company_account
+		pe.paid_to_account_currency = frappe.get_cached_value("Account", company_account, "account_currency")
+		pe.paid_amount = amount
+		pe.received_amount = amount
+		pe.reference_no = reference_no
+		pe.reference_date = posting_date
+		pe.remarks = f"Advance received for Service Request {self.name}"
+		apply_cost_center(pe, warehouse=self.get("source_warehouse"))
+
+		frappe.has_permission("Payment Entry", "create", throw=True)
+		pe.insert()
+		pe.submit()
+		self.db_set("advance_payment_entry", pe.name, update_modified=False)
+		return pe
 
 	def _service_income_account(self, label: str) -> str | None:
 		"""Resolve a service income account for this request's company.
@@ -1200,6 +1449,16 @@ class ServiceRequest(Document):
 				row["income_account"] = labour_account
 			items.append(row)
 
+		# Billing re-checks the spare's CURRENT disposition; it never trusts the
+		# status a caller happens to send.
+		#
+		# `is_defective` is asserted independently of `part_status` because the
+		# invariant that keeps the two aligned (validate(): is_defective =>
+		# part_status "Defective") only runs while the document is a draft. A
+		# submitted usage goes down the update-after-submit path, where validate()
+		# is not re-run — so a part could be flagged defective and still be left
+		# reading "Consumed", and it would have been billed to the customer.
+		# Damaged stock must never reach an invoice, whichever field says so.
 		spare_usages = frappe.get_all(
 			"Spare Parts Usage",
 			filters={
@@ -1208,6 +1467,7 @@ class ServiceRequest(Document):
 				"status": "Active",
 				"part_status": ("in", ("Consumed", "Issued")),
 				"deleted": 0,
+				"is_defective": 0,
 			},
 			fields=["spare_part_item", "item_name", "qty_used", "sales_price", "uom"],
 		)
@@ -1480,11 +1740,8 @@ class ServiceRequest(Document):
 		from frappe.utils import now_datetime
 		date_str = now_datetime().strftime("%y%m%d")
 		
-		# Get next sequence number for this date and prefix
-		sequence = self.get_next_barcode_sequence(prefix, date_str)
-		
-		# Generate barcode
-		barcode = f"{prefix}/{date_str}{sequence:05d}"
+		# Atomic counter + collision check against the Serial No table.
+		barcode = self.next_free_barcode(prefix, date_str)
 		
 		# Set the barcode to serial_no field (or create a new serial no)
 		if not self.serial_no:
@@ -1510,36 +1767,50 @@ class ServiceRequest(Document):
 			# Default to MO for general items
 			return "MO"
 	
-	def get_next_barcode_sequence(self, prefix, date_str):
-		"""Get next sequence number for barcode generation.
-		Uses an advisory lock to prevent race conditions with concurrent requests.
+	# How many times to step past an already-issued barcode before giving up.
+	# A day's worth of collisions on one prefix is far beyond anything real.
+	BARCODE_COLLISION_LIMIT = 1000
+
+	def next_free_barcode(self, prefix, date_str) -> str:
+		"""The next unissued device barcode for this prefix and date.
+
+		The counter comes from `tabSeries`, which increments atomically, and the
+		result is checked against `Serial No` -- the table the barcodes actually
+		live in -- before it is handed out.
+
+		The previous implementation derived the next number by scanning
+		`tabService Request.serial_no` for the highest value of the day. That is
+		the consuming table, not the source of truth, so any barcode whose
+		Service Request had been deleted or cancelled was invisible: the scan
+		returned nothing, the sequence restarted at 1, and the regenerated
+		barcode collided with a live Serial No belonging to a different item.
+		Intake then died on "Serial No X does not belong to Item Y" and the
+		ticket could not be raised at all. The advisory lock around it never
+		helped, because the number it was protecting was wrong before any race.
 		"""
-		lock_name = f"barcode_seq_{prefix}_{date_str}"
-		# GF-7 fix: Acquire advisory lock to prevent duplicate sequence numbers
-		frappe.db.sql("SELECT GET_LOCK(%s, 10)", (lock_name,))
-		try:
-			range_start = f"{prefix}/{date_str}"
-			range_end = f"{prefix}/{date_str}\xff"
-			last_barcode = frappe.db.sql("""
-				SELECT serial_no
-				FROM `tabService Request`
-				WHERE serial_no >= %s AND serial_no < %s
-				ORDER BY serial_no DESC
-				LIMIT 1
-				FOR UPDATE
-			""", (range_start, range_end), as_dict=True)
+		series_key = f"{prefix}/{date_str}"
+		for _attempt in range(self.BARCODE_COLLISION_LIMIT):
+			sequence = cint(getseries(series_key, 5))
+			barcode = f"{prefix}/{date_str}{sequence:05d}"
+			if not frappe.db.exists("Serial No", barcode):
+				return barcode
+			# Already issued -- typically because the series counter is behind
+			# the stored maximum after a data restore. Burn it and take the next.
+		frappe.throw(
+			_("Could not allocate a device barcode for {0} after {1} attempts.").format(
+				series_key, self.BARCODE_COLLISION_LIMIT),
+			title=_("Barcode Allocation Failed"),
+		)
 
-			if last_barcode and last_barcode[0].serial_no:
-				try:
-					last_seq_str = last_barcode[0].serial_no.split(date_str)[1]
-					last_seq = int(last_seq_str)
-					return last_seq + 1
-				except (IndexError, ValueError):
-					return 1
+	def get_next_barcode_sequence(self, prefix, date_str):
+		"""Deprecated: retained so external callers keep working.
 
-			return 1
-		finally:
-			frappe.db.sql("SELECT RELEASE_LOCK(%s)", (lock_name,))
+		Returns the numeric part of the next free barcode. Prefer
+		``next_free_barcode``, which returns the whole string and is what
+		``generate_barcode`` uses.
+		"""
+		barcode = self.next_free_barcode(prefix, date_str)
+		return cint(barcode.rsplit(date_str, 1)[-1])
 	
 	def create_serial_no_document(self, barcode, item):
 		"""Create Serial No document for the generated barcode"""
@@ -1984,15 +2255,29 @@ def reject_service_request(service_request, rejection_reason) -> bool:
 
 
 def get_unresolved_issue_gaps(sr) -> dict:
-	"""QC-entry gate: every identified issue must be solved before QC.
+	"""QC-entry gate: every solution that was SELECTED must be finished.
 
 	Returns:
-	  uncovered_issues — active issue categories with NO non-cancelled solution
-	  open_solutions   — solutions not yet Completed/Skipped/Cancelled
-	  ready_for_qc     — True only when both lists are empty
+	  uncovered_issues — active issue categories with no completed solution.
+	                     INFORMATIONAL ONLY — reported at QC, never blocking.
+	  open_solutions   — selected solutions not yet Completed/Skipped/Cancelled
+	  ready_for_qc     — True when at least one solution exists and none is open
 
-	Applies equally to issues added later by the technician: an issue
-	identified mid-repair re-opens the coverage gate.
+	The gate used to require every identified issue to carry a completed
+	solution. The solution list offered per issue is a catalogue, not a work
+	order: some issues have no applicable solution for a given device at all
+	("No solutions apply to this device in this category"), and an issue
+	raised at intake often turns out not to need work. That made the gate
+	unsatisfiable — the technician could neither assign a solution nor pass
+	QC, and the ticket bounced out of QC on every reload.
+
+	What QC certifies is the work that was actually chosen, so that is what
+	is enforced: every selected solution must be finished. Issues nobody
+	worked on are surfaced to the QC sign-off instead of silently blocking
+	it, so the decision to leave one alone is visible rather than invisible.
+
+	Applies equally to solutions added later by the technician: work added
+	mid-repair re-opens the gate until it too is finished.
 	"""
 	if isinstance(sr, str):
 		sr = frappe.get_doc("Service Request", sr)
@@ -2025,10 +2310,16 @@ def get_unresolved_issue_gaps(sr) -> dict:
 			open_solutions.append(f"{row.repair_solution} ({row.issue_category})")
 
 	uncovered = sorted(active_issues - covered)
+	# A ticket with no solutions at all has had no work done on it, so there is
+	# nothing for QC to certify — that stays blocked.
+	has_work = any(
+		row.status not in ("Cancelled",) for row in sr.get("solution_lines", [])
+	)
 	return {
 		"uncovered_issues": uncovered,
 		"open_solutions": open_solutions,
-		"ready_for_qc": not uncovered and not open_solutions,
+		"has_work": has_work,
+		"ready_for_qc": has_work and not open_solutions,
 	}
 
 

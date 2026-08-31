@@ -121,6 +121,67 @@ def _create_customer_device_bin(store, company: str | None = None) -> str | None
 		return None
 
 
+def is_customer_device_bin(warehouse: str | None) -> bool:
+	"""True if `warehouse` is a store's Customer Device custody bin."""
+	if not warehouse:
+		return False
+	return f"-{BIN_SUFFIX}" in warehouse or warehouse.endswith(BIN_SUFFIX)
+
+
+def sellable_bin_for(warehouse: str | None) -> str | None:
+	"""The Sellable bin of the store that owns `warehouse` — what a purchase
+	destination should almost always be."""
+	if not warehouse:
+		return None
+	store = frappe.db.get_value("CH Store", {"warehouse": warehouse}, "warehouse")
+	if store:
+		return store
+	# Given a custody/quarantine bin, climb to the store and take its Sellable one.
+	group = frappe.db.get_value("Warehouse", warehouse, "parent_warehouse")
+	if group:
+		return frappe.db.get_value("CH Store", {"warehouse_group": group}, "warehouse")
+	return None
+
+
+def block_customer_device_as_destination(doc, method=None):
+	"""A purchase must never land in a Customer Device bin.
+
+	That bin is customer special stock: quantity tracked, **value nil**, and the
+	goods in it belong to the customer who handed them in. Receiving supplier
+	inventory there mixes owned, valued stock into a bin whose whole premise is
+	that nothing in it is ours — the device custody trail and the stock
+	valuation both stop meaning anything.
+
+	Checked on the header warehouse and on every line, because either can carry
+	its own.
+	"""
+	offending = set()
+	for field in ("set_warehouse", "warehouse", "to_warehouse"):
+		value = doc.get(field)
+		if is_customer_device_bin(value):
+			offending.add(value)
+	for row in doc.get("items") or []:
+		for field in ("warehouse", "t_warehouse", "receiving_warehouse"):
+			value = row.get(field)
+			if is_customer_device_bin(value):
+				offending.add(value)
+
+	if not offending:
+		return
+
+	wrong = sorted(offending)[0]
+	suggestion = sellable_bin_for(wrong)
+	hint = (
+		_(" Use {0} instead.").format(frappe.bold(suggestion)) if suggestion else ""
+	)
+	frappe.throw(
+		_("{0} is a Customer Device custody bin — it holds handsets belonging to "
+		  "customers, at nil value, and cannot receive purchased stock.{1}")
+		.format(frappe.bold(wrong), hint),
+		title=_("Invalid Destination Warehouse"),
+	)
+
+
 def is_customer_device(sr) -> bool:
 	"""True when the ticket's device belongs to the customer, not to us.
 

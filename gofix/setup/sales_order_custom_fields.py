@@ -4,6 +4,8 @@
 import frappe
 from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 
+from gofix.constants.device_condition import as_select_options
+
 
 def create_sales_order_custom_fields():
 	"""Create custom fields in Sales Order for Service Order functionality"""
@@ -96,7 +98,12 @@ def create_sales_order_custom_fields():
 				"fieldname": "device_condition",
 				"label": "Device Condition",
 				"fieldtype": "Select",
-				"options": "Good\nDamaged\nBroken\nWater Damaged",
+				# The vocabulary is owned by gofix.constants.device_condition. This
+				# field used to hardcode a SHORTER list, so a device taken in with
+				# "Minor Scratches" saved fine on the Service Request and then blew
+				# up when the Service Order was created from it — the intake was
+				# accepted and the job could not be opened.
+				"options": as_select_options(),
 				"insert_after": "device_column_break"
 			},
 			{

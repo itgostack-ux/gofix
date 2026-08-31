@@ -24,6 +24,18 @@ def create_employee_custom_fields():
 				"description": "Technician skill grade for GoFix service assignment"
 			},
 			{
+				"fieldname": "gofix_billing_hourly_rate",
+				"label": "Billable Rate / Hour (GoFix)",
+				"fieldtype": "Currency",
+				"insert_after": "technician_grade",
+				"description": (
+					"What the CUSTOMER is charged per hour of this technician's time. "
+					"Distinct from custom_hourly_rate, which is the cost the company "
+					"bears (CTC-derived) — billing at cost would make every repair "
+					"zero-margin. Blank falls back to the Technician Grade's rate."
+				),
+			},
+			{
 				"fieldname": "gofix_service_warehouse",
 				"label": "Service Center / Store",
 				"fieldtype": "Link",

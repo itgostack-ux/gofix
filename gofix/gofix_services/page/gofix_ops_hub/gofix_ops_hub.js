@@ -182,6 +182,7 @@ class GoFixOpsHub {
 					<option value="rework">${__("Rework (QC Fail)")}</option>
 					<option value="done">${__("Done")}</option>
 					<option value="closed">${__("Closed")}</option>
+					<option value="rejected">${__("Rejected")}</option>
 				</select>
 				<select class="form-control input-xs goh-tb-priority">
 					<option value="">${__("All Priorities")}</option>
@@ -471,6 +472,79 @@ class GoFixOpsHub {
 			e.stopPropagation();
 			this._print_invoice($(e.currentTarget).data("invoice"));
 		});
+		// Delegated, and rebound with .off() first: the ticket header is
+		// re-rendered on every refresh, and stacking handlers would fire one
+		// print job per render.
+		this.parent.off("click", ".goh-print-label").on("click", ".goh-print-label", (e) => {
+			e.preventDefault();
+			e.stopPropagation();
+			this._print_device_label($(e.currentTarget).data("sr"));
+		});
+	}
+
+	/**
+	 * Print the stick-on barcode label for the device.
+	 *
+	 * The bars are a server-rendered PNG (Code128 via ch_erp15's print helper),
+	 * not a browser-drawn canvas: a canvas barcode degrades to plain text when
+	 * the page reaches a printer, and an unreadable sticker on a customer's
+	 * handset is worse than none.
+	 */
+	_print_device_label(sr_name) {
+		if (!sr_name) return;
+		frappe.xcall(`${API}.get_device_label`, { sr_name }).then((d) => {
+			if (!d || !d.printable) {
+				frappe.msgprint({
+					title: __("Barcode Unavailable"),
+					message: __("The barcode image could not be generated, so the label would carry a number no scanner can read. Check the barcode library on the server."),
+					indicator: "red",
+				});
+				return;
+			}
+			const esc = frappe.utils.escape_html;
+			const row = (k, v) => v ? `<div class="l-row"><span>${esc(k)}</span><b>${esc(v)}</b></div>` : "";
+			const label = `
+				<div class="label">
+					<div class="l-store">${esc(d.store || "")}</div>
+					<img class="l-bars" src="data:image/png;base64,${d.barcode_png}" alt="${esc(d.service_request)}">
+					<div class="l-num">${esc(d.service_request)}</div>
+					${row(__("Customer"), d.customer_name)}
+					${row(__("Phone"), d.contact_number)}
+					${row(__("Device"), [d.brand, d.device].filter(Boolean).join(" "))}
+					${row(__("IMEI / Serial"), d.device_barcode)}
+					${row(__("Received"), d.service_date)}
+					${d.priority && d.priority !== "Medium"
+						? `<div class="l-pri">${esc(d.priority)}</div>` : ""}
+				</div>`;
+
+			const w = window.open("", "_blank", "width=460,height=640");
+			if (!w) {
+				frappe.msgprint(__("Allow pop-ups for this site to print the label."));
+				return;
+			}
+			w.document.write(`<!doctype html><html><head><title>${esc(d.service_request)}</title>
+				<style>
+					@page { size: 50mm 30mm; margin: 2mm; }
+					body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; margin: 0; }
+					.label { width: 46mm; padding: 1mm 0 2mm; page-break-after: always; }
+					.l-store { font-size: 7pt; text-transform: uppercase; letter-spacing: .4px; }
+					.l-bars { width: 100%; height: 11mm; object-fit: contain; display: block; }
+					/* HRI directly under the bars: the two must never be separated. */
+					.l-num { font-family: ui-monospace, Menlo, Consolas, monospace;
+						font-size: 8.5pt; letter-spacing: .5px; text-align: center; margin-bottom: 1mm; }
+					.l-row { display: flex; justify-content: space-between; gap: 3mm;
+						font-size: 6.5pt; line-height: 1.35; }
+					.l-row span { color: #555; }
+					.l-row b { font-weight: 600; text-align: right; }
+					.l-pri { margin-top: .6mm; font-size: 6.5pt; font-weight: 700; }
+					@media print { .label:last-child { page-break-after: auto; } }
+				</style></head><body>${label.repeat(d.copies || 1)}</body></html>`);
+			w.document.close();
+			// Wait for the barcode image to decode, or the sheet prints blank.
+			const go = () => { w.focus(); w.print(); };
+			const img = w.document.querySelector(".l-bars");
+			if (img && !img.complete) { img.onload = go; img.onerror = go; } else { go(); }
+		});
 	}
 
 	/* ── Stepper ────────────────────────────────────────────────────────── */
@@ -575,6 +649,10 @@ class GoFixOpsHub {
 						<button class="btn btn-xs btn-danger goh-not-repairable-btn" title="${__("Mark Not Repairable")}" style="margin-right:4px;">
 							<i class="fa fa-ban"></i> ${__("Not Repairable")}
 						</button>
+						<button class="btn btn-xs btn-default goh-print-label" data-sr="${esc(d.name)}"
+							title="${__("Print the barcode label for the device")}">
+							<i class="fa fa-barcode"></i> ${__("Label")}
+						</button>
 						<a href="/app/service-request/${encodeURIComponent(d.name)}" target="_blank" class="btn btn-xs btn-default" title="${__("Open Full SR")}">
 							<i class="fa fa-external-link"></i>
 						</a>
@@ -582,6 +660,13 @@ class GoFixOpsHub {
 						${d.service_invoice ? `<button class="btn btn-xs btn-default goh-print-invoice" data-invoice="${esc(d.service_invoice)}" title="${__("Print Invoice")}"><i class="fa fa-print"></i></button>` : ""}
 					</div>
 				</div>
+				${["Rejected", "Cancelled", "Withdrawn", "Expired"].includes(d.decision) ? `
+					<div class="goh-rejection-banner" style="margin:8px 0 0;padding:8px 10px;border-left:3px solid var(--red-500,#e24c4c);background:var(--red-50,#fff5f5);border-radius:3px;">
+						<b style="color:var(--red-600,#c0392b)">${__("{0}", [d.decision])}</b>
+						${d.rejection_reason
+							? `<div style="margin-top:3px;white-space:pre-wrap">${esc(d.rejection_reason)}</div>`
+							: `<div style="margin-top:3px" class="text-muted">${__("No reason recorded.")}</div>`}
+					</div>` : ""}
 			</div>
 		`;
 	}
@@ -835,11 +920,348 @@ class GoFixOpsHub {
 	/* ═══════════════════════════════════════════════════════════════════════ */
 	/*  STEP 1 — Technical Analysis                                          */
 	/* ═══════════════════════════════════════════════════════════════════════ */
+	/**
+	 * Who the ticket is pending with during Analysis, and for how long.
+	 *
+	 * Analysis / Solutions / Confirm are real technician work, but the first
+	 * Job Assignment used to be created only at the Assign stage — so nobody
+	 * could say whose desk a ticket was sitting on, and those hours never
+	 * reached costing or technician performance.
+	 */
+	_bind_diagnosis_custody(d) {
+		const self = this;
+		this._init_link_field("#goh-diag-tech-field", "Employee", __("Search technician..."), {
+			query: "gofix.gofix_services.api.technician_query",
+			sr_name: d.name,
+		}, "_diag_tech");
+
+		this.parent.find("#goh-diag-assign").on("click", () => {
+			const tech = this._diag_tech && this._diag_tech.get_value();
+			if (!tech) return frappe.show_alert({ message: __("Select a technician."), indicator: "orange" });
+			frappe.xcall(`${API}.assign_diagnosis_technician`, { sr_name: d.name, technician: tech })
+				.then((r) => {
+					frappe.show_alert({
+						message: r.reassigned
+							? __("Handed over to {0}.", [r.technician_name || tech])
+							: __("Assigned to {0}. Time is now being recorded.", [r.technician_name || tech]),
+						indicator: "green",
+					});
+					self._refresh_all();
+				});
+		});
+
+		this.parent.find("#goh-diag-release").on("click", () => {
+			frappe.xcall(`${API}.release_diagnosis_technician`, { sr_name: d.name })
+				.then(() => {
+					frappe.show_alert({ message: __("Clock stopped."), indicator: "blue" });
+					self._refresh_all();
+				});
+		});
+
+		this._start_diagnosis_timer();
+	}
+
+	/**
+	 * Tick the elapsed-time label from the SERVER clock.
+	 *
+	 * The offset between server and browser is measured once on render, so a
+	 * wrong workstation clock cannot inflate or hide a technician's time. Only
+	 * the label re-renders each second — no request per tick.
+	 */
+	_start_diagnosis_timer() {
+		clearInterval(this._diag_timer);
+		const $el = this.parent.find(".goh-diag-elapsed");
+		if (!$el.length) return;
+
+		const start = frappe.datetime.str_to_obj($el.data("start"));
+		const serverNow = frappe.datetime.str_to_obj($el.data("server-now"));
+		if (!start || !serverNow) return;
+		const skew = serverNow.getTime() - Date.now();
+		const banked = parseFloat($el.data("banked")) || 0;
+
+		const tick = () => {
+			const live = (Date.now() + skew) - start.getTime();
+			if (live < 0) return;
+			let secs = Math.floor(live / 1000) + Math.round(banked * 3600);
+            const h = Math.floor(secs / 3600);
+            const m = Math.floor((secs % 3600) / 60);
+            const s = secs % 60;
+			const pad = (n) => String(n).padStart(2, "0");
+			// Text, not colour alone.
+			$el.text(__("held {0}", [`${pad(h)}:${pad(m)}:${pad(s)}`]));
+		};
+		tick();
+		this._diag_timer = setInterval(tick, 1000);
+	}
+
+	/**
+	 * Cumulative technician time on the ticket, shown on every working stage.
+	 *
+	 * Analysis and Repair are separate Job Assignments, so each screen used to
+	 * show only its own clock: Repair opened at 00:00:00 even when the same
+	 * technician had already spent an hour diagnosing the same device, and the
+	 * Analysis figure vanished once the ticket moved on. This is the one number
+	 * that answers "how long has this ticket actually taken", which is what a
+	 * promise to a customer is measured against.
+	 */
+	/**
+	 * Time remaining against the promise given to the customer.
+	 *
+	 * Rendered on every working stage, because the deadline does not belong to
+	 * one step — it is what the whole ticket is measured against, and a
+	 * technician picking up a job at Repair needs to know how much of the
+	 * customer's time is already gone.
+	 *
+	 * Ticks from the SERVER clock: the offset is measured once here, so a
+	 * workstation with a wrong clock cannot make a late job look on time.
+	 */
+	_html_countdown(d) {
+		const c = d.countdown || {};
+		const esc = frappe.utils.escape_html;
+		if (c.state === "unset") {
+			return `<span class="goh-badge badge-muted" title="${esc(c.message || "")}">
+				<i class="fa fa-hourglass-o"></i> ${__("No promise set")}</span>`;
+		}
+		const cls = { overdue: "badge-red", missed: "badge-red", due_soon: "badge-orange",
+			on_track: "badge-green", met: "badge-green" }[c.state] || "badge-muted";
+		const label = { met: __("Delivered on time"), missed: __("Promise missed") }[c.state];
+		return `<span class="goh-badge ${cls} goh-countdown"
+				data-promised="${esc(c.promised || "")}"
+				data-server-now="${esc(c.server_now || "")}"
+				data-stopped="${c.stopped ? 1 : 0}"
+				title="${__("Promised {0}", [esc(c.promised || "")])}">
+				<i class="fa fa-clock-o"></i> <span class="goh-countdown-text">${
+					label || __("calculating…")}</span></span>${
+			c.revision_count ? `<span class="text-muted small ml-1" title="${
+				__("The promise has been moved {0} time(s)", [c.revision_count])}">
+				(${__("revised {0}×", [c.revision_count])})</span>` : ""}`;
+	}
+
+	/** One interval for every countdown on screen, driven by the server offset. */
+	_start_countdown_timer() {
+		clearInterval(this._countdown_timer);
+		const $els = this.parent.find(".goh-countdown");
+		if (!$els.length) return;
+
+		const first = $els.first();
+		const serverNow = frappe.datetime.str_to_obj(first.data("server-now"));
+		if (!serverNow) return;
+		const skew = serverNow.getTime() - Date.now();
+
+		const tick = () => {
+			$els.each(function () {
+				const $el = $(this);
+				if (String($el.data("stopped")) === "1") return;   // frozen: job is over
+				const target = frappe.datetime.str_to_obj($el.data("promised"));
+				if (!target) return;
+				let secs = Math.round((target.getTime() - (Date.now() + skew)) / 1000);
+                const overdue = secs < 0;
+                secs = Math.abs(secs);
+				const d2 = Math.floor(secs / 86400);
+				const h = Math.floor((secs % 86400) / 3600);
+				const m = Math.floor((secs % 3600) / 60);
+				const sec = secs % 60;
+				const pad = (n) => String(n).padStart(2, "0");
+				const clock = (d2 ? `${d2}d ` : "") + `${pad(h)}:${pad(m)}:${pad(sec)}`;
+				// Text carries the meaning, not colour alone.
+				$el.find(".goh-countdown-text").text(
+					overdue ? __("{0} OVERDUE", [clock]) : __("{0} left", [clock]));
+				$el.toggleClass("badge-red", overdue).toggleClass("badge-green", !overdue);
+			});
+		};
+		tick();
+		this._countdown_timer = setInterval(tick, 1000);
+	}
+
+	/** The ticket-age clock — counts UP from when the job was raised. */
+	_start_age_timer() {
+		clearInterval(this._age_timer);
+		const $el = this.parent.find(".goh-age");
+		if (!$el.length || String($el.data("running")) !== "1") return;
+		const opened = frappe.datetime.str_to_obj($el.data("opened"));
+		const serverNow = frappe.datetime.str_to_obj($el.data("server-now"));
+		if (!opened || !serverNow) return;
+		const skew = serverNow.getTime() - Date.now();
+		const tick = () => {
+			const mins = Math.max(0, Math.floor(((Date.now() + skew) - opened.getTime()) / 60000));
+			const d2 = Math.floor(mins / 1440);
+			const h = Math.floor((mins % 1440) / 60);
+			$el.text((d2 ? `${d2}d ` : "") + `${h}h ${String(mins % 60).padStart(2, "0")}m`);
+		};
+		tick();
+		this._age_timer = setInterval(tick, 30000);   // minutes granularity
+	}
+
+	/**
+	 * Condition evidence: what the device looked like coming in, and going out.
+	 *
+	 * Shown on every stage rather than only at billing, because the intake
+	 * photos are the thing a technician needs to SEE before they touch the
+	 * device. The stage of a NEW photo follows the ticket: before repair is
+	 * finished it is more intake evidence, at QC and billing it is the outgoing
+	 * record the customer is charged against.
+	 */
+	_html_device_photos(d) {
+		const p = d.device_photos || { intake: [], outtake: [] };
+		const stage = ["qc", "invoice", "done"].includes(d.ops_stage) ? "Outtake" : "Intake";
+		const esc = frappe.utils.escape_html;
+		const thumb = (row) => `
+			<div style="position:relative;width:64px;height:64px;border-radius:6px;overflow:hidden;border:1px solid var(--border-color)"
+				title="${esc(row.stage)} · ${esc(row.captured_at || "")}${row.remarks ? " · " + esc(row.remarks) : ""}">
+				<a href="${esc(row.photo)}" target="_blank" rel="noopener">
+					<img src="${esc(row.photo)}" style="width:100%;height:100%;object-fit:cover">
+				</a>
+				<button class="goh-photo-drop" data-row="${esc(row.name)}" title="${__("Remove")}"
+					style="position:absolute;top:1px;right:1px;padding:0 4px;background:rgba(0,0,0,0.6);color:#fff;border:0;border-radius:3px;font-size:11px">&times;</button>
+			</div>`;
+		const group = (label, rows) => `
+			<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+				<b class="text-muted small" style="min-width:60px">${label}</b>
+				${rows.length ? rows.map(thumb).join("")
+					: `<span class="text-muted small">${__("None taken")}</span>`}
+			</div>`;
+
+		return `
+			<div class="goh-section goh-photos" style="margin-bottom:10px">
+				<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+					<b><i class="fa fa-camera"></i> ${__("Device Photos")}</b>
+					<button class="btn btn-xs btn-default goh-photo-add" data-stage="${stage}"
+						style="margin-left:auto">
+						<i class="fa fa-plus"></i> ${__("Add {0} Photo", [__(stage)])}
+					</button>
+					<input type="file" class="goh-photo-input" accept="image/*" capture="environment"
+						multiple style="display:none">
+				</div>
+				${group(__("In"), p.intake || [])}
+				<div style="height:6px"></div>
+				${group(__("Out"), p.outtake || [])}
+			</div>`;
+	}
+
+	_html_time_on_ticket(d) {
+		const esc = frappe.utils.escape_html;
+		const t = d.time_summary || {};
+		const hm = (h) => {
+			const mins = Math.max(0, Math.round((h || 0) * 60));
+			return `${Math.floor(mins / 60)}h ${String(mins % 60).padStart(2, "0")}m`;
+		};
+		const hasTime = t.by_technician && t.by_technician.length;
+		const hasPromise = (d.countdown || {}).state && d.countdown.state !== "unset";
+		// A ticket with no time logged still has a deadline to show.
+		if (!hasTime && !hasPromise) return "";
+
+		const stages = Object.entries(t.by_stage || {})
+			.filter(([, h]) => h > 0)
+			.map(([stage, h]) => `<span class="goh-badge badge-muted ml-1">${esc(stage)} ${hm(h)}</span>`)
+			.join("");
+		const techs = (t.by_technician || [])
+			.map(x => `<span class="ml-2">${esc(x.technician_name)} <b>${hm(x.hours)}</b></span>`)
+			.join(" · ");
+
+		const run = t.running;
+		const runningBit = run
+			? `<span class="goh-badge badge-blue ml-2"><i class="fa fa-play"></i> ${esc(run.technician_name)} — ${esc(run.job_type || "")}</span>`
+			// "clock stopped" sat beside the promise countdown and read as though
+			// the DEADLINE had stopped. Name which clock and why: technician time
+			// only accrues while a job is open, and analysis hours are banked
+			// when the analysis is confirmed.
+			: `<span class="text-muted small ml-2"
+					title="${__("Technician time only runs while a job is open. Analysis hours are banked when Confirm Analysis is pressed; repair time starts when the work is assigned.")}">${
+					__("nobody working now")}</span>`;
+
+		// Text, not colour alone.
+		const stale = run && run.stale
+			? `<div style="margin-top:4px;color:var(--red-600,#c0392b);font-size:11px">
+					<i class="fa fa-exclamation-triangle"></i>
+					${__("Running for {0} without a pause — check whether this job was left open.",
+						[hm(run.elapsed_hours)])}
+				</div>`
+			: "";
+
+		return `
+			<div class="goh-section" style="padding:8px 12px;margin-bottom:10px;
+					border-left:3px solid var(--purple-500,#7c5cff);background:var(--bg-light-gray,#f7f9fc)">
+				<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:12px">
+					${/* Two clocks, side by side and never merged: how long the
+					     customer has waited, and how much work has gone in. */ ""}
+					<span title="${__("Wall-clock since the ticket was raised")}">
+						<b>${__("Open")}</b>
+						<b style="font-size:14px" class="goh-age"
+							data-opened="${esc((d.ticket_age || {}).opened || "")}"
+							data-server-now="${esc((d.ticket_age || {}).server_now || "")}"
+							data-running="${(d.ticket_age || {}).running ? 1 : 0}">${
+								hm((d.ticket_age || {}).hours)}</b>
+					</span>
+					<span class="text-muted">|</span>
+					<span title="${__("Hands-on technician time, every stage and technician")}">
+						<b>${__("Worked")}</b>
+						<b style="font-size:14px">${hm(t.total_hours)}</b>
+					</span>
+					${stages}
+					${this._html_countdown(d)}
+					${runningBit}
+					<div style="flex:1"></div>
+					<span class="text-muted small">${techs}</span>
+				</div>
+				${stale}
+			</div>`;
+	}
+
+	_html_diagnosis_custody(d) {
+		const esc = frappe.utils.escape_html;
+		const a = d.diagnosis_assignment || {};
+		const held = a.assigned
+			? `<span class="goh-badge badge-blue"><i class="fa fa-user"></i> ${esc(a.technician_name || a.technician)}</span>
+			   <span class="goh-diag-elapsed text-muted small ml-2"
+			         data-start="${esc(a.start_datetime || "")}"
+			         data-server-now="${esc(a.server_now || "")}"
+			         data-banked="${a.actual_hours || 0}"></span>`
+			: `<span class="text-muted small">${__("Unassigned — nobody is recorded as working on this.")}</span>`;
+
+		return `
+			<div class="goh-section" style="padding:8px 12px;margin-bottom:10px;
+					border-left:3px solid var(--blue-500,#4a8cf7);background:var(--bg-light-gray,#f7f9fc)">
+				<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+					<b style="font-size:12px">${__("Pending with")}</b>
+					${held}
+					<div style="flex:1"></div>
+					<div id="goh-diag-tech-field" style="min-width:210px"></div>
+					<button class="btn btn-xs btn-primary" id="goh-diag-assign">
+						<i class="fa fa-user-plus"></i> ${a.assigned ? __("Reassign") : __("Assign")}
+					</button>
+					${a.assigned ? `<button class="btn btn-xs btn-default" id="goh-diag-release"
+						title="${__("Stop the clock without handing over")}"><i class="fa fa-pause"></i></button>` : ""}
+				</div>
+			</div>`;
+	}
+
 	_html_analysis(d) {
 		const esc = frappe.utils.escape_html;
 
 		const activeIssues = (d.issue_lines || []).filter(r => r.status !== "Deleted");
 		const deletedIssues = (d.issue_lines || []).filter(r => r.status === "Deleted");
+
+		// Analysis lists ISSUES; the Solutions step lists SOLUTIONS. They are
+		// different counts by nature — one issue can carry several solutions and
+		// some carry none — which read as work going missing ("I added 4, this
+		// shows 3"). Showing each issue's solutions here makes the two views
+		// tell the same story.
+		const SOL_BADGE = {
+			Planned: "badge-muted", "In Progress": "badge-blue", "On Hold": "badge-orange",
+			Completed: "badge-green", Skipped: "badge-yellow", Cancelled: "badge-red",
+		};
+		const solsByCategory = {};
+		for (const s of (d.solution_lines || [])) {
+			(solsByCategory[s.issue_category] = solsByCategory[s.issue_category] || []).push(s);
+		}
+		const solutionCell = (cat) => {
+			const list = solsByCategory[cat] || [];
+			if (!list.length) {
+				return `<span class="text-muted small">${__("None assigned")}</span>`;
+			}
+			return list.map(s => `<span class="goh-badge ${SOL_BADGE[s.status] || "badge-muted"} mr-1"
+				title="${esc(s.repair_solution)} · ${esc(s.status)}${s.technician_name ? " · " + esc(s.technician_name) : ""}">${esc(s.solution_name || s.repair_solution)}</span>`).join(" ");
+		};
 
 		const issueRows = activeIssues.map((row, i) => `
 			<tr data-name="${esc(row.name)}" data-idx="${i}">
@@ -851,6 +1273,7 @@ class GoFixOpsHub {
 					</select>
 				</td>
 				<td><input class="form-control input-xs goh-issue-desc" value="${esc(row.description)}" placeholder="${__("Description")}"></td>
+				<td>${solutionCell(row.issue_category)}</td>
 				<td><span class="goh-badge ${row.status === "Resolved" ? "badge-green" : row.status === "Open" ? "badge-blue" : "badge-muted"}">${esc(row.status)}</span></td>
 				<td><button class="btn btn-xs btn-danger goh-issue-remove" data-row="${esc(row.name)}"><i class="fa fa-trash"></i></button></td>
 			</tr>
@@ -884,6 +1307,10 @@ class GoFixOpsHub {
 					<span class="text-muted small ml-2">${__("Identify all issues with the device")}</span>
 				</div>
 
+				${this._html_time_on_ticket(d)}
+				${this._html_device_photos(d)}
+				${this._html_diagnosis_custody(d)}
+
 				${d.issue_description ? `
 					<div class="goh-complaint-block">
 						<div class="goh-note-label"><i class="fa fa-comment"></i> ${__("Customer Complaint")}</div>
@@ -893,10 +1320,10 @@ class GoFixOpsHub {
 
 				<table class="goh-table" id="goh-issue-table">
 					<thead>
-						<tr><th>${__("Issue Category")}</th><th style="width:130px">${__("Reported By")}</th><th>${__("Description")}</th><th style="width:80px">${__("Status")}</th><th style="width:40px"></th></tr>
+						<tr><th>${__("Issue Category")}</th><th style="width:130px">${__("Reported By")}</th><th>${__("Description")}</th><th style="width:200px">${__("Solutions")}</th><th style="width:80px">${__("Status")}</th><th style="width:40px"></th></tr>
 					</thead>
 					<tbody id="goh-issue-tbody">
-						${issueRows || `<tr><td colspan="5" class="text-muted text-center">${__("No issues added yet. Click + to add.")}</td></tr>`}
+						${issueRows || `<tr><td colspan="6" class="text-muted text-center">${__("No issues added yet. Click + to add.")}</td></tr>`}
 					</tbody>
 				</table>
 
@@ -965,7 +1392,7 @@ class GoFixOpsHub {
 		const esc = frappe.utils.escape_html;
 		const existingSols = (d.solution_lines || []).map(s => `
 			<div class="goh-sol-existing">
-				<span class="goh-badge badge-green">${esc(s.repair_solution)}</span>
+				<span class="goh-badge badge-green" title="${esc(s.repair_solution)}">${esc(s.solution_name || s.repair_solution)}</span>
 				<span class="text-muted small">${esc(s.issue_category || "")} — ${s.estimated_minutes}min</span>
 				${s.requires_spare ? `<span class="goh-badge badge-yellow">${__("Spare")}</span>` : ""}
 			</div>
@@ -1028,7 +1455,7 @@ class GoFixOpsHub {
 				${info.solutions.map(s => `
 					<div style="display:flex;align-items:center;gap:8px;padding:3px 0 3px 20px;font-size:12px">
 						<span class="goh-badge badge-muted" style="font-size:11px">${esc(s.issue_category || "")}</span>
-						<span style="font-weight:500">${esc(s.repair_solution)}</span>
+						<span style="font-weight:500" title="${esc(s.repair_solution)}">${esc(s.solution_name || s.repair_solution)}</span>
 						<span class="text-muted">${s.estimated_minutes || 0}min</span>
 						${s.requires_spare ? '<span class="goh-badge badge-orange" style="font-size:10px">Spare</span>' : ""}
 						<button class="btn btn-xs btn-link text-danger goh-unassign-sol" data-row="${esc(s.name)}" style="padding:0;margin-left:auto;font-size:11px"><i class="fa fa-times"></i></button>
@@ -1053,7 +1480,7 @@ class GoFixOpsHub {
 				${items.map(s => `
 					<label style="display:flex;align-items:center;gap:8px;padding:4px 8px 4px 20px;cursor:pointer;border-radius:4px;margin:0" class="goh-sol-assign-row" onmouseover="this.style.background='var(--bg-light-gray)'" onmouseout="this.style.background=''">
 						<input type="checkbox" class="goh-assign-check" data-row="${esc(s.name)}" checked>
-						<span style="font-weight:500;font-size:13px">${esc(s.repair_solution)}</span>
+						<span style="font-weight:500;font-size:13px" title="${esc(s.repair_solution)}">${esc(s.solution_name || s.repair_solution)}</span>
 						<span class="text-muted" style="font-size:12px">${s.estimated_minutes || 0}min</span>
 						${s.requires_spare ? '<span class="goh-badge badge-orange" style="font-size:10px">Spare</span>' : ""}
 					</label>
@@ -1064,7 +1491,7 @@ class GoFixOpsHub {
 		const skippedHtml = skipped.length ? `
 			<div class="text-muted" style="font-size:12px;margin:6px 0 0 4px">
 				<i class="fa fa-forward"></i> ${__("Skipped (not assignable)")}:
-				${skipped.map(s => esc(s.repair_solution)).join(", ")}
+				${skipped.map(s => esc(s.solution_name || s.repair_solution)).join(", ")}
 				— ${__("use Restart on the Repair step to bring one back")}
 			</div>` : "";
 
@@ -1085,10 +1512,20 @@ class GoFixOpsHub {
 					</div>
 				</div>
 
+				${(() => {
+					// The per-technician badge reads "3 solutions" while a fourth
+					// sits unassigned below, so a technician who saved four counts
+					// three and thinks one was dropped. State the total once.
+					const live = (d.solution_lines || []).filter(s => s.status !== "Cancelled");
+					return live.length ? `<div class="text-muted small" style="margin-bottom:10px">
+						${__("{0} solutions on this ticket", [live.length])}
+					</div>` : "";
+				})()}
+
 				${assigned.length ? `
 					<div style="margin-bottom:14px">
 						<div style="font-size:11px;text-transform:uppercase;letter-spacing:0.5px;font-weight:600;color:var(--green-600);margin-bottom:6px">
-							<i class="fa fa-check-circle"></i> ${__("Assigned")}
+							<i class="fa fa-check-circle"></i> ${__("Assigned")} (${(d.solution_lines || []).filter(s => s.status !== "Cancelled" && s.technician).length})
 						</div>
 						${assignedHtml}
 					</div>
@@ -1218,7 +1655,7 @@ class GoFixOpsHub {
 				<span class="goh-sol-dot goh-sol-dot--${state}"></span>
 				<div class="goh-sol-main">
 					<div class="goh-sol-line1">
-						<span class="goh-sol-name">${esc(sol.repair_solution || "—")}</span>
+						<span class="goh-sol-name" title="${esc(sol.repair_solution || "")}">${esc(sol.solution_name || sol.repair_solution || "—")}</span>
 						<span class="goh-badge ${STATUS_CLS[sol.status] || "badge-muted"}">${__(sol.status)}</span>
 						${isReworkItem ? `<span class="goh-badge badge-orange" title="${__("This item failed QC and needs rework")}"><i class="fa fa-refresh"></i> ${__("Rework")}</span>` : ""}
 					</div>
@@ -1263,7 +1700,7 @@ class GoFixOpsHub {
 					<div class="goh-sol-row goh-sol-row--cancelled">
 						<span class="goh-sol-dot"></span>
 						<div class="goh-sol-main">
-							<div class="goh-sol-line1"><span class="goh-sol-name" style="text-decoration:line-through">${esc(sol.repair_solution || "—")}</span></div>
+							<div class="goh-sol-line1"><span class="goh-sol-name" style="text-decoration:line-through" title="${esc(sol.repair_solution || "")}">${esc(sol.solution_name || sol.repair_solution || "—")}</span></div>
 							<div class="goh-sol-meta text-danger"><i class="fa fa-comment"></i> ${esc(sol.cancel_reason || sol.technician_remarks || __("No reason provided"))}</div>
 						</div>
 					</div>
@@ -1377,10 +1814,14 @@ class GoFixOpsHub {
 			</div>`).join("");
 
 		return `
+			${this._html_time_on_ticket(d)}
+			${this._html_device_photos(d)}
 			<div class="goh-section">
 				<div class="goh-section-title" style="display:flex;align-items:center;gap:8px">
 					<span><i class="fa fa-users"></i> ${__("Technicians")}</span>
-					${totalHeld ? `<span class="goh-badge badge-blue" title="${__("Total hands-on time across every technician who held this device")}"><i class="fa fa-clock-o"></i> ${totalHeld.toFixed(1)}h ${__("hands-on")}</span>` : ""}
+					${/* The ticket total now lives in the Time-on-ticket bar above, which
+					     is server-computed across every stage and is not capped at the
+					     15 custody rows this figure was derived from. */ ""}
 					<span style="flex:1"></span>
 					${activeAssigns.length ? `<button class="btn btn-xs btn-default" id="goh-device-handover" title="${__("Move the physical device to another technician on this ticket (⇄ on a card moves the solution instead)")}"><i class="fa fa-mobile"></i> ${__("Hand Over Device")}</button>` : ""}
 					${this._transfer_button(d)}
@@ -1454,7 +1895,7 @@ class GoFixOpsHub {
 
 		// Solution summary
 		const solChips = (d.solution_lines || []).map(s => `
-			<span class="goh-badge ${s.status === "Completed" ? "badge-green" : "badge-yellow"}">${esc(s.repair_solution)}</span>
+			<span class="goh-badge ${s.status === "Completed" ? "badge-green" : "badge-yellow"}" title="${esc(s.repair_solution)}">${esc(s.solution_name || s.repair_solution)}</span>
 		`).join(" ");
 
 		// Group checks by the solution they verify (OEM-style: each repair is
@@ -1563,7 +2004,7 @@ class GoFixOpsHub {
 		const solRows = solutions.map(s => {
 			const willRework = failedSolutions.has(s.repair_solution) || (failedSolutions.size === 0 && s.status === "Completed");
 			return `<tr>
-				<td>${esc(s.repair_solution || "")}</td>
+				<td title="${esc(s.repair_solution || "")}">${esc(s.solution_name || s.repair_solution || "")}</td>
 				<td>${esc(s.issue_category || "")}</td>
 				<td><span class="goh-badge ${willRework ? "badge-red" : s.status === "Completed" ? "badge-green" : "badge-muted"}">${willRework ? __("Will Rework") : esc(s.status)}</span></td>
 				<td>${esc(s.technician_name || "")}</td>
@@ -1651,6 +2092,48 @@ class GoFixOpsHub {
 	/* ═══════════════════════════════════════════════════════════════════════ */
 	/*  Event Binding                                                        */
 	/* ═══════════════════════════════════════════════════════════════════════ */
+	/**
+	 * Populate a past stage for viewing only.
+	 *
+	 * Reached only once a ticket is INVOICED or DONE. The data still has to
+	 * load — a technician looking back at Analysis needs to see which
+	 * categories were recorded — but nothing here may be edited, so every
+	 * control is disabled rather than left live and unwired.
+	 */
+	_render_readonly_stage(d, stage) {
+		const self = this;
+		const content = this.parent.find("#goh-tab-work");
+
+		const lock = () => {
+			content.find("select, input, textarea").prop("disabled", true);
+			content.find("button").not("#goh-back-to-current").prop("disabled", true)
+				.attr("title", __("This step is closed — the ticket has been invoiced."));
+			if (!content.find(".goh-readonly-note").length) {
+				content.find(".goh-section").first().prepend(
+					`<div class="goh-readonly-note text-muted small" style="margin-bottom:6px">
+						<i class="fa fa-lock"></i> ${__("Read-only — this step is complete.")}
+					</div>`);
+			}
+		};
+
+		if (stage === "analysis") {
+			frappe.xcall(`${API}.get_issue_categories`).then((cats) => {
+				self._issue_categories = cats || [];
+				self._fill_issue_category_selects();
+			}).catch(() => {}).then(lock);
+			return;
+		}
+
+		if (stage === "solutions") {
+			// async — lock only once the picker has actually rendered, or the
+			// controls would be re-created live after being disabled.
+			self._load_solutions_for_categories(d).then(lock, lock);
+			return;
+		}
+
+		lock();
+	}
+
 	_bind_step_events(d) {
 		const content = this.parent.find("#goh-tab-work");
 		const self = this;
@@ -1659,8 +2142,81 @@ class GoFixOpsHub {
 		const activeStage = d._view_stage || d.ops_stage;
 		const isViewing = !!d._view_stage;
 
-		/* If past QC (qc / invoice / done), previous steps are read-only */
-		if (isViewing && ["qc", "invoice", "done"].includes(d.ops_stage)) return;
+		// The promise clock belongs to the ticket, not to a stage, so it starts
+		// before any stage-specific binding — including the read-only return
+		// below, which a completed ticket always takes.
+		this._start_countdown_timer();
+		this._start_age_timer();
+
+		/* ── Device photos: bound before the read-only return, because the
+		   evidence strip stays viewable on a closed ticket. ───────────── */
+		content.off("click.gohphoto").on("click.gohphoto", ".goh-photo-add", (e) => {
+			const stage = $(e.currentTarget).data("stage");
+			const input = content.find(".goh-photo-input");
+			input.data("stage", stage).trigger("click");
+		});
+		content.on("change.gohphoto", ".goh-photo-input", (e) => {
+			const stage = $(e.currentTarget).data("stage") || "Intake";
+			const files = Array.from(e.currentTarget.files || []);
+			e.currentTarget.value = "";
+			if (!files.length) return;
+			const uploads = files.map((file) => {
+				const fd = new FormData();
+				fd.append("file", file, file.name);
+				fd.append("is_private", 1);
+				fd.append("doctype", "Service Request");
+				fd.append("docname", d.name);
+				return fetch("/api/method/upload_file", {
+					method: "POST",
+					headers: { "X-Frappe-CSRF-Token": frappe.csrf_token },
+					body: fd,
+				}).then((r) => r.json()).then((r) => {
+					const url = r && r.message && r.message.file_url;
+					if (!url) throw new Error("upload failed");
+					return frappe.xcall(`${API}.add_device_photo`, {
+						sr_name: d.name, file_url: url, stage: stage,
+					});
+				});
+			});
+			Promise.allSettled(uploads).then((rs) => {
+				const bad = rs.filter((r) => r.status === "rejected").length;
+				if (bad) {
+					frappe.msgprint({
+						title: __("Photos Not Attached"),
+						message: __("{0} of {1} photo(s) could not be attached.", [bad, rs.length]),
+						indicator: "orange",
+					});
+				}
+				self._refresh_all();
+			});
+		});
+		content.on("click.gohphoto", ".goh-photo-drop", (e) => {
+			e.preventDefault();
+			const row = $(e.currentTarget).data("row");
+			frappe.confirm(__("Remove this photo? The removal is recorded on the ticket."), () => {
+				frappe.xcall(`${API}.remove_device_photo`, { sr_name: d.name, row_name: row })
+					.then(() => self._refresh_all())
+					.catch((err) => frappe.show_alert({
+						message: err.message || __("Could not remove the photo"), indicator: "red" }));
+			});
+		});
+
+		/* Once INVOICED or DONE, previous steps are read-only — changing the work
+		   after the customer has been billed would desync the invoice.
+		   A ticket sitting AT qc is NOT finished: QC can fail into rework, and a
+		   technician who spots a further fault must be able to add a solution for
+		   it. Locking qc here is what made "add a solution after reaching QC"
+		   impossible, and moving back and forth between steps is routine.
+
+		   Returning here without rendering anything left the panel LOOKING
+		   editable but empty: the Issue Category selects are filled by an async
+		   load that never ran, so every row showed only its placeholder, and the
+		   Solutions picker sat on "Loading solutions..." forever. Show the real
+		   values, then visibly lock the controls. */
+		if (isViewing && ["invoice", "done"].includes(d.ops_stage)) {
+			this._render_readonly_stage(d, activeStage);
+			return;
+		}
 
 		/* ── Draft: accept & create the Service Order from the hub ───── */
 		if (activeStage === "draft") {
@@ -1697,6 +2253,11 @@ class GoFixOpsHub {
 		}
 
 		/* ── Analysis ────────────────────────────────────────────────── */
+		// Any stage change kills the analysis clock; re-armed below if we are
+		// back on Analysis. Without this the interval survives navigation and
+		// ticks against a detached element for the rest of the session.
+		clearInterval(this._diag_timer);
+
 		if (activeStage === "analysis") {
 			// Load categories
 			// A native <datalist> popup is drawn by the browser, not the page, so
@@ -1717,6 +2278,7 @@ class GoFixOpsHub {
 						<td><select class="form-control input-xs goh-issue-cat"><option value="">${__("Issue Category")}</option></select></td>
 						<td><select class="form-control input-xs goh-issue-reporter"><option value="Technician">${__("Technician")}</option><option value="Customer">${__("Customer")}</option></select></td>
 						<td><input class="form-control input-xs goh-issue-desc" placeholder="${__("Description")}"></td>
+						<td><span class="text-muted small">${__("None assigned")}</span></td>
 						<td></td>
 						<td><button class="btn btn-xs btn-danger goh-issue-remove"><i class="fa fa-trash"></i></button></td>
 					</tr>
@@ -1755,6 +2317,21 @@ class GoFixOpsHub {
 					.then(() => { frappe.show_alert({ message: __("Issues saved."), indicator: "green" }); self._load_detail(d.name); });
 			});
 
+			// Wired LAST, and isolated: the technician-custody widget is an
+			// addition to this panel, not a prerequisite for it. Binding it
+			// first meant any failure inside it aborted the rest of the block —
+			// including the Issue Category load — leaving every category
+			// dropdown showing nothing but its placeholder.
+			try {
+				this._bind_diagnosis_custody(d);
+			} catch (e) {
+				console.error("GoFix: diagnosis custody widget failed to bind", e);
+				frappe.show_alert({
+					message: __("Technician assignment is unavailable on this ticket."),
+					indicator: "orange",
+				});
+			}
+
 			content.find("#goh-confirm-analysis").on("click", () => {
 				const issues = self._collect_issues();
 				if (!issues.length) return frappe.show_alert({ message: __("Add at least one issue."), indicator: "orange" });
@@ -1778,7 +2355,7 @@ class GoFixOpsHub {
 				}
 				const rows = (est.lines || []).map(l => `
 					<tr>
-						<td>${frappe.utils.escape_html(l.repair_solution || "")}</td>
+						<td title="${frappe.utils.escape_html(l.repair_solution || "")}">${frappe.utils.escape_html(l.solution_name || l.repair_solution || "")}</td>
 						<td class="text-right">₹${format_number(l.labor || 0)}</td>
 						<td class="text-right">${l.spare_item ? `₹${format_number(l.spare || 0)}` : "—"}</td>
 						<td class="text-muted small">${l.spare_item ? frappe.utils.escape_html(`${l.spare_item} · ${l.spare_grade || ""}`) : ""}</td>
@@ -2514,6 +3091,14 @@ class GoFixOpsHub {
 			// split across L1/L2/L4) — keep the Assign action live while the
 			// ticket is still in repair; hide it once work has moved past that.
 			if (d.ops_stage !== "repair") hideSel.push("#goh-do-assign", "#goh-proceed-repair");
+			// Same reasoning for the work itself: a fault found during repair or
+			// at QC needs a solution added, which means stepping back to
+			// Solutions and SAVING. Hiding Save made that step look editable but
+			// left no way to commit it — tick the boxes, lose the change.
+			if (activeStage === "solutions") {
+				const i = hideSel.indexOf("#goh-save-solutions");
+				if (i > -1) hideSel.splice(i, 1);
+			}
 			content.find(hideSel.join(", ")).hide();
 		}
 	}
@@ -2635,8 +3220,26 @@ class GoFixOpsHub {
 			wasChecked.add(`${$(this).data("category")} ${$(this).data("solution")}`);
 		});
 
+		// Seed from what is ALREADY on the ticket. Without this the picker
+		// opened with every box empty even though the solutions were assigned
+		// and being worked: the "Already Assigned" chips said one thing and the
+		// list underneath said another, so re-saving looked like it would drop
+		// them.
+		const assignedStatus = {};
+		for (const s of (d.solution_lines || [])) {
+			if (s.status === "Cancelled") continue;
+			wasChecked.add(`${s.issue_category} ${s.repair_solution}`);
+			assignedStatus[`${s.issue_category} ${s.repair_solution}`] = s.status;
+		}
+		const STATUS_BADGE = {
+			Planned: "badge-muted", "In Progress": "badge-blue", "On Hold": "badge-orange",
+			Completed: "badge-green", Skipped: "badge-yellow",
+		};
+
 		const solRow = (s, cat, borrowedFrom) => {
-			const checked = (wasChecked.has(`${cat} ${s.name}`) || borrowedFrom) ? " checked" : "";
+			const key = `${cat} ${s.name}`;
+			const checked = (wasChecked.has(key) || borrowedFrom) ? " checked" : "";
+			const live = assignedStatus[key];
 			return `
 					<label class="goh-sol-option">
 						<input type="checkbox" class="goh-sol-check"${checked}
@@ -2645,6 +3248,7 @@ class GoFixOpsHub {
 							data-requires-spare="${s.requires_spare ? 1 : 0}">
 						<span class="goh-sol-name">${esc(s.solution_name || s.name)}</span>
 						<span class="text-muted small ml-2">${s.estimated_minutes || 0}min</span>
+						${live ? `<span class="goh-badge ${STATUS_BADGE[live] || "badge-muted"} ml-1" title="${__("Already on this ticket")}">${esc(live)}</span>` : ""}
 						${s.requires_spare ? `<span class="goh-badge badge-yellow ml-1">${__("Spare")}</span>` : ""}
 						${borrowedFrom ? `<span class="goh-badge badge-blue ml-1" title="${__("Borrowed from another issue category")}">${esc(borrowedFrom)}</span>` : ""}
 					</label>`;

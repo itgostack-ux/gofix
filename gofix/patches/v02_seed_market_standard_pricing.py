@@ -62,11 +62,8 @@ RATE_CARD = {
 	"Strap Replacement": (150, 90),
 	"Board-Level Repair": (2000, 90),
 	"Motherboard Diagnosis": (0, 0),
-	# DEAD ENTRY: no "Swapping Board" Repair Solution has ever existed, so this
-	# rate has never been applied. The spare sub-category Mobile Spares-Swapping
-	# Board maps to Board-Level Repair (BRD-REP), which is priced on its own
-	# line above. Left in place because deleting it would look like a price
-	# change; resolve it deliberately rather than by accident.
+	# Fitting a replacement PCB (BRD-SWP) — cheaper and faster than the
+	# component-level BRD-REP above, which is why it is priced separately.
 	"Swapping Board": (1500, 90),
 	"Antenna / Network IC Repair": (1200, 90),
 	"WiFi / Bluetooth Module Replacement": (900, 90),

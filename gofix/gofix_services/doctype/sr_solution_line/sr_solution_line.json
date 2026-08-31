@@ -16,6 +16,8 @@
   "technician_name",
   "section_break_2",
   "status",
+  "pause_reason",
+  "paused_at",
   "technician_remarks",
   "cancel_reason"
  ],
@@ -104,12 +106,27 @@
    "fieldtype": "Small Text",
    "label": "Cancel Reason",
    "read_only": 1
+  },
+  {
+   "fieldname": "pause_reason",
+   "fieldtype": "Link",
+   "options": "GoFix Pause Reason",
+   "label": "Pause Reason",
+   "depends_on": "eval:doc.status=='On Hold'",
+   "description": "Why this repair is stopped. Cleared automatically when work resumes."
+  },
+  {
+   "fieldname": "paused_at",
+   "fieldtype": "Datetime",
+   "label": "Paused At",
+   "read_only": 1,
+   "description": "When the current pause began \u2014 how long a job has been waiting is the number a floor manager acts on."
   }
  ],
  "index_web_pages_for_search": 0,
  "istable": 1,
  "links": [],
- "modified": "2026-04-04 12:00:00.000000",
+ "modified": "2026-08-31 14:05:00.000000",
  "modified_by": "Administrator",
  "module": "GoFix Services",
  "name": "SR Solution Line",

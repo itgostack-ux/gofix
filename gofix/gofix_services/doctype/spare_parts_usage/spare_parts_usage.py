@@ -4,7 +4,7 @@
 import frappe
 from frappe.model.document import Document
 from frappe import _
-from frappe.utils import cint, flt
+from frappe.utils import cint, flt, nowdate
 
 from gofix.config import get_int_setting, is_privileged_user, require_role_setting
 from gofix.security import assert_service_request_access
@@ -424,6 +424,24 @@ class SparePartsUsage(Document):
 		self.sync_to_service_request()
 		self._log_parts_consumption()
 
+	# `Spare Parts Usage.part_status` and `SR Spare Line.status` are different
+	# Select lists: the execution record says "Defective", the ticket's planning
+	# row says "Damaged", and the ticket has "Pending" / "Awaiting Procurement"
+	# which execution never uses. Copying one into the other wrote values the
+	# target field does not offer -- db.set_value bypasses Select validation, so
+	# a ticket silently ended up showing a status that is not in its own list.
+	SR_LINE_STATUS_BY_PART_STATUS = {
+		"Reserved": "Reserved",
+		"Issued": "Issued",
+		"Consumed": "Consumed",
+		"Returned": "Returned",
+		"Defective": "Damaged",
+	}
+
+	def _sr_line_status(self):
+		"""The ticket-side status for this execution row."""
+		return self.SR_LINE_STATUS_BY_PART_STATUS.get(self.part_status, self.part_status)
+
 	def sync_to_service_request(self):
 		"""Project execution state onto the bound SR planning row."""
 		if not self.service_request_spare_line:
@@ -431,7 +449,7 @@ class SparePartsUsage(Document):
 		frappe.db.set_value(
 			"SR Spare Line",
 			self.service_request_spare_line,
-			{"status": self.part_status, "spare_usage": self.name},
+			{"status": self._sr_line_status(), "spare_usage": self.name},
 			update_modified=False,
 		)
 
@@ -479,11 +497,16 @@ class SparePartsUsage(Document):
 			self.db_set("stock_entry", stock_entry.name, update_modified=False)
 			frappe.msgprint(_("Stock Entry {0} created").format(stock_entry.name))
 		except Exception as e:
+			# Deliberately re-raised, not swallowed: consuming a spare IS the
+			# stock movement. If the Material Issue does not post, the part never
+			# left the warehouse -- submitting the usage as Consumed anyway would
+			# bill the customer for stock the shelf still holds, and a serialised
+			# unit would stay Active in a sellable bin.
 			frappe.log_error(message=str(e), title="Spare Parts Stock Entry Error")
 			frappe.throw(
-				_("Could not create stock entry for spare part {0}: {1}").format(
-					self.spare_part_item, str(e)),
-			title=_("Stock Entry Creation Failed"),
+				_("Could not issue {0} x{1} from {2}: {3}").format(
+					self.spare_part_item, flt(self.qty_used), source_warehouse, str(e)),
+				title=_("Stock Entry Creation Failed"),
 			)
 
 	def on_cancel(self):
@@ -588,12 +611,18 @@ class SparePartsUsage(Document):
 
 		frappe.msgprint(_("Spare part moved to Dispose Stock"))
 
-	def mark_defective(self, defect_type, description, action):
+	def mark_defective(self, defect_type, description, action, qty=None):
 		"""Mark spare part as defective with details."""
 		if self.part_status not in ("Issued", "Reserved"):
 			frappe.throw(_("Only Reserved or Issued parts can be marked defective"), title=_("Spare Parts Usage Error"))
 		if action not in ("Return to Vendor", "Dispose", "Send for Repair"):
 			frappe.throw(_("Select a valid defective-stock action."))
+
+		# Partial: only the affected units become defective; the rest stay usable
+		# and billable on their own row.
+		if qty is not None and flt(qty) < flt(self.qty_used):
+			split = self.split_off_quantity(qty, reason=description)
+			return split.mark_defective(defect_type, description, action)
 
 		self.is_defective = 1
 		self.part_status = "Defective"
@@ -690,8 +719,107 @@ class SparePartsUsage(Document):
 
 	# ── Spare Recovery (Not Repairable / BER) ─────────────────────────
 
-	def recover_spare(self, disposition, remarks=None):
+	def split_off_quantity(self, qty, reason=None):
+		"""Split `qty` units off this usage into their own execution record.
+
+		A single Spare Parts Usage carries one disposition, so three units fitted
+		from one line could only ever be all-billable or all-written-off. Damaging
+		one of three therefore wrote off all three: the customer was not billed for
+		two good parts that were actually fitted, and those two were transferred to
+		the disposal warehouse. Splitting gives the damaged unit its own row, so the
+		rest stay billable and every unit keeps its own history.
+
+		The split row deliberately inherits this row's ``stock_entry``: the parts
+		left the warehouse once, on the original consumption. Re-posting would
+		double-count the issue. Only the recovery movement that follows is new.
+
+		Returns the new (submitted) Spare Parts Usage.
+		"""
+		qty = flt(qty)
+		if qty <= 0 or qty >= flt(self.qty_used):
+			frappe.throw(
+				_("Split quantity must be greater than 0 and less than the {0} unit(s) "
+				  "on this line.").format(flt(self.qty_used)),
+				title=_("Invalid Split Quantity"),
+			)
+		if self.docstatus == 2:
+			frappe.throw(_("A cancelled usage cannot be split."),
+				title=_("Spare Parts Usage Error"))
+
+		remaining = flt(self.qty_used) - qty
+
+		# 1. Give the split units their own planning row, so the ticket shows the
+		#    good units and the damaged ones as separate lines.
+		new_line_name = None
+		if self.service_request_spare_line:
+			src = frappe.db.get_value(
+				"SR Spare Line", self.service_request_spare_line,
+				["parent", "parenttype", "parentfield", "spare_item", "item_name",
+				 "uom", "rate", "repair_solution", "issue_category"],
+				as_dict=True,
+			)
+			if src:
+				sr = frappe.get_doc("Service Request", src.parent)
+				sr.flags.ignore_permissions = True
+				sr.flags.ignore_validate_update_after_submit = True
+				sr.append("spare_lines", {
+					"spare_item": src.spare_item, "item_name": src.item_name,
+					"uom": src.uom, "rate": src.rate, "qty": qty,
+					"amount": flt(src.rate) * qty,
+					"repair_solution": src.repair_solution,
+					"issue_category": src.issue_category,
+					"status": self._sr_line_status(),
+					"remarks": reason or "",
+				})
+				sr.save(ignore_permissions=True)
+				new_line_name = sr.spare_lines[-1].name
+				# The original line keeps only the units that stayed with it.
+				frappe.db.set_value("SR Spare Line", self.service_request_spare_line,
+					{"qty": remaining, "amount": flt(src.rate) * remaining},
+					update_modified=False)
+
+		# 2. The execution record for the split units.
+		new = frappe.copy_doc(self)
+		new.qty_used = qty
+		new.service_request_spare_line = new_line_name or self.service_request_spare_line
+		new.part_status = "Issued"          # Consumed is set at submit; see validate()
+		new.status = "Active"
+		new.deleted = 0
+		new.is_defective = 0
+		new.defect_type = None
+		new.defective_action = None
+		new.recovery_disposition = None
+		new.recovery_stock_entry = None
+		new.narration = reason or _("Split from {0}").format(self.name)
+		# Inherit the consumption movement — the stock already left on the original.
+		new.stock_entry = self.stock_entry
+		new.flags.ignore_permissions = True
+		new.insert(ignore_permissions=True)
+		# Only mirror the source's lifecycle position. A draft line (Reserved /
+		# Issued) has not been consumed yet, and submitting it here would post a
+		# consumption that never happened.
+		if self.docstatus == 1:
+			new.part_status = "Consumed"
+			new.submit()
+		else:
+			new.part_status = self.part_status
+			new.save(ignore_permissions=True)
+
+		# 3. Shrink this row to the units that remain on it.
+		self.qty_used = remaining
+		if self.docstatus == 1:
+			self.db_set("qty_used", remaining, update_modified=True)
+		else:
+			self.save(ignore_permissions=True)
+
+		return new
+
+	def recover_spare(self, disposition, remarks=None, qty=None):
 		"""Recover a consumed spare when a device is Not Repairable / BER.
+
+		``qty`` recovers only part of the line: the units named are split onto
+		their own record and recovered there, leaving the rest consumed and
+		billable. Omit it to recover the whole line.
 
 		disposition must be one of SPARE_DISPOSITION_CHOICES:
 		  - "Good - Back to Stock"      → Material Receipt to source warehouse
@@ -703,6 +831,11 @@ class SparePartsUsage(Document):
 				_("Only submitted, consumed parts can be recovered. Current status: {0}").format(self.part_status),
 				title=_("Spare Parts Usage Error"),
 			)
+
+		# Partial recovery: peel the affected units off and recover only those.
+		if qty is not None and flt(qty) < flt(self.qty_used):
+			split = self.split_off_quantity(qty, reason=remarks)
+			return split.recover_spare(disposition, remarks=remarks)
 		if disposition not in SPARE_DISPOSITION_CHOICES:
 			frappe.throw(
 				_("Invalid disposition. Must be one of: {0}").format(", ".join(SPARE_DISPOSITION_CHOICES)),
@@ -736,7 +869,13 @@ class SparePartsUsage(Document):
 			self.defect_type = "Technician Damage"
 			self.defective_action = "Dispose"
 
-		self.deleted = 1
+		# `deleted` means "this row was raised in error" -- it is the flag that
+		# hides a usage from `total_spares_used_count`, the ticket's record of
+		# every spare a technician actually touched. A part that was fitted and
+		# then damaged, or fitted and returned, is not an erroneous row: it must
+		# stay countable and visible. Billing already excludes it twice over,
+		# via part_status (Defective / Returned) and status (Moved to ...),
+		# which is what every downstream guard filters on.
 		self.narration = f"Recovered: {disposition}" + (f" — {remarks}" if remarks else "")
 		# reason_desc is a Select field; map disposition to closest valid option
 		_disposition_reason_map = {
@@ -750,7 +889,6 @@ class SparePartsUsage(Document):
 		self.db_set({
 			"part_status": self.part_status,
 			"status": self.status,
-			"deleted": self.deleted,
 			"narration": self.narration,
 			"reason_desc": self.reason_desc,
 			"recovery_disposition": self.recovery_disposition,
@@ -809,6 +947,111 @@ class SparePartsUsage(Document):
 		se.submit()
 		self.db_set("recovery_stock_entry", se.name, update_modified=False)
 
+	#: Per-store quarantine bins, by the Company field that names the hub
+	#: destination. A store has its own Damaged bin; supplier returns have no
+	#: store-level equivalent and go straight to the company warehouse.
+	STORE_QUARANTINE_SUFFIX = {"damaged_stock_warehouse": "Damaged"}
+
+	def _store_quarantine_bin(self, source_wh, company_wh_field):
+		"""The recovering store's own quarantine bin, if it has one.
+
+		A recovered part is physically on the bench it was removed at. Booking
+		it straight into the hub's Damaged Stock says it has already travelled,
+		so the ledger shows it at the hub while it is still in a tray at the
+		store — and if it never arrives, nothing reveals that. It lands in the
+		store's own bin first; the hub leg is a real transfer on a manifest.
+		"""
+		suffix = self.STORE_QUARANTINE_SUFFIX.get(company_wh_field)
+		if not suffix or not source_wh:
+			return None
+		group = frappe.db.get_value("Warehouse", source_wh, "parent_warehouse")
+		if not group:
+			return None
+		return frappe.db.get_value(
+			"Warehouse",
+			{"parent_warehouse": group, "is_group": 0, "disabled": 0,
+			 "name": ("like", f"%-{suffix} - %")},
+			"name",
+		)
+
+	def raise_hub_return(self, from_warehouse, to_warehouse, reason=""):
+		"""Move a quarantined part from the store to the hub, on a manifest.
+
+		Two things have to be true for a returned part to be findable: the stock
+		has to move (a Material Transfer, so the ledger follows the goods), and
+		logistics has to know it exists (a CH Transfer Manifest, which is what
+		the Command Center, the packing queue and the trip planner all read).
+		A transfer with no manifest is invisible to every one of them — the same
+		failure the customer-device dispatch already guards against.
+
+		The hub acknowledges receipt by submitting the transfer; until then the
+		part is in transit and still the store's responsibility.
+
+		Never raises: the part is already segregated at the store, so a missing
+		manifest is a visibility problem to chase, not a reason to undo the
+		disposition.
+		"""
+		if not from_warehouse or not to_warehouse or from_warehouse == to_warehouse:
+			return None
+		try:
+			company = frappe.db.get_value("Warehouse", from_warehouse, "company")
+			se = frappe.new_doc("Stock Entry")
+			se.stock_entry_type = "Material Transfer"
+			se.company = company
+			se.remarks = _("Quarantined spare returning to hub — {0} from {1}{2}").format(
+				self.spare_part_item, self.service_request,
+				f" ({reason})" if reason else "",
+			)
+			se.append("items", {
+				"item_code": self.spare_part_item,
+				"qty": self.qty_used,
+				"uom": self.uom,
+				"basic_rate": self.purchase_cost,
+				"s_warehouse": from_warehouse,
+				"t_warehouse": to_warehouse,
+				"serial_no": self.barcode_value or None,
+			})
+			se.flags.ignore_permissions = True
+			se.insert(ignore_permissions=True)
+			# Left in DRAFT deliberately: submitting is the hub's acknowledgement
+			# that the goods arrived. Submitting it here would book the receipt
+			# before anything moved.
+
+			manifest = self._manifest_for_hub_return(se, from_warehouse, to_warehouse, company)
+			self.db_set("hub_return_stock_entry", se.name, update_modified=False)
+			if manifest:
+				self.db_set("hub_return_manifest", manifest, update_modified=False)
+			return se.name
+		except Exception:
+			frappe.log_error(
+				frappe.get_traceback(),
+				f"GoFix: could not raise hub return for spare usage {self.name}",
+			)
+			return None
+
+	def _manifest_for_hub_return(self, se, from_warehouse, to_warehouse, company):
+		"""Put the return on a manifest so logistics can carry and sign for it."""
+		if not frappe.db.exists("DocType", "CH Transfer Manifest"):
+			return None
+		store_of = lambda wh: frappe.db.get_value(  # noqa: E731
+			"CH Store", {"warehouse": wh}, "name"
+		)
+		doc = frappe.new_doc("CH Transfer Manifest")
+		doc.manifest_date = nowdate()
+		doc.company = company
+		doc.source_warehouse = from_warehouse
+		doc.destination_warehouse = to_warehouse
+		doc.source_store = store_of(from_warehouse)
+		doc.destination_store = store_of(to_warehouse)
+		if doc.meta.has_field("notes"):
+			doc.notes = _("Quarantined spare {0} returning from repair {1}").format(
+				self.spare_part_item, self.service_request
+			)
+		doc.append("transfers", {"stock_entry": se.name})
+		doc.flags.ignore_permissions = True
+		doc.insert(ignore_mandatory=True, ignore_permissions=True)
+		return doc.name
+
 	def _recover_to_warehouse(self, company, source_wh, company_wh_field,
 							  fallback_field="master_hub_warehouse", remark_prefix=""):
 		"""Material Receipt into a segregated warehouse (supplier return / damaged)."""
@@ -816,9 +1059,29 @@ class SparePartsUsage(Document):
 		if not target_wh:
 			target_wh = frappe.db.get_value("Company", company, fallback_field)
 		if not target_wh:
-			target_wh = source_wh
-		if not target_wh:
-			frappe.throw(_("No target warehouse configured for {0}").format(company_wh_field))
+			# Never fall back to the source bin. That bin is where sellable stock
+			# lives, and quietly receipting a damaged or supplier-return part
+			# into it puts a known-bad unit back on the shelf for the next
+			# customer — the exact outcome the segregated warehouses exist to
+			# prevent. Refuse and say what to configure instead.
+			frappe.throw(
+				_("{0} has no <b>{1}</b> configured, so there is nowhere safe to put "
+				  "this part. Set it on the Company — receipting it back into "
+				  "{2} would return damaged stock to sellable inventory.").format(
+					company,
+					frappe.unscrub(company_wh_field),
+					source_wh or _("the source warehouse"),
+				),
+				title=_("Quarantine Warehouse Not Configured"),
+			)
+
+		# The part is physically at the store that removed it. Land it in that
+		# store's own quarantine bin first; the hub leg below is a real transfer
+		# on a manifest, so the ledger only says "at the hub" once it is.
+		hub_wh = target_wh
+		store_wh = self._store_quarantine_bin(source_wh, company_wh_field)
+		if store_wh:
+			target_wh = store_wh
 
 		se = frappe.new_doc("Stock Entry")
 		se.stock_entry_type = "Material Receipt"
@@ -837,6 +1100,10 @@ class SparePartsUsage(Document):
 		se.submit()
 		self.db_set("recovery_stock_entry", se.name, update_modified=False)
 
+		# Second leg: store -> hub, on a manifest logistics can see and sign for.
+		if store_wh and hub_wh and hub_wh != store_wh:
+			self.raise_hub_return(store_wh, hub_wh, reason=remark_prefix)
+
 	def _unsync_from_service_request(self):
 		"""Reflect recovery on the bound SR planning row."""
 		try:
@@ -844,7 +1111,7 @@ class SparePartsUsage(Document):
 				frappe.db.set_value(
 					"SR Spare Line",
 					self.service_request_spare_line,
-					{"status": self.part_status, "spare_usage": self.name},
+					{"status": self._sr_line_status(), "spare_usage": self.name},
 					update_modified=False,
 				)
 		except Exception:

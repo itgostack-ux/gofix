@@ -136,7 +136,7 @@
    "hidden": 0,
    "is_query_report": 0,
    "label": "Intake Masters",
-   "link_count": 8,
+   "link_count": 9,
    "link_type": "DocType",
    "onboard": 0,
    "type": "Card Break"
@@ -217,6 +217,16 @@
    "label": "Withdrawal Reason",
    "link_count": 0,
    "link_to": "Withdrawal Reason",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "GoFix Pause Reason",
+   "link_count": 0,
+   "link_to": "GoFix Pause Reason",
    "link_type": "DocType",
    "onboard": 0,
    "type": "Link"
@@ -595,7 +605,7 @@
    "type": "Link"
   }
  ],
- "modified": "2026-08-28 09:05:00.000000",
+ "modified": "2026-08-31 18:31:00.433359",
  "modified_by": "Administrator",
  "module": "GoFix Services",
  "name": "GoFix",

@@ -760,6 +760,11 @@ def check_billing_readiness(service_request) -> dict:
 		"requires_approval": 1,
 		"approval_status": "Pending",
 		"deleted": 0,
+		# Only rows still in play. A spare that was recovered -- returned to
+		# stock or disposed of as damaged -- keeps whatever approval state it
+		# had; without this it would block billing forever over a decision that
+		# no longer has anything to approve.
+		"status": "Active",
 	})
 	if pending_approvals:
 		blockers.append(_("{0} spare part(s) pending manager approval").format(pending_approvals))

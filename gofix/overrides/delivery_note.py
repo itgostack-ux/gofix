@@ -48,12 +48,12 @@ def _update_service_request_on_delivery_inner(doc, method):
 		# ── Gate: spare recovery check for Not Repairable / BER ──
 		repair_outcome = getattr(so, "repair_outcome", None) or ""
 		if repair_outcome in ("Not Repairable", "Beyond Repair", "Customer Cancelled"):
-			pending = frappe.get_all("Spare Parts Usage", filters={
-				"service_request": so.service_request,
-				"part_status": "Consumed",
-				"deleted": 0,
-				"status": "Active",
-			}, fields=["spare_part_item", "item_name", "qty_used"])
+			# One source of truth for "still inside the device and unaccounted
+			# for" — it subtracts parts the customer has already been invoiced
+			# and paid for, which are legitimately theirs to take home.
+			from gofix.spare_lifecycle import spares_awaiting_recovery
+
+			pending = spares_awaiting_recovery(so.service_request)
 			if pending:
 				items_str = ", ".join(
 					f"{p.item_name or p.spare_part_item} (x{p.qty_used})" for p in pending

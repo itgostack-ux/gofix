@@ -35,3 +35,7 @@ gofix.patches.v02_seed_market_standard_pricing
 gofix.patches.v03_employee_warehouse_ignore_user_permissions # 2026-08-29 - Employee.gofix_service_warehouse was hiding every employee from users with a Warehouse User Permission
 gofix.patches.v05_rekey_repair_solution_on_code # 2026-08-29 - Repair Solution is keyed by solution_code, so one label can serve several Issue Categories
 gofix.patches.v06_seed_solution_applicability # 2026-08-29 - repair solutions declare the device families they apply to
+gofix.patches.v07_add_swapping_board_solution # 2026-08-29 - the rate card priced a Swapping Board repair that never existed; its 14 spares were billing as Board-Level Repair
+gofix.patches.v08_disambiguate_target_store_label # 2026-08-29 - two Purchase Order fields were both labelled "Target Store"
+gofix.patches.v09_seed_pause_reasons # 2026-08-31 - coded reasons for a paused repair, so hold time is readable
+gofix.patches.v10_fix_workflow_condition_db_count # 2026-08-31 - workflow condition called frappe.db.count, which is not in the workflow safe-eval globals; every Sales Order save raised NoneType is not callable

@@ -136,14 +136,14 @@ WORKFLOW_TRANSITIONS = (
 		"action": "Complete Job",
 		"next_state": "QC Awaiting",
 		"allowed": "Service Manager",
-		"condition": "frappe.db.count('Job Assignment', {'service_order': doc.name, 'assignment_status': ['in', ['Completed', 'Closed']]}) > 0",
+		"condition": "frappe.db.get_value('Job Assignment', {'service_order': doc.name, 'assignment_status': ['in', ['Completed', 'Closed']]}, 'name') is not None",
 	},
 	{
 		"state": "Work in Progress",
 		"action": "Complete Job",
 		"next_state": "QC Awaiting",
 		"allowed": "Service Engineer",
-		"condition": "frappe.db.count('Job Assignment', {'service_order': doc.name, 'assignment_status': ['in', ['Completed', 'Closed']]}) > 0",
+		"condition": "frappe.db.get_value('Job Assignment', {'service_order': doc.name, 'assignment_status': ['in', ['Completed', 'Closed']]}, 'name') is not None",
 	},
 	{
 		"state": "Work in Progress",

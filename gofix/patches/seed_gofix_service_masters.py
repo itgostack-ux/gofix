@@ -74,6 +74,9 @@ _SOLUTIONS = [
 	("Charger / Adapter Replacement",   "Charging & Power",       "CHG-ADP", 10,  1, "Basic"),
 	("Motherboard Diagnosis",           "Board Diagnosis",        "BRD-DIA", 120, 0, "Advanced"),
 	("Board-Level Repair",              "Board Diagnosis",        "BRD-REP", 240, 1, "Expert"),
+	# Fitting a donor/replacement PCB — a parts swap, not component-level
+	# micro-soldering. Distinct labour rate and skill from BRD-REP.
+	("Swapping Board",                  "Board Diagnosis",        "BRD-SWP", 120, 1, "Advanced"),
 	("Thermal Service / Fan Cleaning",  "Board Diagnosis",        "BRD-THM", 60,  0, "Basic"),
 	("Camera Replacement",              "Camera",                 "CAM-REP", 60,  1, "Intermediate"),
 	("Camera Glass Replacement",        "Camera",                 "CAM-GLS", 30,  1, "Basic"),

@@ -1,0 +1,38 @@
+{
+ "actions": [],
+ "creation": "2026-08-31 15:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "istable": 1,
+ "field_order": [
+  "previous_datetime",
+  "new_datetime",
+  "column_break_1",
+  "changed_by",
+  "changed_at",
+  "section_break_reason",
+  "reason"
+ ],
+ "fields": [
+  {"fieldname": "previous_datetime", "fieldtype": "Datetime", "label": "Previous Promise", "in_list_view": 1, "read_only": 1},
+  {"fieldname": "new_datetime", "fieldtype": "Datetime", "label": "New Promise", "in_list_view": 1, "read_only": 1, "reqd": 1},
+  {"fieldname": "column_break_1", "fieldtype": "Column Break"},
+  {"fieldname": "changed_by", "fieldtype": "Link", "options": "User", "label": "Changed By", "in_list_view": 1, "read_only": 1},
+  {"fieldname": "changed_at", "fieldtype": "Datetime", "label": "Changed At", "read_only": 1},
+  {"fieldname": "section_break_reason", "fieldtype": "Section Break"},
+  {"fieldname": "reason", "fieldtype": "Small Text", "label": "Reason", "in_list_view": 1, "read_only": 1,
+   "description": "Why the promise moved. A revision with no reason is indistinguishable from the deadline quietly slipping."}
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-08-31 15:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "GoFix Services",
+ "name": "GoFix ETA Revision",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": []
+}

@@ -527,9 +527,9 @@ class JobAssignment(Document):
 				if gaps and not gaps["ready_for_qc"]:
 					frappe.db.set_value("Sales Order", self.service_order, "workflow_state", "Work in Progress", update_modified=False)
 					frappe.msgprint(
-						_("Job done, but QC is blocked — unresolved: {0}. Assign and complete "
-						  "solutions for every identified issue first.").format(
-							", ".join(gaps["uncovered_issues"] + gaps["open_solutions"])
+						_("Job done, but QC is blocked — this work is still open: {0}. "
+						  "Every solution that was selected must be finished first.").format(
+							", ".join(gaps["open_solutions"]) or _("no solutions selected")
 						),
 						title=_("All Issues Must Be Solved Before QC"),
 						indicator="orange")

@@ -330,6 +330,63 @@ def _access_diagnosis(user, company, stores) -> dict:
 	}
 
 
+@frappe.whitelist()
+@frappe.read_only()
+def get_device_label(sr_name, copies=1) -> dict:
+	"""A stick-on barcode label for the device that came in for repair.
+
+	The ticket number IS the barcode: it is fixed-width, delimiter-free and
+	globally unique (company + state + store + date + counter), so a scan of
+	the sticker on the handset resolves straight to the ticket with no lookup
+	table in between.
+
+	Rendered server-side as a PNG through the shared Code128 helper. A
+	browser-drawn barcode (JsBarcode and friends) silently degrades to plain
+	text when the page is sent to a printer or a PDF — which is exactly the
+	failure a counter cannot recover from once the label is on the device.
+	"""
+	_assert_sr_permission(sr_name, "read")
+
+	sr = frappe.db.get_value(
+		"Service Request",
+		sr_name,
+		["name", "customer_name", "contact_number", "device_item_name", "device_item",
+		 "serial_no", "brand", "service_date", "priority", "source_warehouse",
+		 "company", "issue_description"],
+		as_dict=True,
+	)
+	if not sr:
+		frappe.throw(_("Service Request {0} not found.").format(sr_name),
+			title=_("Not Found"))
+
+	from ch_erp15.ch_erp15.print_helpers import get_barcode_base64
+
+	# The ticket number, and the device's own barcode/IMEI when it has one.
+	ticket_png = get_barcode_base64(sr.name)
+	device_png = get_barcode_base64(sr.serial_no) if sr.serial_no else ""
+
+	store = frappe.db.get_value("CH Store", {"warehouse": sr.source_warehouse}, "store_name") \
+		or sr.source_warehouse or ""
+
+	return {
+		"service_request": sr.name,
+		"barcode_png": ticket_png,
+		"device_barcode": sr.serial_no or "",
+		"device_barcode_png": device_png,
+		"customer_name": sr.customer_name or "",
+		"contact_number": sr.contact_number or "",
+		"device": sr.device_item_name or sr.device_item or "",
+		"brand": sr.brand or "",
+		"service_date": str(sr.service_date) if sr.service_date else "",
+		"priority": sr.priority or "",
+		"store": store,
+		"copies": max(1, min(cint(copies), 10)),
+		# A label with no bars is worse than no label: the counter would stick a
+		# number on the device that no scanner can read. Say so instead.
+		"printable": bool(ticket_png),
+	}
+
+
 # ── Ticket Queue ──────────────────────────────────────────────────────────────
 
 @frappe.whitelist()
@@ -359,9 +416,17 @@ def get_ticket_queue(warehouse=None, search=None, date_from=None, date_to=None, 
 		if company:
 			filters.append(["company", "=", company])
 
+		# A rejected ticket is still a ticket: the device was looked at, a reason
+		# was recorded, and somebody has to answer for the rate. Hiding it from
+		# every view except "All" is what made rejections unreviewable.
 		if stage_filter == "active":
 			filters.append(["decision", "in", ["Draft", "Accepted", "In Service", "Completed", "Invoiced"]])
-		elif stage_filter != "all":
+		elif stage_filter == "rejected":
+			filters.append(["decision", "=", "Rejected"])
+		elif stage_filter in ("all", "closed", "done"):
+			# Terminal views: show the terminal states, rejections included.
+			pass
+		else:
 			filters.append(["decision", "not in", ["Cancelled", "Rejected", "Expired"]])
 
 		if warehouse:
@@ -865,10 +930,26 @@ def get_ticket_detail(sr_name) -> dict:
 		for row in sr.get("issue_lines", [])
 	]
 
+	# The Repair Solution docname IS the code (it was re-keyed onto
+	# solution_code), so the link value alone renders as "SFT-VIR" — unreadable
+	# to anyone who has not memorised the catalogue. Resolve the human label
+	# once, in bulk, rather than per row.
+	_sol_keys = tuple({r.repair_solution for r in sr.get("solution_lines", []) if r.repair_solution})
+	_sol_names = {
+		r.name: r.solution_name
+		for r in frappe.get_all(
+			"Repair Solution", filters={"name": ("in", _sol_keys)},
+			fields=["name", "solution_name"], limit_page_length=len(_sol_keys),
+		)
+	} if _sol_keys else {}
+
 	solution_lines = [
 		{
 			"name": row.name,
 			"repair_solution": row.repair_solution,
+			# Falls back to the code so a solution deleted from the catalogue
+			# still shows something identifiable instead of an empty cell.
+			"solution_name": _sol_names.get(row.repair_solution) or row.repair_solution,
 			"issue_category": row.issue_category,
 			"solution_code": row.solution_code or "",
 			"estimated_minutes": row.estimated_minutes,
@@ -1008,6 +1089,20 @@ def get_ticket_detail(sr_name) -> dict:
 		"name": sr.name,
 		"decision": sr.decision,
 		"status": sr.decision,
+		# Why the job was turned away. Recorded at rejection but never sent to
+		# the hub, so the reason was invisible to everyone downstream.
+		"rejection_reason": sr.get("rejection_reason") or "",
+		# Who the ticket is sitting with before repair work is assigned, and
+		# since when — so the Analysis panel can show custody and elapsed time.
+		"diagnosis_assignment": get_diagnosis_assignment(sr.name),
+		# Cumulative technician time across EVERY stage and technician, so the
+		# Repair screen shows the hours Analysis already spent instead of 00:00.
+		"time_summary": get_ticket_time_summary(sr.name),
+		# Two different clocks, deliberately kept apart: how long the customer
+		# has been waiting, and how much work has actually gone in.
+		"ticket_age": get_ticket_age(sr),
+		# Time remaining against the promise given to the customer.
+		"countdown": get_completion_countdown(sr),
 		"priority": sr.priority,
 		"customer": sr.customer,
 		"customer_name": sr.customer_name,
@@ -1055,6 +1150,7 @@ def get_ticket_detail(sr_name) -> dict:
 		"customer_info": customer_info,
 		"issue_lines": issue_lines,
 		"solution_lines": solution_lines,
+		"device_photos": get_device_photo_summary(sr),
 		"spare_lines": spare_lines,
 		"assignments": assignments,
 		"device_holder": next(
@@ -1171,12 +1267,12 @@ def save_issue_lines(sr_name, issues_json) -> dict:
 			}, update_modified=False)
 			sr.add_comment(
 				"Comment",
-				_("Returned to repair from QC — newly identified issue(s) need solutions: {0}").format(
-					", ".join(gaps["uncovered_issues"] + gaps["open_solutions"])
+				_("Returned to repair from QC — work added after sign-off is not finished: {0}").format(
+					", ".join(gaps["open_solutions"])
 				),
 			)
 			frappe.msgprint(
-				_("Ticket returned to Repair — the new issue must be solved before QC."),
+				_("Ticket returned to Repair — the newly added work must be finished before QC."),
 				indicator="orange",
 				alert=True,
 			)
@@ -1272,6 +1368,14 @@ def confirm_analysis(sr_name) -> dict:
 		updates["repairability_status"] = "Repairable"
 
 	frappe.db.set_value("Service Request", sr_name, updates, update_modified=False)
+
+	# Analysis is over: bank the diagnosing technician's hours rather than
+	# leaving their clock running through Solutions and Confirm.
+	try:
+		release_diagnosis_technician(sr_name, remarks=_("Analysis confirmed"))
+	except Exception:
+		frappe.log_error(frappe.get_traceback(),
+			f"GoFix: could not close diagnosis assignment for {sr_name}")
 
 	_log_ops_stage(sr_name, "analysis", "solutions")
 	return {"ok": True, "stage": "solutions"}
@@ -1380,12 +1484,29 @@ def get_estimate_breakdown(sr_name) -> dict:
 		warranty_plan=sr.get("warranty_plan"),
 		device_item=sr.get("device_item"),
 	)
+	# The pricing engine keys its lines by solution code; the estimate is shown
+	# to a customer, so it has to read as words rather than catalogue codes.
+	lines = result.get("line_details") or []
+	codes = tuple({l.get("repair_solution") for l in lines if l.get("repair_solution")})
+	if codes:
+		names = {
+			r.name: r.solution_name
+			for r in frappe.get_all(
+				"Repair Solution", filters={"name": ("in", codes)},
+				fields=["name", "solution_name"], limit_page_length=len(codes),
+			)
+		}
+		for line in lines:
+			line["solution_name"] = (
+				names.get(line.get("repair_solution")) or line.get("repair_solution") or ""
+			)
+
 	return {
 		"priced": True,
 		"labour": flt(result.get("labor_total")),
 		"parts": flt(result.get("spare_total")),
 		"total": flt(result.get("estimate_total")),
-		"lines": result.get("line_details") or [],
+		"lines": lines,
 		"stored": flt(sr.get("estimated_cost")),
 	}
 
@@ -1648,8 +1769,8 @@ def save_solution_assignment(sr_name, solutions_json) -> dict:
 	(and their linked spares) so re-entering the Solutions step doesn't
 	destroy work already done.  Only replaces Planned rows.
 
-	Validates that every active (non-Deleted) issue category gets at
-	least one solution before proceeding.
+	Requires that at least one solution is selected. It does NOT require every
+	issue to be covered — see the note at the coverage check below.
 	"""
 	_assert_sr_permission(sr_name, "write")
 
@@ -1785,29 +1906,38 @@ def save_solution_assignment(sr_name, solutions_json) -> dict:
 					"status": "Pending",
 				})
 
-	# ── Validate: every active issue must have ≥1 solution (Fix #1) ────
-	active_categories = {
-		row.issue_category
-		for row in sr.get("issue_lines", [])
-		if row.status not in ("Deleted", "Cancelled", "Not Reproducible")
-	}
-	covered_categories = {
-		row.issue_category
-		for row in sr.get("solution_lines", [])
-		if row.status != "Cancelled"
-	}
-	missing = active_categories - covered_categories
-	if missing:
+	# An issue does not have to carry a solution. The list offered per issue is
+	# a catalogue of what COULD apply, and for some device/issue pairs it is
+	# empty ("No solutions apply to this device in this category"), so demanding
+	# coverage made the step impossible to leave. What must hold is that some
+	# work was chosen — saving an empty set would silently wipe the plan.
+	if not sr.get("solution_lines"):
 		frappe.throw(
-			_("Every active issue must have at least one solution. Missing: {0}").format(
-				", ".join(sorted(missing))
-			),
-			title=_("Incomplete Solution Coverage"),
+			_("Select at least one solution before saving."),
+			title=_("No Solutions Selected"),
+		)
+
+	# device_item is optional at intake — a counter writes down what the
+	# customer says ("Apple iphone 12"), which is not a catalogue item. By the
+	# time solutions are assigned it has to be a real Item, because spare
+	# compatibility is matched against it and a wrong part is a second repair.
+	if not sr.get("device_item"):
+		frappe.throw(
+			_("Identify the device before assigning solutions. {0} was logged as "
+			  "\"{1}\" at intake; pick the matching item on the Device tab so "
+			  "spare compatibility can be checked.").format(
+				sr.name, sr.get("device_item_name") or _("free text")),
+			title=_("Device Not Identified"),
 		)
 
 	sr.save()
 
-	_log_ops_stage(sr_name, "solutions", "confirm")
+	# Only the first pass through this step is a step forward. Once work has
+	# started, this call is a technician adding a solution to a live ticket —
+	# logging "Solutions -> Confirmation" there would invent a rewind that never
+	# happened and bury the real timeline under it.
+	if not preserved_solutions:
+		_log_ops_stage(sr_name, "solutions", "confirm")
 	return {"ok": True, "solution_count": len(sr.solution_lines), "stage": "confirm"}
 
 
@@ -1983,6 +2113,170 @@ def _solution_rows_for_assignment(sr, row_names=None) -> list:
 			title=_("Solution Not Assignable"),
 		)
 	return selected
+
+
+DIAGNOSIS_JOB_TYPE = "Diagnosis"
+
+
+def _active_diagnosis_assignment(sr_name):
+	"""The open Diagnosis Job Assignment on this ticket, if any.
+
+	Keyed on service_request, NOT service_order: at Analysis the ticket has no
+	Service Order yet (that is raised when the estimate is confirmed), and the
+	repair-stage helper's service_order lookup would match a NULL against every
+	other unlinked assignment.
+	"""
+	return frappe.db.get_value(
+		"Job Assignment",
+		{
+			"service_request": sr_name,
+			"job_type": DIAGNOSIS_JOB_TYPE,
+			"docstatus": ("<", 2),
+			"assignment_status": ("not in", ("Completed", "Cancelled")),
+		},
+		["name", "service_engineer", "assignment_status", "start_datetime",
+		 "estimated_hours", "actual_hours"],
+		as_dict=True,
+	)
+
+
+def get_diagnosis_assignment(sr_name) -> dict:
+	"""Who the ticket is sitting with before any repair work is assigned.
+
+	Analysis, Solutions and Confirm consume real technician time. Until now the
+	first Job Assignment was only created at the Assign stage, so that time was
+	invisible: nobody could say who a ticket was pending with, and the hours
+	never reached technician-performance or costing.
+	"""
+	row = _active_diagnosis_assignment(sr_name)
+	if not row:
+		return {"assigned": False}
+
+	name = frappe.db.get_value("Employee", row.service_engineer, "employee_name")
+	return {
+		"assigned": True,
+		"job_assignment": row.name,
+		"technician": row.service_engineer,
+		"technician_name": name or row.service_engineer,
+		"assignment_status": row.assignment_status,
+		"start_datetime": str(row.start_datetime) if row.start_datetime else None,
+		"estimated_hours": flt(row.estimated_hours),
+		# Hours already banked by closed work periods. The live clock is drawn
+		# client-side from start_datetime; this is what is durably recorded.
+		"actual_hours": flt(row.actual_hours),
+		"server_now": str(now_datetime()),
+	}
+
+
+@frappe.whitelist(methods=["POST"])
+def assign_diagnosis_technician(sr_name, technician, estimated_hours=None, remarks=None) -> dict:
+	"""Put the ticket in a named technician's hands for analysis.
+
+	Deliberately NOT `assign_technician`: that one requires a Service Order and
+	at least one chosen solution, neither of which exists yet at Analysis, and
+	it advances the ticket to the Repair stage. This only records custody and
+	starts the clock — the stage is unchanged, so the operator carries on with
+	the analysis they were doing.
+
+	Re-assigning to a different technician closes the previous person's period
+	first, so the handover is a real boundary in the time record rather than one
+	technician silently inheriting another's minutes.
+	"""
+	_assert_sr_permission(sr_name, "write")
+	frappe.has_permission("Job Assignment", "create", throw=True)
+
+	if not technician:
+		frappe.throw(_("Select a technician."), title=_("Validation Error"))
+	if not frappe.db.exists("Employee", technician):
+		frappe.throw(_("Technician {0} does not exist.").format(technician),
+			title=_("Validation Error"))
+
+	sr = frappe.get_doc("Service Request", sr_name)
+	existing = _active_diagnosis_assignment(sr_name)
+
+	if existing and existing.service_engineer == technician:
+		# Same person — make sure the clock is running and leave it at that.
+		ja = frappe.get_doc("Job Assignment", existing.name)
+		if ja.assignment_status != "In Progress":
+			ja.check_permission("write")
+			ja.flags.ignore_validate_update_after_submit = True
+			ja.assignment_status = "In Progress"
+			ja.save()
+		return {"ok": True, "job_assignment": ja.name, "reassigned": False,
+			**get_diagnosis_assignment(sr_name)}
+
+	previous = None
+	if existing:
+		previous = existing.service_engineer
+		_close_diagnosis_assignment(
+			existing.name,
+			_("Handed over to {0}").format(technician),
+		)
+
+	ja = frappe.new_doc("Job Assignment")
+	ja.service_request = sr_name
+	# service_order is intentionally left blank; it does not exist yet and the
+	# controller only validates it when set.
+	ja.service_engineer = technician
+	ja.assignment_type = "Technician Changed" if previous else "Technician Assignment"
+	ja.job_type = DIAGNOSIS_JOB_TYPE
+	ja.assignment_date = nowdate()
+	ja.assignment_datetime = now_datetime()
+	ja.assigned_by = frappe.session.user
+	ja.priority = sr.priority
+	ja.imei_serial = sr.get("serial_no") or sr.get("actual_imei") or ""
+	if estimated_hours:
+		ja.estimated_hours = flt(estimated_hours)
+	if remarks:
+		ja.comments = remarks
+	# In Progress is what opens a work period, which is how the hours accrue.
+	ja.assignment_status = "In Progress"
+	ja.insert()
+	ja.submit()
+	# The custody period (GoFix Custody Log) and the running clock are opened
+	# by JobAssignment itself when the status becomes In Progress -- writing
+	# either from here would double-count the technician's hours.
+
+	return {"ok": True, "job_assignment": ja.name, "reassigned": bool(previous),
+		"previous_technician": previous, **get_diagnosis_assignment(sr_name)}
+
+
+@frappe.whitelist(methods=["POST"])
+def release_diagnosis_technician(sr_name, remarks=None) -> dict:
+	"""Stop the diagnosis clock — the ticket is no longer pending with anyone.
+
+	Called when the ticket leaves Analysis, and available by hand when a
+	technician puts a job down without passing it on.
+	"""
+	_assert_sr_permission(sr_name, "write")
+	existing = _active_diagnosis_assignment(sr_name)
+	if not existing:
+		return {"ok": True, "released": False}
+
+	_close_diagnosis_assignment(existing.name, remarks)
+	return {"ok": True, "released": True, "job_assignment": existing.name}
+
+
+def _close_diagnosis_assignment(ja_name, remarks=None) -> None:
+	"""Complete a diagnosis assignment so its open period is banked.
+
+	Setting assignment_status to Completed is what releases the running period
+	into actual_hours (see JobAssignment status handling); writing the field
+	straight to the database would leave the clock running forever.
+	"""
+	ja = frappe.get_doc("Job Assignment", ja_name)
+	if ja.assignment_status in ("Completed", "Cancelled"):
+		return
+	ja.check_permission("write")
+	ja.flags.ignore_validate_update_after_submit = True
+	ja.assignment_status = "Completed"
+	if not ja.end_datetime:
+		ja.end_datetime = now_datetime()
+	if remarks:
+		ja.technician_remarks = "\n".join(
+			x for x in (ja.get("technician_remarks"), remarks) if x
+		)
+	ja.save()
 
 
 @frappe.whitelist(methods=["POST"])
@@ -2231,9 +2525,59 @@ def advance_to_repair(sr_name) -> dict:
 
 # ── Step 5: Repair Execution ──────────────────────────────────────────────────
 
+def _validate_pause(pause_reason, remarks) -> dict:
+	"""Fields to write when a repair is paused. Refuses an unexplained pause."""
+	if not pause_reason:
+		options = frappe.get_all(
+			"GoFix Pause Reason", filters={"is_active": 1},
+			fields=["name", "reason_type"], order_by="reason_type, name",
+			limit_page_length=50,
+		)
+		frappe.throw(
+			_("Say why the repair is being paused. A job sitting On Hold with no "
+			  "reason cannot be chased by anyone.<br><br>Available: {0}").format(
+				", ".join(f"{o.name} ({o.reason_type})" for o in options) or _("none configured")),
+			title=_("Pause Reason Required"),
+		)
+
+	row = frappe.db.get_value(
+		"GoFix Pause Reason", pause_reason,
+		["name", "is_active", "requires_note"], as_dict=True,
+	)
+	if not row or not row.is_active:
+		frappe.throw(_("{0} is not an active pause reason.").format(pause_reason),
+			title=_("Validation Error"))
+	if row.requires_note and not (remarks or "").strip():
+		frappe.throw(
+			_("\"{0}\" needs a note saying what actually happened.").format(row.name),
+			title=_("Note Required"),
+		)
+	return {"pause_reason": row.name, "paused_at": now_datetime()}
+
+
+@frappe.whitelist()
+def get_pause_reasons() -> list:
+	"""Active pause reasons for the repair screen's dropdown."""
+	return frappe.get_all(
+		"GoFix Pause Reason",
+		filters={"is_active": 1},
+		fields=["name", "reason_name", "reason_type", "requires_note", "description"],
+		order_by="reason_type, reason_name",
+		limit_page_length=100,
+	)
+
+
 @frappe.whitelist(methods=["POST"])
-def update_solution_status(sr_name, solution_row_name, status, remarks="") -> dict:
-	"""Update a solution line status during repair."""
+def update_solution_status(sr_name, solution_row_name, status, remarks="",
+		pause_reason=None) -> dict:
+	"""Update a solution line status during repair.
+
+	``pause_reason`` is required when pausing. "On Hold" on its own tells a
+	floor manager nothing they can act on: a technician's break is a capacity
+	problem, a part that has not arrived is a procurement one, and waiting on
+	the customer is neither. Recording which it is, at the moment work stops,
+	is the only point the technician actually knows.
+	"""
 	_assert_sr_permission(sr_name, "write")
 
 	valid = ("Planned", "In Progress", "On Hold", "Completed", "Skipped", "Cancelled")
@@ -2259,6 +2603,15 @@ def update_solution_status(sr_name, solution_row_name, status, remarks="") -> di
 	update_fields = {"status": status, "technician_remarks": remarks}
 	if status == "Cancelled":
 		update_fields["cancel_reason"] = remarks
+
+	if status == "On Hold":
+		update_fields.update(_validate_pause(pause_reason, remarks))
+	elif status in ("In Progress", "Completed", "Skipped", "Cancelled"):
+		# Work resumed or ended: the pause is over, so it stops being shown as
+		# the current state. The elapsed time itself lives on the Job
+		# Assignment's work periods, not here, so nothing is lost by clearing.
+		update_fields["pause_reason"] = None
+		update_fields["paused_at"] = None
 
 	frappe.db.set_value(
 		"SR Solution Line",
@@ -2596,8 +2949,14 @@ def restart_solution_line(sr_name, solution_row_name, remarks="") -> dict:
 
 
 @frappe.whitelist(methods=["POST"])
-def mark_spare_damaged(sr_name, spare_row_name, remarks="") -> dict:
-	"""Mark a spare part as damaged/unusable with a mandatory comment."""
+def mark_spare_damaged(sr_name, spare_row_name, remarks="", qty=None) -> dict:
+	"""Mark a spare part as damaged/unusable with a mandatory comment.
+
+	``qty`` damages only part of the line — three screens fitted and one cracked
+	is one damaged unit, not three. The affected units are split onto their own
+	record so the rest stay consumed and billable; omit it to damage the whole
+	line.
+	"""
 	_assert_sr_permission(sr_name, "write")
 
 	if not remarks or not remarks.strip():
@@ -2607,14 +2966,29 @@ def mark_spare_damaged(sr_name, spare_row_name, remarks="") -> dict:
 		spare_row_name,
 		sr_name,
 		"spare_lines",
-		["name", "status", "spare_usage"],
+		["name", "status", "spare_usage", "qty"],
 	)
+
+	if qty is not None:
+		qty = flt(qty)
+		if qty <= 0:
+			frappe.throw(_("Damaged quantity must be greater than zero."),
+				title=_("Validation Error"))
+		if qty > flt(row.qty):
+			frappe.throw(
+				_("Cannot damage {0} unit(s): only {1} are on this line.").format(
+					qty, flt(row.qty)),
+				title=_("Validation Error"),
+			)
+		if qty == flt(row.qty):
+			qty = None      # whole line
+
 	if row.spare_usage:
 		usage = frappe.get_doc("Spare Parts Usage", row.spare_usage)
 		if usage.docstatus == 1 and usage.part_status == "Consumed":
-			usage.recover_spare("Damaged by Technician", remarks.strip())
+			usage.recover_spare("Damaged by Technician", remarks.strip(), qty=qty)
 		else:
-			usage.mark_defective("Technician Damage", remarks.strip(), "Dispose")
+			usage.mark_defective("Technician Damage", remarks.strip(), "Dispose", qty=qty)
 	else:
 		frappe.db.set_value(
 			"SR Spare Line",
@@ -3394,9 +3768,10 @@ def submit_for_qc(sr_name) -> dict:
 	if not sr.service_order:
 		frappe.throw(_("No Service Order linked to {0}. Cannot submit for QC.").format(sr_name), title=_("Validation Error"))
 
-	# Every identified issue needs a solution before QC — submit_for_qc
-	# force-completes assigned solutions, but it must never paper over an
-	# issue that has no solution at all.
+	# QC certifies the work that was selected. An issue nobody worked on is
+	# recorded on the ticket for the sign-off to see, but it does not block:
+	# the solution list per issue is a catalogue, and some issues have no
+	# applicable solution for the device at all.
 	from gofix.gofix_services.doctype.service_request.service_request import (
 		close_issues_with_completed_solutions,
 		get_unresolved_issue_gaps,
@@ -3411,16 +3786,20 @@ def submit_for_qc(sr_name) -> dict:
 		sr.save()
 
 	gaps = get_unresolved_issue_gaps(sr)
-	if gaps["uncovered_issues"]:
+	if not gaps["has_work"]:
 		frappe.throw(
-			_("Cannot submit for QC — these issues are still open: {0}.<br><br>"
-			  "Every issue must be closed first, either by <b>completing a repair</b> "
-			  "for it, or by <b>rejecting it with a reason</b> (set the issue to "
-			  "Cancelled or Not Reproducible on the Analysis step). "
-			  "Skipping a repair does not close the issue behind it.").format(
+			_("Cannot submit for QC — no solution has been selected on this ticket, "
+			  "so there is no work to certify."),
+			title=_("Nothing To Certify"),
+		)
+	# Not a blocker, but it must not disappear: QC signs off knowing which
+	# identified issues were left alone.
+	if gaps["uncovered_issues"]:
+		sr.add_comment(
+			"Comment",
+			_("Sent to QC with no repair carried out for: {0}").format(
 				", ".join(gaps["uncovered_issues"])
 			),
-			title=_("All Issues Must Be Closed Before QC"),
 		)
 
 	_assert_removed_part_details_complete(sr)
@@ -3532,22 +3911,31 @@ def complete_qc(sr_name, qc_result) -> dict:
 	if not sr.service_order:
 		frappe.throw(_("No Service Order linked to {0}.").format(sr_name), title=_("Validation Error"))
 
-	# Defence-in-depth: never pass/fail QC while an identified issue is
-	# unsolved (e.g. added by the technician after the ticket reached QC).
-	from gofix.gofix_services.doctype.service_request.service_request import (
-		get_unresolved_issue_gaps,
-	)
-
-	gaps = get_unresolved_issue_gaps(sr)
-	if not gaps["ready_for_qc"]:
-		frappe.throw(
-			_("QC blocked — every identified issue must be solved first. Unresolved: {0}").format(
-				", ".join(gaps["uncovered_issues"] + gaps["open_solutions"])
-			),
-			title=_("All Issues Must Be Solved Before QC"),
+	# Only a PASS is gated. A pass certifies the repair, so unfinished work must
+	# block it. A FAIL is the rejection — it is how a device gets sent BACK to be
+	# repaired, so blocking it on "the work is not finished" is circular: the
+	# technician cannot fail the ticket, and cannot repair it either, because
+	# failing is the route to rework. The checklist rule below already draws this
+	# distinction; the readiness gate did not, which stranded the ticket.
+	if qc_result == "Pass":
+		from gofix.gofix_services.doctype.service_request.service_request import (
+			get_unresolved_issue_gaps,
 		)
 
-	_assert_removed_part_details_complete(sr)
+		gaps = get_unresolved_issue_gaps(sr)
+		if not gaps["ready_for_qc"]:
+			frappe.throw(
+				_("QC cannot PASS — this work is still open: {0}. Every solution that "
+				  "was selected must be finished before the repair is certified. "
+				  "To send the device back for more work, choose Fail instead.").format(
+					", ".join(gaps["open_solutions"]) or _("no solutions selected")
+				),
+				title=_("Unfinished Work"),
+			)
+
+		# Same reasoning: incomplete removed-part paperwork must not stop a
+		# rejection. It is re-checked on the pass that eventually certifies it.
+		_assert_removed_part_details_complete(sr)
 
 	so = frappe.get_doc("Sales Order", sr.service_order)
 	# A pass is a sign-off. Where a checklist exists it must be answered — the hub
@@ -3632,6 +4020,483 @@ def _spare_cost_rate(item_code, fallback_rate=0.0) -> float:
 		frappe.db.get_value("Item", item_code, "last_purchase_rate")
 	)
 	return val or flt(fallback_rate)
+
+
+#: Job types that represent pre-repair investigation rather than the fix itself.
+INVESTIGATION_JOB_TYPES = ("Diagnosis", "Testing")
+
+
+#: Statuses at which the promise stops mattering — the work is done or the
+#: ticket is closed, so the countdown freezes rather than running to a
+#: meaningless negative for the rest of the ticket's life.
+COUNTDOWN_STOPPED_DECISIONS = (
+	"Completed", "Invoiced", "Delivered", "Withdrawn", "Rejected", "Cancelled", "Expired",
+)
+
+
+def get_completion_countdown(sr) -> dict:
+	"""Time left against the promise made to the customer.
+
+	Measured from the SERVER clock and returned with it, so a workstation with a
+	wrong clock cannot make a late job look on time. The client ticks the
+	seconds locally against the offset it measures once — no request per second.
+
+	The countdown STOPS at completion rather than running negative forever: once
+	the repair is done the promise has been kept or missed, and that verdict is
+	what should persist.
+	"""
+	if isinstance(sr, str):
+		sr = frappe.get_doc("Service Request", sr)
+
+	promised = sr.get("promised_completion_datetime")
+	now = now_datetime()
+	decision = sr.get("decision") or ""
+	stopped = decision in COUNTDOWN_STOPPED_DECISIONS
+
+	if not promised:
+		return {
+			"promised": None, "server_now": str(now), "stopped": stopped,
+			"state": "unset",
+			# Said plainly rather than shown as a comfortable zero: a ticket with
+			# no promise is not a ticket that is on time.
+			"message": _("No completion time promised to the customer."),
+		}
+
+	promised_dt = get_datetime(promised)
+	# A finished job is measured against when it actually finished, not now.
+	reference = now
+	if stopped:
+		done = sr.get("actual_completion_date")
+		reference = get_datetime(done) if done else now
+
+	seconds_left = (promised_dt - reference).total_seconds()
+	return {
+		"promised": str(promised_dt),
+		"server_now": str(now),
+		"stopped": stopped,
+		"seconds_left": int(seconds_left),
+		"overdue": seconds_left < 0,
+		"state": ("met" if stopped and seconds_left >= 0
+			else "missed" if stopped
+			else "overdue" if seconds_left < 0
+			else "due_soon" if seconds_left < 3600
+			else "on_track"),
+		"revision_count": len(sr.get("eta_revisions") or []),
+	}
+
+
+@frappe.whitelist(methods=["POST"])
+def set_promised_completion(sr_name, promised_datetime, reason=None) -> dict:
+	"""Record — or move — the completion time promised to the customer.
+
+	Moving a promise is an event, not a field edit: the customer planned around
+	the old one. Every change is written to ``eta_revisions`` with the previous
+	value, the new value, who changed it and why, and a reason is required once
+	a promise already exists.
+	"""
+	_assert_sr_permission(sr_name, "write")
+
+	if not promised_datetime:
+		frappe.throw(_("A promised completion date and time is required."),
+			title=_("Validation Error"))
+
+	new_dt = get_datetime(promised_datetime)
+	sr = frappe.get_doc("Service Request", sr_name)
+	previous = sr.get("promised_completion_datetime")
+	previous_dt = get_datetime(previous) if previous else None
+
+	if previous_dt and previous_dt == new_dt:
+		return {"ok": True, "changed": False, **get_completion_countdown(sr)}
+
+	# A promise already given to a customer cannot move silently.
+	if previous_dt and not (reason or "").strip():
+		frappe.throw(
+			_("This ticket was already promised for {0}. Say why it is moving — "
+			  "the customer planned around the original time.").format(
+				frappe.format(previous_dt, {"fieldtype": "Datetime"})),
+			title=_("Reason Required"),
+		)
+
+	# A promise in the past is almost always a typo, and it would show the
+	# ticket as overdue the moment it was saved.
+	if not previous_dt and new_dt < now_datetime():
+		frappe.throw(
+			_("The promised completion time {0} is already in the past.").format(
+				frappe.format(new_dt, {"fieldtype": "Datetime"})),
+			title=_("Validation Error"),
+		)
+
+	sr.flags.ignore_validate_update_after_submit = True
+	sr.flags.ignore_mandatory = True
+	sr.append("eta_revisions", {
+		"previous_datetime": previous_dt,
+		"new_datetime": new_dt,
+		"changed_by": frappe.session.user,
+		"changed_at": now_datetime(),
+		"reason": (reason or "").strip() or _("Initial promise recorded at intake"),
+	})
+	sr.promised_completion_datetime = new_dt
+	# Keep the legacy Date column agreeing with the promise so existing reports
+	# and list filters do not disagree with the countdown.
+	if sr.meta.get_field("expected_completion_date"):
+		sr.expected_completion_date = new_dt.date()
+	sr.save(ignore_permissions=True)
+
+	return {"ok": True, "changed": True, **get_completion_countdown(sr)}
+
+
+def get_ticket_time_summary(sr_name) -> dict:
+	"""Every minute any technician has spent on this ticket, at any stage.
+
+	Time was previously only ever visible one assignment at a time. Analysis
+	creates a `Diagnosis` Job Assignment and the Assign stage creates a separate
+	`Repair` one, so the Repair screen showed 00:00:00 even when the same
+	technician had already spent an hour diagnosing the same device — and the
+	Analysis figure disappeared entirely once the ticket moved on. Neither
+	screen could answer "how long has this ticket actually taken", which is the
+	only number that matters for a promise made to a customer.
+
+	Hours come from each assignment's banked `actual_hours` plus, for one that
+	is still running, the time since its open custody period began — so the
+	figure is live without waiting for the technician to pause.
+	"""
+	jobs = frappe.get_all(
+		"Job Assignment",
+		filters={"service_request": sr_name, "docstatus": ("<", 2)},
+		fields=["name", "service_engineer", "job_type", "assignment_status",
+			"actual_hours", "start_datetime"],
+		order_by="creation",
+	)
+	if not jobs:
+		return {
+			"total_hours": 0.0, "banked_hours": 0.0, "live_hours": 0.0,
+			"by_stage": {}, "by_technician": [], "running": None,
+			"server_now": str(now_datetime()),
+		}
+
+	# The open custody period is what a running assignment is accruing against.
+	open_periods = {}
+	for row in frappe.get_all(
+		"GoFix Custody Log",
+		filters={"service_request": sr_name, "released_at": ("is", "not set")},
+		fields=["job_assignment", "technician", "taken_at"],
+	):
+		if row.job_assignment:
+			open_periods[row.job_assignment] = row
+
+	names = {j.service_engineer for j in jobs if j.service_engineer}
+	name_by_emp = {
+		e.name: e.employee_name
+		for e in frappe.get_all("Employee", filters={"name": ("in", tuple(names))},
+			fields=["name", "employee_name"], limit_page_length=len(names))
+	} if names else {}
+
+	now = now_datetime()
+	by_stage, by_tech = {}, {}
+	banked = live = 0.0
+	running = None
+
+	for job in jobs:
+		hours = flt(job.actual_hours)
+		banked += hours
+
+		period = open_periods.get(job.name)
+		if period and period.taken_at:
+			# Still on the bench: add the time since this period opened.
+			elapsed = (now - get_datetime(period.taken_at)).total_seconds() / 3600.0
+			if elapsed > 0:
+				hours += elapsed
+				live += elapsed
+			# A period left open overnight keeps accruing wall-clock time, so a
+			# job nobody paused reads as days of labour. That is a real signal,
+			# not a number to quietly cap: report it and let the floor decide.
+			stale_after = get_int_setting("running_period_stale_hours", 12)
+			running = {
+				"job_assignment": job.name,
+				"technician": job.service_engineer,
+				"technician_name": name_by_emp.get(job.service_engineer) or job.service_engineer,
+				"job_type": job.job_type,
+				"since": str(period.taken_at),
+				"elapsed_hours": round(elapsed, 4),
+				"stale": elapsed > stale_after,
+				"stale_after_hours": stale_after,
+			}
+
+		stage = job.job_type or "Other"
+		by_stage[stage] = by_stage.get(stage, 0.0) + hours
+
+		key = job.service_engineer or "—"
+		entry = by_tech.setdefault(key, {
+			"technician": job.service_engineer,
+			"technician_name": name_by_emp.get(job.service_engineer) or key,
+			"hours": 0.0, "stages": [],
+		})
+		entry["hours"] += hours
+		if job.job_type and job.job_type not in entry["stages"]:
+			entry["stages"].append(job.job_type)
+
+	total = banked + live
+	investigation = sum(h for s, h in by_stage.items() if s in INVESTIGATION_JOB_TYPES)
+
+	return {
+		"total_hours": round(total, 4),
+		"banked_hours": round(banked, 4),
+		"live_hours": round(live, 4),
+		"investigation_hours": round(investigation, 4),
+		"repair_hours": round(total - investigation, 4),
+		"by_stage": {k: round(v, 4) for k, v in by_stage.items()},
+		"by_technician": sorted(by_tech.values(), key=lambda r: -r["hours"]),
+		"technician_count": len(by_tech),
+		"running": running,
+		"has_stale_period": bool(running and running.get("stale")),
+		"server_now": str(now),
+	}
+
+
+def get_ticket_age(sr) -> dict:
+	"""How long the ticket has been open — wall-clock since it was raised.
+
+	Deliberately separate from hands-on time. They answer different questions
+	and routinely disagree by an order of magnitude: a ticket can be four days
+	old with forty minutes of work in it, which is the gap a customer actually
+	feels. Reporting one number for both would hide exactly that.
+
+	Stops at the moment the job ended, so a delivered ticket does not keep
+	ageing forever.
+	"""
+	if isinstance(sr, str):
+		sr = frappe.get_doc("Service Request", sr)
+
+	opened = get_datetime(sr.get("creation")) if sr.get("creation") else None
+	if not opened:
+		return {"opened": None, "hours": 0.0, "running": False,
+			"server_now": str(now_datetime())}
+
+	stopped = (sr.get("decision") or "") in COUNTDOWN_STOPPED_DECISIONS
+	end = None
+	if stopped and sr.get("actual_completion_date"):
+		end = get_datetime(sr.get("actual_completion_date"))
+	now = now_datetime()
+	reference = end or now
+
+	return {
+		"opened": str(opened),
+		"closed": str(end) if end else None,
+		"hours": round(max(0.0, (reference - opened).total_seconds() / 3600.0), 4),
+		"running": not stopped,
+		"server_now": str(now),
+	}
+
+
+PHOTO_STAGES = ("Intake", "Outtake")
+
+
+@frappe.whitelist(methods=["POST"])
+def add_device_photo(sr_name, file_url, stage="Intake", remarks=None) -> dict:
+	"""Attach one condition photograph to a ticket.
+
+	``stage`` says WHEN it was taken, which is the whole value of the record:
+	an intake photo is what the customer handed over, an outtake photo is what
+	they are about to be billed for. A dispute about a mark that "was not
+	there before" is settled by comparing the two, so the stage and the
+	timestamp are recorded by the server, not supplied by the caller.
+	"""
+	_assert_sr_permission(sr_name, "write")
+
+	stage = (stage or "Intake").strip().title()
+	if stage not in PHOTO_STAGES:
+		frappe.throw(
+			_("Photo stage must be one of: {0}").format(", ".join(PHOTO_STAGES)),
+			title=_("Validation Error"))
+	if not file_url:
+		frappe.throw(_("No photo was supplied."), title=_("Validation Error"))
+
+	# Only a file this site actually stores. A caller-supplied URL would
+	# otherwise let arbitrary remote content masquerade as intake evidence.
+	if not frappe.db.exists("File", {"file_url": file_url}):
+		frappe.throw(
+			_("That photo is not an uploaded file on this site."),
+			title=_("Unknown File"))
+
+	sr = frappe.get_doc("Service Request", sr_name)
+	sr.flags.ignore_validate_update_after_submit = True
+	sr.flags.ignore_mandatory = True
+	sr.append("device_photos", {
+		"stage": stage,
+		"photo": file_url,
+		"captured_by": frappe.session.user,
+		"captured_at": now_datetime(),
+		"remarks": (remarks or "").strip(),
+	})
+	sr.save(ignore_permissions=True)
+
+	return {"ok": True, "stage": stage, "count": len(sr.device_photos)}
+
+
+@frappe.whitelist(methods=["POST"])
+def remove_device_photo(sr_name, row_name) -> dict:
+	"""Drop a photo row — a mis-shot, not a way to erase evidence.
+
+	Removal is recorded on the ticket so a photo cannot quietly disappear
+	between intake and billing.
+	"""
+	_assert_sr_permission(sr_name, "write")
+
+	sr = frappe.get_doc("Service Request", sr_name)
+	row = next((r for r in (sr.get("device_photos") or []) if r.name == row_name), None)
+	if not row:
+		frappe.throw(_("That photo is not on this ticket."), title=_("Not Found"))
+
+	stage, url = row.stage, row.photo
+	sr.flags.ignore_validate_update_after_submit = True
+	sr.flags.ignore_mandatory = True
+	sr.remove(row)
+	sr.save(ignore_permissions=True)
+	sr.add_comment("Comment", _("{0} photo removed: {1}").format(_(stage), url))
+	return {"ok": True, "count": len(sr.device_photos)}
+
+
+def get_device_photo_summary(sr) -> dict:
+	"""Photos grouped by stage, for the hub and the billing gate."""
+	if isinstance(sr, str):
+		sr = frappe.get_doc("Service Request", sr)
+	rows = [
+		{
+			"name": r.name, "stage": r.stage, "photo": r.photo,
+			"captured_by": r.captured_by, "captured_at": str(r.captured_at or ""),
+			"remarks": r.remarks or "",
+		}
+		for r in (sr.get("device_photos") or [])
+	]
+	return {
+		"rows": rows,
+		"intake": [r for r in rows if r["stage"] == "Intake"],
+		"outtake": [r for r in rows if r["stage"] == "Outtake"],
+	}
+
+
+@frappe.whitelist()
+def get_device_photos(sr_name) -> dict:
+	"""Whitelisted read for the Ops Hub photo strip."""
+	_assert_sr_permission(sr_name, "read")
+	return get_device_photo_summary(sr_name)
+
+
+@frappe.whitelist()
+def get_ticket_time(sr_name) -> dict:
+	"""Whitelisted cumulative time, for the Analysis and Repair panels."""
+	_assert_sr_permission(sr_name, "read")
+	return get_ticket_time_summary(sr_name)
+
+
+def technician_billing_rate(employee: str) -> float:
+	"""What the customer is charged per hour of this technician's time.
+
+	Falls back, most specific first:
+	  1. Employee.gofix_billing_hourly_rate  — this person's agreed rate
+	  2. Technician Grade.billing_hourly_rate — the rate for their grade
+	  3. GoFix Settings.default_labor_rate_per_minute x 60 — the flat fallback
+	  4. 0
+
+	Deliberately NOT Employee.custom_hourly_rate: that is the COST rate (CTC
+	divided by 2080) used by `_get_labour_cost`. Charging the customer at cost
+	would make every hour of labour zero-margin, and the below-cost gate would
+	then fire on every ticket.
+	"""
+	if not employee:
+		return 0.0
+
+	row = frappe.db.get_value(
+		"Employee", employee, ["technician_grade", "gofix_billing_hourly_rate"],
+		as_dict=True,
+	)
+	if not row:
+		# An employee that does not exist has no rate. Falling through to the
+		# flat default here would bill hours against a phantom technician.
+		return 0.0
+
+	rate = flt(row.get("gofix_billing_hourly_rate"))
+	if rate > 0:
+		return rate
+
+	if row.get("technician_grade"):
+		rate = flt(frappe.db.get_value(
+			"Technician Grade", row["technician_grade"], "billing_hourly_rate"))
+		if rate > 0:
+			return rate
+
+	per_minute = flt(get_int_setting("default_labor_rate_per_minute", 0))
+	return per_minute * 60.0
+
+
+def get_labour_to_date(sr) -> dict:
+	"""Billable technician time actually spent on this ticket so far.
+
+	Used when a job ends without the planned work being finished — the customer
+	declines mid-repair, or the device turns out not to be repairable. The
+	estimate's fixed per-solution prices describe work that was going to be
+	done; billing them for a job abandoned after the first of three solutions
+	charges for two repairs nobody performed.
+
+	Every Job Assignment on the ticket counts, including `job_type="Diagnosis"`.
+	Analysis is real technician time and is now recorded (see the diagnosis
+	custody change); leaving it out would give away the one thing that was
+	definitely done on a job the customer then declined.
+
+	Hours come from `actual_hours`, which the Job Assignment accrues from its
+	own work periods — not from wall-clock elapsed time, so a ticket left open
+	over a weekend does not bill for the weekend.
+	"""
+	if isinstance(sr, str):
+		sr = frappe.get_doc("Service Request", sr)
+
+	jobs = frappe.get_all(
+		"Job Assignment",
+		filters={"service_request": sr.name, "docstatus": ("<", 2)},
+		fields=["name", "service_engineer", "actual_hours", "job_type",
+			"assignment_status"],
+	)
+
+	lines = []
+	total_hours = 0.0
+	total_amount = 0.0
+	for job in jobs:
+		hours = flt(job.actual_hours)
+		if hours <= 0:
+			continue
+		rate = technician_billing_rate(job.service_engineer)
+		amount = hours * rate
+		total_hours += hours
+		total_amount += amount
+		lines.append({
+			"job_assignment": job.name,
+			"technician": job.service_engineer,
+			"technician_name": frappe.db.get_value(
+				"Employee", job.service_engineer, "employee_name") or job.service_engineer,
+			"job_type": job.job_type,
+			"assignment_status": job.assignment_status,
+			"hours": hours,
+			"rate": rate,
+			"amount": amount,
+		})
+
+	unrated = [x["technician"] for x in lines if not x["rate"]]
+	return {
+		"lines": lines,
+		"hours": total_hours,
+		"amount": total_amount,
+		# Hours recorded against someone with no rate anywhere in the chain bill
+		# as zero. That is a silent giveaway, so it is reported rather than
+		# hidden behind a total.
+		"unrated_technicians": sorted(set(unrated)),
+	}
+
+
+@frappe.whitelist()
+def get_labour_to_date_summary(sr_name) -> dict:
+	"""Whitelisted view of billable time so far, for the billing screen."""
+	_assert_sr_permission(sr_name, "read")
+	return get_labour_to_date(sr_name)
 
 
 def _get_labour_cost(sr) -> dict:
@@ -3846,6 +4711,7 @@ def get_invoice_summary(sr_name) -> dict:
 	customer_total = final_cost if final_cost else base_total
 
 	company_cost = _get_company_cost(sr)
+	labour_to_date = get_labour_to_date(sr)
 	exception_status = _below_cost_exception_status(sr)
 	below_cost = bool(company_cost["total"] > 0 and customer_total < company_cost["total"])
 
@@ -3866,6 +4732,9 @@ def get_invoice_summary(sr_name) -> dict:
 		"company_total": company_cost["total"],
 		"margin": customer_total - company_cost["total"],
 		"below_cost": below_cost,
+		# Billable technician time on this ticket. The counter needs it when a
+		# job ends before the planned work was finished — see get_labour_to_date.
+		"labour_to_date": labour_to_date,
 		"below_cost_exception": sr.get("below_cost_exception_request") or "",
 		"below_cost_exception_status": exception_status or "",
 		"service_invoice": sr.service_invoice or "",

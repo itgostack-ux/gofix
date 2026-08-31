@@ -62,18 +62,9 @@ def _service_request_fields():
 				"fieldtype": "Column Break",
 				"insert_after": "appointment_source",
 			},
-			{
-				"fieldname": "promised_completion_datetime",
-				"label": "Promised to Customer",
-				"fieldtype": "Datetime",
-				"insert_after": "column_break_appointment",
-				"allow_on_submit": 1,
-				"description": (
-					"What the customer was actually told. Kept apart from the internal "
-					"expected date so a slipped promise stays visible instead of being "
-					"quietly rewritten."
-				),
-			},
+			# promised_completion_datetime is now a first-class DocField on
+			# Service Request (the ETA-revision work promoted it); installing a
+			# Custom Field of the same name would duplicate it in meta.
 
 			# ── Loaner device ──────────────────────────────────────────
 			{

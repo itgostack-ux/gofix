@@ -153,9 +153,14 @@ doc_events = {
 		"on_cancel": "gofix.overrides.delivery_note.update_service_request_on_delivery"
 	},
 	"Purchase Order": {
+		"validate": "gofix.customer_device_stock.block_customer_device_as_destination",
 		"on_submit": "gofix.purchase_api.mark_spares_in_transit",
 	},
+	"Material Request": {
+		"validate": "gofix.customer_device_stock.block_customer_device_as_destination",
+	},
 	"Purchase Receipt": {
+		"validate": "gofix.customer_device_stock.block_customer_device_as_destination",
 		# A draft receipt means the parts are AT the store; submitting it is what
 		# puts them in stock. The ticket distinguishes the two.
 		"after_insert": "gofix.purchase_api.mark_spares_delivered",

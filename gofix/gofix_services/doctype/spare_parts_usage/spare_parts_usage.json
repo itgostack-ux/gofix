@@ -57,7 +57,9 @@
   "section_break_recovery",
   "recovery_disposition",
   "column_break_recovery",
-  "recovery_stock_entry"
+  "recovery_stock_entry",
+  "hub_return_stock_entry",
+  "hub_return_manifest"
  ],
  "fields": [
   {
@@ -74,11 +76,11 @@
    "fieldname": "service_request_spare_line",
    "fieldtype": "Link",
    "label": "Service Request Spare Line",
-  "options": "SR Spare Line",
-  "reqd": 1,
-  "read_only": 1,
-  "search_index": 1,
-  "unique": 1
+   "options": "SR Spare Line",
+   "reqd": 1,
+   "read_only": 1,
+   "search_index": 1,
+   "unique": 1
   },
   {
    "fieldname": "warehouse",
@@ -426,11 +428,27 @@
    "read_only": 1,
    "unique": 1,
    "description": "Stock entry created to reverse spare consumption"
+  },
+  {
+   "fieldname": "hub_return_stock_entry",
+   "fieldtype": "Link",
+   "options": "Stock Entry",
+   "label": "Hub Return Transfer",
+   "read_only": 1,
+   "description": "Material Transfer moving this quarantined part from the store to the hub. Left in draft until the hub submits it \u2014 that submission IS the receipt acknowledgement."
+  },
+  {
+   "fieldname": "hub_return_manifest",
+   "fieldtype": "Link",
+   "options": "CH Transfer Manifest",
+   "label": "Hub Return Manifest",
+   "read_only": 1,
+   "description": "The manifest logistics carries it on. Without one the transfer is invisible to the Command Center, packing queue and trip planner."
   }
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-07-18 14:00:00.000000",
+ "modified": "2026-08-31 13:00:00.000000",
  "modified_by": "Administrator",
  "module": "GoFix Services",
  "name": "Spare Parts Usage",

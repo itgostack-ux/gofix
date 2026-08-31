@@ -46,7 +46,7 @@ SUB_CATEGORY_TO_SOLUTION = {
 	"Mobile Spares-Front Cameras": "Camera Replacement",
 	"Mobile Spares-Camera Lens": "Camera Glass Replacement",
 	"Mobile Spares-Finger Print Sensor": "Fingerprint Sensor Replacement",
-	"Mobile Spares-Swapping Board": "Board-Level Repair",
+	"Mobile Spares-Swapping Board": "Swapping Board",
 	"Mobile Spares-Board Connector": "Board-Level Repair",
 	"Mobile Spares-Network Strip": "Antenna / Network IC Repair",
 	# Deliberately unmapped -- no repair in the catalogue consumes it yet:

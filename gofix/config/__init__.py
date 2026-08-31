@@ -146,11 +146,11 @@ def has_role_setting(fieldname: str, defaults=(), user: str | None = None) -> bo
 	return has_any_role(get_role_setting(fieldname, defaults), user=user)
 
 
-def require_role_setting(fieldname: str, *, action: str | None = None) -> None:
-	if has_role_setting(fieldname):
+def require_role_setting(fieldname: str, defaults=(), *, action: str | None = None) -> None:
+	if has_role_setting(fieldname, defaults):
 		return
 	frappe.throw(
 		_("You do not have permission to {0}. Required role: {1}").format(
 			action or _("perform this action"),
-			", ".join(sorted(get_role_setting(fieldname)))),
+			", ".join(sorted(get_role_setting(fieldname, defaults)))),
 		frappe.PermissionError)

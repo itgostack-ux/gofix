@@ -11,6 +11,7 @@
   "grade_name",
   "grade_level",
   "column_break_1",
+  "billing_hourly_rate",
   "is_active",
   "description",
   "section_break_skills",
@@ -58,11 +59,17 @@
    "fieldtype": "Table",
    "label": "Skills",
    "options": "Technician Skill"
+  },
+  {
+   "fieldname": "billing_hourly_rate",
+   "fieldtype": "Currency",
+   "label": "Billable Rate / Hour",
+   "description": "Default hourly charge to the customer for a technician of this grade. An individual Employee may override it. This is a SELLING rate \u2014 the cost side is Employee.custom_hourly_rate (CTC-derived)."
   }
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-04-04 12:00:00.000000",
+ "modified": "2026-08-31 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "GoFix Services",
  "name": "Technician Grade",

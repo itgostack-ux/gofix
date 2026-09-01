@@ -65,6 +65,8 @@
   "warranty_deductible",
   "mode_of_service",
   "section_device_security",
+  "device_unlock_type",
+  "device_unlock_code",
   "password",
   "pattern",
   "column_break_security",
@@ -126,6 +128,9 @@
   "section_service_discount",
   "coupon_code",
   "coupon_captured_on",
+  "coupon_scope",
+  "coupon_solution",
+  "coupon_discount_amount",
   "service_discount_percent",
   "service_discount_amount",
   "column_break_svc_disc",
@@ -1078,7 +1083,9 @@
    "default": "0",
    "fieldname": "data_backup_disclaimer",
    "fieldtype": "Check",
-   "label": "Customer Acknowledges Data May Be Lost"
+   "label": "Customer Acknowledges Data May Be Lost",
+   "reqd": 0,
+   "bold": 1
   },
   {
    "allow_on_submit": 1,
@@ -1357,19 +1364,25 @@
    "fieldname": "device_category",
    "fieldtype": "Link",
    "options": "CH Category",
-   "label": "Category"
+   "label": "Category",
+   "reqd": 0,
+   "bold": 1
   },
   {
    "fieldname": "device_brand",
    "fieldtype": "Link",
    "options": "Brand",
-   "label": "Brand"
+   "label": "Brand",
+   "reqd": 0,
+   "bold": 1
   },
   {
    "fieldname": "device_model",
    "fieldtype": "Link",
    "options": "CH Model",
-   "label": "Model"
+   "label": "Model",
+   "reqd": 0,
+   "bold": 1
   },
   {
    "fieldname": "accessories_list",
@@ -1454,6 +1467,45 @@
    "label": "Coupon Captured On",
    "read_only": 1,
    "allow_on_submit": 1
+  },
+  {
+   "fieldname": "device_unlock_type",
+   "fieldtype": "Select",
+   "label": "Screen Lock",
+   "options": "\nNone\nPIN\nPattern\nPassword\nBiometric Only",
+   "allow_on_submit": 1
+  },
+  {
+   "fieldname": "device_unlock_code",
+   "fieldtype": "Data",
+   "label": "Unlock PIN / Pattern / Password",
+   "allow_on_submit": 1,
+   "depends_on": "eval:doc.device_unlock_type && doc.device_unlock_type!='None'",
+   "description": "Needed to test the repair. For a pattern, record the dot sequence (e.g. 1-2-3-6-9)."
+  },
+  {
+   "fieldname": "coupon_scope",
+   "fieldtype": "Select",
+   "label": "Coupon Applies To",
+   "options": "\nEntire Invoice\nSpecific Repair",
+   "allow_on_submit": 1,
+   "depends_on": "coupon_code"
+  },
+  {
+   "fieldname": "coupon_solution",
+   "fieldtype": "Link",
+   "options": "Repair Solution",
+   "label": "Discounted Repair",
+   "allow_on_submit": 1,
+   "depends_on": "eval:doc.coupon_scope=='Specific Repair'"
+  },
+  {
+   "fieldname": "coupon_discount_amount",
+   "fieldtype": "Currency",
+   "label": "Coupon Discount",
+   "read_only": 1,
+   "allow_on_submit": 1,
+   "depends_on": "coupon_code"
   }
  ],
  "index_web_pages_for_search": 1,

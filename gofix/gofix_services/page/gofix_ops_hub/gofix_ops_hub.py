@@ -1116,6 +1116,20 @@ def get_ticket_detail(sr_name) -> dict:
 		"brand": sr.brand or "",
 		"device_condition": sr.device_condition or "",
 		"actual_imei": sr.get("actual_imei") or "",
+		# Everything the counter captured at intake. The hub is where the
+		# technician actually works, and none of it reached them before: they
+		# could not see what came in the box, what the device is when it is not
+		# one we sell, or how to get past the lock screen to test the repair.
+		"device_category": sr.get("device_category") or "",
+		"device_brand": sr.get("device_brand") or "",
+		"device_model": sr.get("device_model") or "",
+		"device_unlock_type": sr.get("device_unlock_type") or "",
+		"device_unlock_code": sr.get("device_unlock_code") or "",
+		"accessories_received": sr.get("accessories_received") or "",
+		"accessories_list": [
+			r.accessory for r in (sr.get("accessories_list") or []) if r.accessory
+		],
+		"coupon_code": sr.get("coupon_code") or "",
 		"mode_of_service": sr.get("mode_of_service") or "",
 		"issue_category": sr.issue_category or "",
 		"issue_description": sr.issue_description or "",

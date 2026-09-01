@@ -373,7 +373,7 @@ def _ensure_delivered(service_request):
 		row.db_insert()
 	_db_set_existing("Service Request", service_request, {
 		"decision": "Delivered",
-		"walkin_status": "Delivered",
+		"walkin_status": None,
 	})
 
 
@@ -417,7 +417,7 @@ def run():
 		_add_stage_history(service_request, started_at)
 		_db_set_existing("Service Request", service_request, {
 			"decision": "Delivered",
-			"walkin_status": "Delivered",
+			"walkin_status": None,
 			"actual_completion_date": getdate(),
 			"service_invoice": invoice,
 		})

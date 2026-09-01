@@ -3,6 +3,23 @@
 
 frappe.ui.form.on('Service Request', {
 	refresh: function(frm) {
+		// Consent, not a preference. Required only while the ticket is being
+		// raised — the conversation happens at the counter and cannot be had
+		// retrospectively, so older tickets must stay saveable. The server
+		// enforces the same rule in _require_data_loss_acknowledgement.
+		["device_category", "device_brand", "device_model", "data_backup_disclaimer"]
+			.forEach((f) => frm.set_df_property(f, "reqd", frm.is_new() ? 1 : 0));
+		const $ack = frm.fields_dict.data_backup_disclaimer
+			&& frm.fields_dict.data_backup_disclaimer.$wrapper;
+		if ($ack) {
+			$ack.css({
+				background: frm.doc.data_backup_disclaimer ? "#e8f5e9" : "#fff4e5",
+				border: `1px solid ${frm.doc.data_backup_disclaimer ? "#4caf50" : "#f0a202"}`,
+				"border-left": `4px solid ${frm.doc.data_backup_disclaimer ? "#4caf50" : "#f0a202"}`,
+				"border-radius": "4px",
+				padding: "8px 10px",
+			});
+		}
 		// Set status color indicator
 		set_status_indicator(frm);
 		

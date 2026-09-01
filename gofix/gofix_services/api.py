@@ -1623,7 +1623,24 @@ def get_store_service_board(warehouse, tab=None, search=None) -> dict:
 		limit_page_length=row_limit,
 	)
 
+	# Whether a job has been opened yet. The counter's separate "Pending Store
+	# Repairs" list carried this and the service board did not, which is the one
+	# thing that list could do that this board could not.
+	job_by_sr = {}
+	if rows:
+		for ja in frappe.get_all(
+			"Job Assignment",
+			filters={"service_request": ("in", [r.name for r in rows]),
+			         "assignment_status": ("!=", "Cancelled")},
+			fields=["name", "service_request", "assignment_status"],
+			order_by="creation desc",
+		):
+			job_by_sr.setdefault(ja.service_request, ja)
+
 	for r in rows:
+		job = job_by_sr.get(r.name)
+		r["job_assignment"] = job.name if job else ""
+		r["job_status"] = job.assignment_status if job else ""
 		transfer = (r.get("transfer_status") or "").strip()
 		if transfer in ("", "Not Transferred", "Returned to Store"):
 			device_at = r.get("current_location") or warehouse

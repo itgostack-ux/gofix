@@ -708,7 +708,9 @@ class GoFixOpsHub {
 		const esc = frappe.utils.escape_html;
 		const rows = [
 			["Device", d.device_item_name || d.device_item],
-			["Brand", d.brand],
+			["Category", d.device_category],
+			["Brand", d.device_brand || d.brand],
+			["Model", d.device_model],
 			["Serial No", d.serial_no],
 			["IMEI", d.actual_imei],
 			["Condition", d.device_condition],
@@ -720,7 +722,23 @@ class GoFixOpsHub {
 			["Received", d.received_datetime ? frappe.datetime.str_to_user(d.received_datetime) : d.service_date ? frappe.datetime.str_to_user(d.service_date) : ""],
 			["Expected By", d.expected_completion_date ? frappe.datetime.str_to_user(d.expected_completion_date) : ""],
 			["Advance Paid", d.advance_amount ? `₹${format_number(d.advance_amount)}` : ""],
+			["Accessories", (d.accessories_list || []).join(", ") || d.accessories_received],
+			["Coupon", d.coupon_code],
 		].filter(r => r[1]);
+
+		// Held apart from the grid above: it is the customer's own credential,
+		// only here so the repair can actually be tested, and it should read as
+		// something handled with care rather than another catalogue attribute.
+		const lock = d.device_unlock_type
+			? `<div class="goh-section">
+					<div class="goh-section-title"><i class="fa fa-lock"></i> ${__("Screen Lock")}</div>
+					<div class="goh-kv-grid">
+						<div class="goh-kv"><span class="goh-kv-label">${__("Lock Type")}</span><span class="goh-kv-value">${esc(d.device_unlock_type)}</span></div>
+						${d.device_unlock_code ? `<div class="goh-kv"><span class="goh-kv-label">${__("Unlock Code")}</span><span class="goh-kv-value" style="font-family:monospace;font-weight:700">${esc(d.device_unlock_code)}</span></div>` : ""}
+					</div>
+					<div class="text-muted" style="font-size:11px;margin-top:6px">${__("Given by the customer so the repair can be tested. Do not share outside the job.")}</div>
+				</div>`
+			: "";
 
 		const assignRows = (d.assignments || []).filter(a => a.assignment_status !== "Cancelled").map(a => `
 			<tr>
@@ -739,6 +757,8 @@ class GoFixOpsHub {
 					${rows.map(r => `<div class="goh-kv"><span class="goh-kv-label">${__(r[0])}</span><span class="goh-kv-value">${esc(r[1])}</span></div>`).join("")}
 				</div>
 			</div>
+
+			${lock}
 
 			${d.issue_description ? `
 				<div class="goh-section">

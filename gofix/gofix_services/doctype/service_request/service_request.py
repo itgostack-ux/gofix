@@ -76,6 +76,93 @@ class ServiceRequest(Document):
 		if not self.get("coupon_captured_on"):
 			self.coupon_captured_on = now_datetime()
 
+	def _require_device_taxonomy(self):
+		"""Category, brand and model identify the device; the Item does not.
+
+		The device Item is optional on purpose -- a customer can walk in with
+		something we have never sold, and refusing the ticket because the thing
+		has no catalogue entry would be the wrong way round. What a repair
+		business still needs is what the device *is*, so these three carry that
+		instead, and _derive_device_taxonomy fills them from the Item whenever
+		one was chosen.
+
+		Enforced only while the ticket is being raised. Doing it through the
+		field's own ``reqd`` also applied it on update-after-submit, which left
+		every ticket predating the rule unsaveable -- including submitted ones a
+		technician still has to record a service outcome against.
+		"""
+		if not self.is_new():
+			return
+		missing = [
+			label for field, label in (
+				("device_category", _("Category")),
+				("device_brand", _("Brand")),
+				("device_model", _("Model")),
+			) if not self.get(field)
+		]
+		if not missing:
+			return
+		frappe.throw(
+			_("{0} must be set before the device is booked in. Pick the device "
+			  "Item if we sell it and these fill themselves, or choose them "
+			  "directly for a device we do not stock.").format(", ".join(missing)),
+			title=_("Device Not Identified"),
+		)
+
+	def _require_data_loss_acknowledgement(self):
+		"""The customer must have been told their data may not survive.
+
+		Frappe's own mandatory check would fire for this field, but it says
+		"Value missing for: Data Backup Disclaimer" -- which reads like a form
+		field somebody forgot rather than a consent nobody obtained. Raised here,
+		before that check runs, so the counter is told what is actually missing.
+
+		Only enforced on the way in. An older ticket, or one that has already
+		been submitted, is not made unsaveable over a conversation that can no
+		longer be had.
+		"""
+		if not self.is_new():
+			return
+		if cint(self.get("data_backup_disclaimer")):
+			return
+		frappe.throw(
+			_("The customer has to acknowledge that data may be lost during the "
+			  "repair before the device is booked in. Confirm it with them and "
+			  "tick the acknowledgement."),
+			title=_("Data Loss Not Acknowledged"),
+		)
+
+	def _derive_device_taxonomy(self):
+		"""Fill category, brand and model from the chosen device Item.
+
+		These three are mandatory and the device Item is not: a customer can
+		arrive with something we have never sold, and refusing to book it in
+		because it has no catalogue entry would be the wrong way round. But an
+		advisor who *does* know the item should not then have to re-pick the
+		three things that item already declares, so they are derived here.
+
+		Runs before Frappe's mandatory check, which happens after validate(), so
+		a ticket naming a known device satisfies the requirement on its own.
+		Only blanks are filled -- a deliberate choice at the counter wins, since
+		a customer's device can legitimately differ from how we catalogue it.
+		"""
+		if not self.get("device_item"):
+			return
+		if self.device_category and self.device_brand and self.device_model:
+			return
+
+		item = frappe.db.get_value(
+			"Item", self.device_item, ["ch_category", "brand", "ch_model"], as_dict=True
+		)
+		if not item:
+			return
+		if not self.device_category and item.ch_category:
+			self.device_category = item.ch_category
+		if not self.device_brand and item.brand:
+			self.device_brand = item.brand
+		if not self.device_model and item.ch_model:
+			self.device_model = item.ch_model
+
 	def _stamp_service_outcome(self):
 		"""Record who signed off the outcome, and when, the first time it is set.
 
@@ -310,6 +397,9 @@ class ServiceRequest(Document):
 		self.db_set("tracking_token", tracking_token_digest(token), update_modified=False)
 	
 	def validate(self):
+		self._derive_device_taxonomy()
+		self._require_device_taxonomy()
+		self._require_data_loss_acknowledgement()
 		self._stamp_service_outcome()
 		self._capture_coupon_at_intake()
 		self._validate_approval_evidence()

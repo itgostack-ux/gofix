@@ -42,3 +42,4 @@ gofix.patches.v10_fix_workflow_condition_db_count # 2026-08-31 - workflow condit
 gofix.patches.v11_recode_customer_closures_as_withdrawn # 2026-08-31 - customer-driven closures wrote decision=Cancelled, so the Rejection Register counted them as our refusals and the Job Tracker Withdrawn column could never fill
 gofix.patches.v12_backfill_repair_service_items # 2026-09-01 - v01 swallowed every failure and was recorded as done, so sites whose repair-labour taxonomy was seeded too late kept no service Items at all
 gofix.patches.seed_estimate_override_exception_type #2026-09-01 - CH Exception Type for Confirm-step estimate price gate
+gofix.patches.v13_backfill_device_taxonomy #2026-09-01 - category/brand/model became mandatory; derive them for existing tickets

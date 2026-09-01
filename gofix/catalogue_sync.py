@@ -172,6 +172,22 @@ def ensure_service_item(solution, commit=False):
 		hsn = _service_hsn_for(sub_category)
 		if hsn:
 			item.gst_hsn_code = hsn
+		elif item.meta.get_field("gst_hsn_code"):
+			# No usable code: neither the sub-category's nor the default exists
+			# as a GST HSN Code master. Inserting anyway raises MandatoryError
+			# from india_compliance, which -- on the patch path that seeds these
+			# items -- aborts the whole bench migrate several frames away from
+			# anything naming this Item. Skipping the item instead leaves the
+			# Repair Solution without a service item, which is visible, fixable,
+			# and does not stop a deployment.
+			frappe.log_error(
+				f"Repair Solution {solution.name}: no GST HSN Code master exists for the "
+				f"sub-category's code or the default '{DEFAULT_SERVICE_HSN}'. Service item "
+				f"{item_code} was not created. Install india_compliance's HSN masters, then "
+				f"re-save the Repair Solution to generate it.",
+				"GoFix service item skipped -- HSN master missing",
+			)
+			return None
 		item.flags.ignore_permissions = True
 		item.insert(ignore_permissions=True)
 

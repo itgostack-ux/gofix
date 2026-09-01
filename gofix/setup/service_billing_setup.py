@@ -11,20 +11,27 @@ REPAIR_SUB_CATEGORY = "Repair Services-Mobile Repair Labour"
 
 
 def _ensure_services_item_group() -> None:
-	# ERPNext only creates the "Services" Item Group via its interactive setup
-	# wizard (erpnext/setup/setup_wizard/operations/install_fixtures.py) — a
-	# site provisioned by scripting bench install-app directly (no wizard)
-	# never gets it, even though "All Item Groups" (a core fixture) always
-	# exists. Without this, the very first migrate after install crashes here
-	# with "Could not find Item Group: Services".
-	if frappe.db.exists("Item Group", "Services"):
-		return
-	frappe.get_doc({
-		"doctype": "Item Group",
-		"item_group_name": "Services",
-		"parent_item_group": "All Item Groups",
-		"is_group": 0,
-	}).insert(ignore_permissions=True, ignore_if_duplicate=True)
+	# ERPNext only creates "All Item Groups" and "Services" via its
+	# interactive setup wizard (erpnext/setup/setup_wizard/operations/
+	# install_fixtures.py) — a site provisioned by scripting
+	# bench install-app directly (no wizard) gets neither. Without this, the
+	# very first migrate after install crashes here with
+	# "Could not find Item Group: Services" (or, once that's papered over,
+	# "Could not find Parent Item Group: All Item Groups").
+	if not frappe.db.exists("Item Group", "All Item Groups"):
+		frappe.get_doc({
+			"doctype": "Item Group",
+			"item_group_name": "All Item Groups",
+			"is_group": 1,
+		}).insert(ignore_permissions=True, ignore_if_duplicate=True)
+
+	if not frappe.db.exists("Item Group", "Services"):
+		frappe.get_doc({
+			"doctype": "Item Group",
+			"item_group_name": "Services",
+			"parent_item_group": "All Item Groups",
+			"is_group": 0,
+		}).insert(ignore_permissions=True, ignore_if_duplicate=True)
 
 
 def _ensure_repair_taxonomy() -> None:

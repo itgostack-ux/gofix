@@ -47,7 +47,35 @@ def _repair_income_account():
 	)
 
 
+def _ensure_erpnext_baseline_defaults() -> None:
+	# ERPNext's Item Groups (All Item Groups, Services, ...), UOMs (Nos, Kg,
+	# Unit, ...), Territories, Customer/Supplier Groups etc. are normally
+	# seeded by its interactive Setup Wizard
+	# (erpnext/setup/setup_wizard/operations/install_fixtures.py). A site
+	# provisioned by scripting bench install-app directly (no wizard) never
+	# gets any of it — this function's own steps below assume it's all
+	# there, and previously failed one missing default at a time as each
+	# one was reached ("Item Group: Services", then "Item Group: All Item
+	# Groups", then "UOM: Nos", ...). Rather than hand-seed each one as it
+	# surfaces, defensively run the wizard's own installer once, idempotently
+	# (it uses insert(..., ignore_if_duplicate=True) per record, so it's
+	# safe to call even on a site that already has some or all of this).
+	if frappe.db.exists("Item Group", "All Item Groups"):
+		return
+	from erpnext.setup.setup_wizard.operations.install_fixtures import install as install_erpnext_defaults
+
+	install_erpnext_defaults()
+
+
 def _ensure_repair_taxonomy() -> None:
+	# Both sides of this were right about different halves of the problem, so
+	# both stay. Seed ERPNext's own company defaults first -- on a fresh site
+	# there may be no default income account to read at all -- then resolve
+	# through _repair_income_account(), which falls back to any company with a
+	# default when nobody has ticked gofix_enabled yet, and tolerates the custom
+	# field not existing. Reading default_income_account directly would return
+	# None on exactly the fresh-install path this seeder runs from.
+	_ensure_erpnext_baseline_defaults()
 	income_account = _repair_income_account()
 	if not frappe.db.exists("CH Category", REPAIR_CATEGORY):
 		category = frappe.new_doc("CH Category")

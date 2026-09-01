@@ -61,6 +61,7 @@ def execute():
 		return
 
 	seeded, skipped_existing, missing_category = 0, 0, set()
+	failed = []
 
 	for code, categories in APPLICABILITY.items():
 		name = resolve_solution(code)
@@ -87,17 +88,33 @@ def execute():
 			# everywhere than offered nowhere.
 			continue
 
-		doc = frappe.get_doc("Repair Solution", name)
-		for category in valid:
-			doc.append("applies_to", {"device_category": category})
-		doc.flags.ignore_permissions = True
-		doc.flags.ignore_validate_update_after_submit = True
-		doc.save(ignore_permissions=True)
-		seeded += 1
+		try:
+			doc = frappe.get_doc("Repair Solution", name)
+			for category in valid:
+				doc.append("applies_to", {"device_category": category})
+			doc.flags.ignore_permissions = True
+			doc.flags.ignore_validate_update_after_submit = True
+			doc.save(ignore_permissions=True)
+			seeded += 1
+		except Exception:
+			# Saving a solution provisions its service Item, which can fail on a
+			# site whose billing taxonomy is incomplete. That is worth reporting,
+			# but it is not worth aborting the migrate over: this patch only
+			# narrows which devices a repair is offered for, and a solution left
+			# unseeded stays universal, which is the safe direction. Without this
+			# the throw propagated out of run_schema_updates and every later
+			# patch, fixture sync and workspace import silently never ran.
+			failed.append(name)
+			frappe.clear_messages()
+			frappe.log_error(
+				frappe.get_traceback(),
+				f"GoFix: could not seed applicability for {name}",
+			)
 
 	frappe.db.commit()
 	frappe.logger("gofix").info(
 		f"GoFix: seeded device applicability on {seeded} repair solution(s); "
 		f"{skipped_existing} already declared"
 		+ (f"; categories absent here: {sorted(missing_category)}" if missing_category else "")
+		+ (f"; FAILED and left universal: {failed}" if failed else "")
 	)

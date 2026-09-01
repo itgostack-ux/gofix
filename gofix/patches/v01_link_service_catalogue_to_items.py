@@ -73,6 +73,9 @@ def _provision_service_items():
 			if ensure_service_item(solution):
 				created += 1
 		except Exception:
+			# frappe.throw queues its message even when the exception is caught,
+			# so without this every later save in the migrate replays the popup.
+			frappe.clear_messages()
 			frappe.log_error(
 				frappe.get_traceback(), f"GoFix: could not provision service item for {name}"
 			)
@@ -137,6 +140,7 @@ def _seed_item_solution_links():
 			sync_spare_mappings_from_item(item)
 			linked += 1
 		except Exception:
+			frappe.clear_messages()
 			frappe.log_error(
 				frappe.get_traceback(), f"GoFix: could not link spare {row.name}"
 			)

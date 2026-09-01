@@ -71,7 +71,17 @@ def _ensure_solution():
 			if frappe.db.exists("CH Category", category):
 				doc.append("applies_to", {"device_category": category})
 	doc.flags.ignore_permissions = True
-	doc.insert(ignore_permissions=True)
+	try:
+		doc.insert(ignore_permissions=True)
+	except Exception:
+		# Inserting a solution provisions its service Item; on a site with an
+		# incomplete billing taxonomy that throws. Report it and leave the
+		# catalogue as it was rather than taking the migrate down with us.
+		frappe.clear_messages()
+		frappe.log_error(
+			frappe.get_traceback(), f"GoFix: could not create repair solution {SOLUTION_CODE}"
+		)
+		return None
 	frappe.logger("gofix").info(f"GoFix: created repair solution {doc.name}")
 	return doc.name
 
@@ -96,7 +106,7 @@ def _remap_spares(solution):
 
 	from gofix.catalogue_sync import sync_spare_mappings_from_item
 
-	moved = 0
+	moved, failed = 0, []
 	for item_code in items:
 		item = frappe.get_doc("Item", item_code)
 		dirty = False
@@ -107,14 +117,24 @@ def _remap_spares(solution):
 				dirty = True
 		if not dirty:
 			continue
-		item.flags.ignore_permissions = True
-		item.flags.ignore_validate_update_after_submit = True
-		item.save(ignore_permissions=True)
-		sync_spare_mappings_from_item(item)
-		moved += 1
+		try:
+			item.flags.ignore_permissions = True
+			item.flags.ignore_validate_update_after_submit = True
+			item.save(ignore_permissions=True)
+			sync_spare_mappings_from_item(item)
+			moved += 1
+		except Exception:
+			# One spare that fails its own governance checks must not strand the
+			# other thirteen, nor the rest of the migrate.
+			failed.append(item_code)
+			frappe.clear_messages()
+			frappe.log_error(
+				frappe.get_traceback(), f"GoFix: could not re-point spare {item_code}"
+			)
 
 	frappe.logger("gofix").info(
 		f"GoFix: re-pointed {moved} swapping-board spare(s) from {board_repair} to {solution}"
+		+ (f"; failed: {failed}" if failed else "")
 	)
 
 

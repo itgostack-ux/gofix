@@ -31,6 +31,12 @@ from frappe.utils import cstr
 
 REPAIR_LABOUR_SUB_CATEGORY_FLAG = "is_repair_labour"
 SERVICE_ITEM_GROUP = "Services"
+# SAC 998716 -- maintenance and repair of telecommunication equipment. Used only
+# when the repair-labour sub-category carries no code of its own: india_compliance
+# rejects any sales Item without an HSN/SAC, so a service Item built without one
+# cannot be saved at all, and the failure surfaces as a dead migrate rather than
+# as the configuration gap it is.
+DEFAULT_SERVICE_HSN = "998716"
 
 
 # ── Spare Item -> Solution Spare Mapping ─────────────────────────────────────
@@ -129,7 +135,7 @@ def ensure_service_item(solution, commit=False):
 	if solution.get("service_item") and frappe.db.exists("Item", solution.service_item):
 		return solution.service_item
 
-	sub_category = _repair_labour_sub_category()
+	sub_category = _ensure_repair_labour_sub_category()
 	item_code = _service_item_code(solution)
 
 	if not frappe.db.exists("Item", item_code):
@@ -155,13 +161,17 @@ def ensure_service_item(solution, commit=False):
 			item.ch_plm_status = "Active Production"
 		if sub_category:
 			item.ch_sub_category = sub_category
-			cat, hsn = frappe.db.get_value(
-				"CH Sub Category", sub_category, ["category", "hsn_code"]
-			) or (None, None)
+			cat = frappe.db.get_value("CH Sub Category", sub_category, "category")
 			if cat:
 				item.ch_category = cat
-			if hsn:
-				item.gst_hsn_code = hsn
+		# Set the code unconditionally, not just when a sub-category resolved:
+		# india_compliance makes HSN/SAC mandatory on every sales Item, and item
+		# governance demands it again to go Active. Leaving it blank does not
+		# produce a draft Item to fix later -- it produces an exception that takes
+		# down whatever was doing the saving, up to and including a bench migrate.
+		hsn = _service_hsn_for(sub_category)
+		if hsn:
+			item.gst_hsn_code = hsn
 		item.flags.ignore_permissions = True
 		item.insert(ignore_permissions=True)
 
@@ -269,9 +279,77 @@ def _mapping_ready() -> bool:
 
 
 def _repair_labour_sub_category():
+	"""The sub-category every repair service Item is filed under.
+
+	Resolution is deliberately ordered. The flag is not unique -- test fixtures
+	and hand-made rows carry it too -- and an unordered lookup on the flag alone
+	picks an arbitrary winner, which is how service Items ended up filed under a
+	``_Test`` sub-category carrying the wrong SAC and no income account. The row
+	this app seeds wins; anything else is a fallback, oldest first, and fixture
+	rows are never eligible.
+	"""
 	if not frappe.db.has_column("CH Sub Category", REPAIR_LABOUR_SUB_CATEGORY_FLAG):
 		return None
-	return frappe.db.get_value("CH Sub Category", {REPAIR_LABOUR_SUB_CATEGORY_FLAG: 1}, "name")
+
+	from gofix.setup.service_billing_setup import REPAIR_SUB_CATEGORY
+
+	if frappe.db.exists("CH Sub Category", REPAIR_SUB_CATEGORY):
+		return REPAIR_SUB_CATEGORY
+
+	for name in frappe.get_all(
+		"CH Sub Category",
+		filters={REPAIR_LABOUR_SUB_CATEGORY_FLAG: 1},
+		pluck="name",
+		order_by="creation asc",
+	):
+		if not name.startswith("_Test"):
+			return name
+	return None
+
+
+def _ensure_repair_labour_sub_category():
+	"""Resolve the repair-labour sub-category, seeding it if this site has none.
+
+	Service Items are provisioned from patches, and patches run inside
+	``run_schema_updates`` -- long before the ``after_migrate`` hook that seeds
+	this taxonomy. So on any site whose ``after_migrate`` has never completed (a
+	fresh site, or one whose previous migrate aborted) the sub-category is simply
+	absent, the Item is built with no HSN, and india_compliance kills the whole
+	migrate with a MandatoryError. Seeding on demand makes provisioning
+	self-sufficient wherever it is called from, instead of depending on a hook
+	that runs later.
+	"""
+	sub_category = _repair_labour_sub_category()
+	if sub_category:
+		return sub_category
+
+	try:
+		from gofix.setup.service_billing_setup import _ensure_repair_taxonomy
+
+		_ensure_repair_taxonomy()
+	except Exception:
+		# A throw leaves its message queued even when caught, so every later
+		# save would replay this popup. Drop it and carry on with the fallback
+		# SAC: an incomplete taxonomy is a configuration problem to report, not
+		# a reason to abort a migrate.
+		frappe.clear_messages()
+		frappe.log_error(
+			frappe.get_traceback(), "GoFix: could not seed the repair-labour sub-category"
+		)
+		return None
+	return _repair_labour_sub_category()
+
+
+def _service_hsn_for(sub_category):
+	"""HSN/SAC to stamp on a service Item, never blank if we can help it."""
+	hsn = None
+	if sub_category:
+		hsn = frappe.db.get_value("CH Sub Category", sub_category, "hsn_code")
+	if not hsn:
+		hsn = DEFAULT_SERVICE_HSN
+	# gst_hsn_code is a Link; a code with no master row would fail link
+	# validation just as loudly as a blank one.
+	return hsn if frappe.db.exists("GST HSN Code", hsn) else None
 
 
 def _service_item_code(solution) -> str:

@@ -8,12 +8,47 @@ import frappe
 DEFAULT_REPAIR_ITEM = "GOFIX-REPAIR-SERVICE"
 REPAIR_CATEGORY = "Repair Services"
 REPAIR_SUB_CATEGORY = "Repair Services-Mobile Repair Labour"
+REPAIR_SAC_CODE = "998716"
+
+# The fields that make this row a *usable* repair-labour sub-category. Item
+# governance refuses to activate a Service Item whose sub-category is missing
+# income_account or gofix_service_category, and india_compliance refuses to save
+# one with no HSN -- so a row lacking any of these is not a partial config, it is
+# a broken one that stops service Items being created at all.
+_REPAIR_SUB_CATEGORY_PROFILE = {
+	"is_repair_labour": 1,
+	"item_nature": "Service",
+	"hsn_code": REPAIR_SAC_CODE,
+	"gst_rate": 18,
+	"default_uom": "Nos",
+	"gofix_service_category": "Repair",
+	"lifecycle_status": "Active",
+	"status": "Active",
+}
+
+
+def _repair_income_account():
+	"""Income account for repair revenue.
+
+	Prefers a GoFix-enabled company but falls back to any company that has a
+	default: this seeder also runs from a patch on a fresh site, where nobody has
+	ticked ``gofix_enabled`` yet and the custom field may not even exist. A
+	sub-category written with a blank income account can never activate a Service
+	Item, so guessing beats leaving it empty.
+	"""
+	if frappe.db.has_column("Company", "gofix_enabled"):
+		account = frappe.db.get_value(
+			"Company", {"gofix_enabled": 1}, "default_income_account"
+		)
+		if account:
+			return account
+	return frappe.db.get_value(
+		"Company", {"default_income_account": ("!=", "")}, "default_income_account"
+	)
 
 
 def _ensure_repair_taxonomy() -> None:
-	income_account = frappe.db.get_value(
-		"Company", {"gofix_enabled": 1}, "default_income_account"
-	)
+	income_account = _repair_income_account()
 	if not frappe.db.exists("CH Category", REPAIR_CATEGORY):
 		category = frappe.new_doc("CH Category")
 		category.category_name = REPAIR_CATEGORY
@@ -33,15 +68,42 @@ def _ensure_repair_taxonomy() -> None:
 		sub_category.is_repair_labour = 1
 		sub_category.gofix_service_category = "Repair"
 		sub_category.income_account = income_account
-		sub_category.hsn_code = "998716"
+		sub_category.hsn_code = REPAIR_SAC_CODE
 		sub_category.gst_rate = 18
 		sub_category.insert(ignore_permissions=True)
 	else:
+		_heal_repair_sub_category(income_account)
+
+
+def _heal_repair_sub_category(income_account) -> None:
+	"""Fill in whatever the existing row is missing, without overwriting ops.
+
+	The row may pre-date this profile, or have arrived by import or by hand, and
+	be missing the flag this app resolves it by or the accounts governance
+	demands. Only blanks are filled. That matters in both directions: the
+	previous version of this function assigned ``income_account`` unconditionally,
+	so a migrate run before any company was GoFix-enabled resolved it to None and
+	*wiped* a good account.
+	"""
+	profile = dict(_REPAIR_SUB_CATEGORY_PROFILE)
+	if income_account:
+		profile["income_account"] = income_account
+
+	# A field this build added may not have a column yet when a patch calls us
+	# before its custom field is installed; reading one raises 1054 rather than
+	# returning None.
+	fields = [f for f in profile if frappe.db.has_column("CH Sub Category", f)]
+	if not fields:
+		return
+
+	current = frappe.db.get_value(
+		"CH Sub Category", REPAIR_SUB_CATEGORY, fields, as_dict=True
+	) or {}
+	patch = {f: profile[f] for f in fields if not current.get(f)}
+
+	if patch:
 		frappe.db.set_value(
-			"CH Sub Category",
-			REPAIR_SUB_CATEGORY,
-			{"gofix_service_category": "Repair", "income_account": income_account},
-			update_modified=False,
+			"CH Sub Category", REPAIR_SUB_CATEGORY, patch, update_modified=False
 		)
 
 

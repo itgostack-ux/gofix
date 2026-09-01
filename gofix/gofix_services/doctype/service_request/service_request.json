@@ -112,6 +112,9 @@
   "tracking_token",
   "tracking_token_salt",
   "is_barcode_generated",
+  "estimate_exception_request",
+  "approved_estimate_override",
+  "estimate_override_baseline",
   "section_service_outcome",
   "service_outcome",
   "service_outcome_notes",
@@ -121,6 +124,8 @@
   "section_service_items",
   "service_items",
   "section_service_discount",
+  "coupon_code",
+  "coupon_captured_on",
   "service_discount_percent",
   "service_discount_amount",
   "column_break_svc_disc",
@@ -1409,6 +1414,44 @@
    "fieldname": "service_outcome_on",
    "fieldtype": "Datetime",
    "label": "Confirmed On",
+   "read_only": 1,
+   "allow_on_submit": 1
+  },
+  {
+   "fieldname": "estimate_exception_request",
+   "fieldtype": "Link",
+   "options": "CH Exception Request",
+   "label": "Estimate Override Exception",
+   "read_only": 1,
+   "allow_on_submit": 1
+  },
+  {
+   "fieldname": "approved_estimate_override",
+   "fieldtype": "Currency",
+   "label": "Approved Estimate Override",
+   "read_only": 1,
+   "allow_on_submit": 1
+  },
+  {
+   "fieldname": "estimate_override_baseline",
+   "fieldtype": "Currency",
+   "label": "Override Approved Against",
+   "read_only": 1,
+   "allow_on_submit": 1,
+   "description": "Rate-card total the override was approved against. If the chosen repairs change, the approval no longer covers the new scope."
+  },
+  {
+   "fieldname": "coupon_code",
+   "fieldtype": "Link",
+   "options": "Coupon Code",
+   "label": "Coupon / Voucher Presented",
+   "allow_on_submit": 1,
+   "description": "Captured when the device is received. Validity is judged on the intake date, so a later invoice still honours it."
+  },
+  {
+   "fieldname": "coupon_captured_on",
+   "fieldtype": "Datetime",
+   "label": "Coupon Captured On",
    "read_only": 1,
    "allow_on_submit": 1
   }

@@ -21,6 +21,61 @@ class ServiceRequest(Document):
 		"substitution_exception_request",
 	)
 
+	def _capture_coupon_at_intake(self):
+		"""Lock a presented coupon to the day the device was received.
+
+		A repair is quoted, approved, worked and only then invoiced, which can
+		be weeks after the customer handed the device over. Judging a coupon on
+		the invoice date would deny someone who presented a perfectly valid
+		coupon at the counter and then waited for us -- so validity is tested
+		against the service date and the moment of capture is stamped.
+
+		This is the same rule the trade applies to a promotion captured at order
+		entry: the entitlement is fixed when the customer presents it, and the
+		later invoice inherits it.
+		"""
+		if not self.get("coupon_code"):
+			self.coupon_captured_on = None
+			return
+
+		coupon = frappe.db.get_value(
+			"Coupon Code", self.coupon_code,
+			["valid_from", "valid_upto", "maximum_use", "used", "customer"],
+			as_dict=True,
+		)
+		if not coupon:
+			return
+
+		intake = getdate(self.get("service_date") or nowdate())
+		if coupon.valid_from and intake < getdate(coupon.valid_from):
+			frappe.throw(
+				_("Coupon {0} is not valid until {1}; this device was received on {2}.").format(
+					self.coupon_code, frappe.format_value(coupon.valid_from, {"fieldtype": "Date"}),
+					frappe.format_value(intake, {"fieldtype": "Date"})),
+				title=_("Coupon Not Yet Valid"),
+			)
+		if coupon.valid_upto and intake > getdate(coupon.valid_upto):
+			frappe.throw(
+				_("Coupon {0} expired on {1} and the device was received on {2}.").format(
+					self.coupon_code, frappe.format_value(coupon.valid_upto, {"fieldtype": "Date"}),
+					frappe.format_value(intake, {"fieldtype": "Date"})),
+				title=_("Coupon Expired"),
+			)
+		if coupon.maximum_use and cint(coupon.used) >= cint(coupon.maximum_use):
+			frappe.throw(
+				_("Coupon {0} has already been used its maximum {1} time(s).").format(
+					self.coupon_code, coupon.maximum_use),
+				title=_("Coupon Exhausted"),
+			)
+		if coupon.customer and self.customer and coupon.customer != self.customer:
+			frappe.throw(
+				_("Coupon {0} belongs to another customer.").format(self.coupon_code),
+				title=_("Coupon Not Applicable"),
+			)
+
+		if not self.get("coupon_captured_on"):
+			self.coupon_captured_on = now_datetime()
+
 	def _stamp_service_outcome(self):
 		"""Record who signed off the outcome, and when, the first time it is set.
 
@@ -256,6 +311,7 @@ class ServiceRequest(Document):
 	
 	def validate(self):
 		self._stamp_service_outcome()
+		self._capture_coupon_at_intake()
 		self._validate_approval_evidence()
 		self.detect_customer_type()
 		self.detect_visit_type()
@@ -577,6 +633,37 @@ class ServiceRequest(Document):
 				if self.meta.has_field("shipping_address_display"):
 					self.shipping_address_display = display
 
+	def _refuse_unevidenced_warranty_claim(self, why):
+		"""Refuse an "Under Warranty" intake that nothing supports.
+
+		warranty_status is the only warranty field on this form the counter can
+		type into -- plan, expiry, deductible and claim are all filled from the
+		lookup. So picking "Under Warranty" by hand was the one way to assert
+		cover that does not exist, and on the two paths below (no serial, or a
+		serial we have never sold) the lookup returns before it can contradict
+		the claim. The device is then repaired free against a warranty nobody
+		granted, and the loss lands in service revenue with nothing to reconcile.
+
+		Cover is not being judged here -- an unregistered serial is simply no
+		evidence either way. Anything with a real record behind it (a sold VAS
+		plan, our own repair warranty, a fitted part still in its window) is
+		found by check_warranty further down and sets this field itself.
+		"""
+		if (self.warranty_status or "").strip() != "Under Warranty":
+			return
+		# A claim-driven ticket carries its own authority and sets the status
+		# before this ever runs.
+		if self.flags.get("skip_warranty_fetch") or self.get("warranty_claim"):
+			return
+		frappe.throw(
+			_("This device cannot be taken in as Under Warranty: {0}. "
+			  "Record it as No Warranty (or Out of Warranty). If the customer "
+			  "has a VAS plan or a repair of ours still in warranty, enter the "
+			  "IMEI that was sold or serviced and the cover will be found "
+			  "automatically.").format(why),
+			title=_("No Warranty Cover Found"),
+		)
+
 	def fetch_warranty_from_serial(self):
 		"""Fetch warranty status from CH Sold Plan via ch_item_master warranty API.
 		Falls back to Serial No warranty_expiry_date if no sold plans exist."""
@@ -584,6 +671,9 @@ class ServiceRequest(Document):
 		if self.flags.get("skip_warranty_fetch"):
 			return
 		if not self.serial_no:
+			self._refuse_unevidenced_warranty_claim(
+				_("no IMEI or serial number was entered, so no cover can be looked up")
+			)
 			if not self.warranty_status:
 				self.warranty_status = "No Warranty"
 			return
@@ -592,6 +682,10 @@ class ServiceRequest(Document):
 		# the Serial No table (first-time customer).  Skip validation and
 		# warranty fetch gracefully — the serial can be registered later.
 		if not frappe.db.exists("Serial No", self.serial_no):
+			self._refuse_unevidenced_warranty_claim(
+				_("IMEI/serial {0} is not registered, so there is no sale, plan or "
+				  "past repair of ours to claim against").format(self.serial_no)
+			)
 			if not self.warranty_status:
 				self.warranty_status = "No Warranty"
 			return
@@ -696,6 +790,11 @@ class ServiceRequest(Document):
 
 	def _fallback_warranty_from_serial(self, serial):
 		"""Basic warranty check from Serial No.warranty_expiry_date (legacy fallback)."""
+		# This branch overwrites whatever the counter picked, which is right --
+		# the record is the authority -- but doing it silently left an advisor
+		# who deliberately chose "Under Warranty" staring at "No Warranty" with
+		# no explanation and no idea the claim had been rejected.
+		claimed = (self.warranty_status or "").strip()
 		if serial.warranty_expiry_date:
 			self.warranty_expiry_date = serial.warranty_expiry_date
 			if getdate(serial.warranty_expiry_date) >= getdate(today()):
@@ -704,6 +803,16 @@ class ServiceRequest(Document):
 				self.warranty_status = "Out of Warranty"
 		else:
 			self.warranty_status = "No Warranty"
+
+		if claimed == "Under Warranty" and self.warranty_status != "Under Warranty":
+			frappe.msgprint(
+				_("No live cover was found for IMEI/serial {0} — no VAS plan, no "
+				  "repair of ours still in warranty, and no unexpired device "
+				  "warranty. Taken in as {1}.").format(
+					self.serial_no, self.warranty_status),
+				title=_("Warranty Not Confirmed"),
+				indicator="orange",
+			)
 
 	def validate_dates(self):
 		"""Validate service and completion dates"""

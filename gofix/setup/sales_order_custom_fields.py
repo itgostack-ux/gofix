@@ -206,7 +206,12 @@ def create_sales_order_custom_fields():
 				"fieldname": "warranty_status",
 				"label": "Warranty Status",
 				"fieldtype": "Select",
-				"options": "\nIn Warranty\nOut of Warranty\nNo Warranty",
+				# "Under Warranty" is the term the Service Request uses, the term on the
+				# intake form, and the value every branch in service_request.py tests
+				# for. This field was the only place saying "In Warranty", so copying
+				# SR.warranty_status onto the Sales Order failed validation and no
+				# Service Order could be created for a device under warranty at all.
+				"options": "\nUnder Warranty\nOut of Warranty\nNo Warranty",
 				"insert_after": "service_planning_column_break"
 			},
 			{

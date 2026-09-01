@@ -4005,6 +4005,7 @@ def complete_qc(sr_name, qc_result) -> dict:
 # ── Step 7: Invoice / Rework ──────────────────────────────────────────────────
 
 BELOW_COST_EXCEPTION_TYPE = "Service Below Cost Billing"
+ESTIMATE_OVERRIDE_EXCEPTION_TYPE = "Service Estimate Override"
 
 # Exception states considered "open" vs "cleared" for the below-cost gate.
 _EXCEPTION_APPROVED_STATES = ("Approved", "Auto-Approved")
@@ -4832,6 +4833,158 @@ def get_service_billing_line(sr_name) -> dict:
 	}
 
 
+def _ensure_estimate_override_exception_type():
+	"""Require the CH Exception Type used by the estimate override gate."""
+	if frappe.db.exists("CH Exception Type", ESTIMATE_OVERRIDE_EXCEPTION_TYPE):
+		return
+	frappe.throw(
+		_("Exception Type {0} is not configured. Run the GoFix setup patch before "
+		  "overriding an estimate.").format(ESTIMATE_OVERRIDE_EXCEPTION_TYPE),
+		title=_("GoFix Configuration Required"),
+	)
+
+
+def _estimate_override_status(sr) -> str:
+	name = sr.get("estimate_exception_request")
+	if not name:
+		return ""
+	return frappe.db.get_value("CH Exception Request", name, "status") or ""
+
+
+@frappe.whitelist(methods=["POST"])
+def set_estimated_cost(sr_name, estimated_cost, reason=None) -> dict:
+	"""Set the Confirm-step estimate, holding it to the rate card.
+
+	The estimate was written straight to the field through frappe.client.set_value,
+	so anyone on the Confirm step could type any number over the priced total --
+	no reason, no approval, no record that it had been changed. That number is
+	what the customer approves and what the repair is billed against.
+
+	The rate-card total is therefore authoritative and is applied without
+	ceremony. A different number is a deviation and needs an approved exception
+	before it takes effect; until then the estimate stays at the calculated
+	total, because an unapproved figure must never reach the customer as the
+	price.
+
+	Scope changes are deliberately NOT treated as deviations. Adding an issue
+	re-prices the ticket through the same rate card, so the total moves on its
+	own and needs no price approval -- what it needs is the customer's
+	confirmation, which is this step. Only a manual departure from the card is
+	an exception, and an approval granted against one rate-card total does not
+	carry to another: ``estimate_override_baseline`` records what was approved
+	against, so once the chosen repairs change, only the new deviation is
+	re-approved rather than the whole job again.
+	"""
+	_assert_sr_permission(sr_name, "write")
+	sr = frappe.get_doc("Service Request", sr_name)
+
+	requested = flt(estimated_cost)
+	if requested < 0:
+		frappe.throw(_("Estimated cost cannot be negative."), title=_("Validation Error"))
+
+	breakdown = get_estimate_breakdown(sr_name)
+	calculated = flt(breakdown.get("total"))
+	priced = bool(breakdown.get("priced"))
+
+	# Nothing priced yet: there is no card to hold the number to, so refuse
+	# rather than bless a hand-typed figure as "the rate card".
+	if not priced:
+		frappe.throw(
+			_("Choose the repairs on the Solutions step first — there is no priced "
+			  "work to estimate against yet."),
+			title=_("Nothing to Price"),
+		)
+
+	status = _estimate_override_status(sr)
+	approved = status in _EXCEPTION_APPROVED_STATES
+	baseline = flt(sr.get("estimate_override_baseline"))
+	# An approval is spent once the priced scope it was granted against moves.
+	approval_covers_current_scope = approved and abs(baseline - calculated) < 0.01
+
+	if abs(requested - calculated) < 0.01:
+		sr.db_set({
+			"estimated_cost": calculated,
+			"approved_estimate_override": 0,
+			"estimate_override_baseline": 0,
+			"estimate_exception_request": None,
+		}, update_modified=True)
+		return {"estimated_cost": calculated, "calculated": calculated,
+		        "override": False, "exception": "", "exception_status": ""}
+
+	if approval_covers_current_scope and abs(flt(sr.get("approved_estimate_override")) - requested) < 0.01:
+		sr.db_set({"estimated_cost": requested}, update_modified=True)
+		return {"estimated_cost": requested, "calculated": calculated,
+		        "override": True, "exception": sr.get("estimate_exception_request"),
+		        "exception_status": status}
+
+	if not (reason or "").strip():
+		frappe.throw(
+			_("The rate card prices this repair at {0}. Give a reason for charging "
+			  "{1} — it goes to the approver.").format(
+				frappe.format_value(calculated, {"fieldtype": "Currency"}),
+				frappe.format_value(requested, {"fieldtype": "Currency"})),
+			title=_("Reason Required"),
+		)
+
+	if status in _EXCEPTION_OPEN_STATES and abs(baseline - calculated) < 0.01:
+		frappe.throw(
+			_("A price exception for this estimate is already awaiting approval "
+			  "({0}). The estimate stays at {1} until it is approved.").format(
+				sr.get("estimate_exception_request"),
+				frappe.format_value(calculated, {"fieldtype": "Currency"})),
+			title=_("Approval Pending"),
+		)
+
+	_ensure_estimate_override_exception_type()
+	try:
+		from ch_item_master.ch_item_master.exception_api import raise_exception
+	except ImportError:
+		frappe.throw(_("ch_item_master app is required for estimate overrides."),
+			title=_("Missing App Dependency"))
+
+	delta = requested - calculated
+	result = raise_exception(
+		exception_type=ESTIMATE_OVERRIDE_EXCEPTION_TYPE,
+		company=sr.company,
+		reason=_("{0} on {1}: rate card {2}, proposed {3} ({4} {5}). {6}").format(
+			_("Estimate price override"), sr.name,
+			frappe.format_value(calculated, {"fieldtype": "Currency"}),
+			frappe.format_value(requested, {"fieldtype": "Currency"}),
+			_("increase of") if delta > 0 else _("reduction of"),
+			frappe.format_value(abs(delta), {"fieldtype": "Currency"}),
+			(reason or "").strip()),
+		requested_value=requested,
+		original_value=calculated,
+		reference_doctype="Service Request",
+		reference_name=sr.name,
+		store_warehouse=sr.get("source_warehouse"),
+		customer=sr.customer,
+	)
+	exception_name = result.get("name") or ""
+	exception_status = result.get("status") or "Pending"
+
+	updates = {
+		"estimate_exception_request": exception_name,
+		"estimate_override_baseline": calculated,
+		"approved_estimate_override": requested,
+	}
+	# Auto-approval is a real approval; anything else leaves the customer-facing
+	# number at the rate card until a human says otherwise.
+	if exception_status in _EXCEPTION_APPROVED_STATES:
+		updates["estimated_cost"] = requested
+	else:
+		updates["estimated_cost"] = calculated
+	sr.db_set(updates, update_modified=True)
+
+	return {
+		"estimated_cost": flt(updates["estimated_cost"]),
+		"calculated": calculated,
+		"override": True,
+		"exception": exception_name,
+		"exception_status": exception_status,
+	}
+
+
 @frappe.whitelist(methods=["POST"])
 def set_final_cost(sr_name, final_cost, reason=None) -> dict:
 	"""Record the final payable amount agreed with the customer.
@@ -4855,6 +5008,27 @@ def set_final_cost(sr_name, final_cost, reason=None) -> dict:
 	final_cost = flt(final_cost)
 	if final_cost < 0:
 		frappe.throw(_("Final cost cannot be negative."), title=_("Validation Error"))
+
+	# The customer approved a number. Billing above it is a price change like any
+	# other -- the below-cost gate underneath only catches charging too little,
+	# so without this the same figure a technician cannot type on the Confirm
+	# step could simply be typed here instead and invoiced.
+	quoted = flt(sr.get("estimated_cost"))
+	if quoted and final_cost > quoted + 0.01:
+		status = _estimate_override_status(sr)
+		covers = (
+			status in _EXCEPTION_APPROVED_STATES
+			and abs(flt(sr.get("approved_estimate_override")) - final_cost) < 0.01
+		)
+		if not covers:
+			frappe.throw(
+				_("The customer approved {0}. Billing {1} needs an approved price "
+				  "exception — raise it on the Confirm step so the new figure is "
+				  "authorised before it reaches the invoice.").format(
+					frappe.format_value(quoted, {"fieldtype": "Currency"}),
+					frappe.format_value(final_cost, {"fieldtype": "Currency"})),
+				title=_("Above the Approved Estimate"),
+			)
 
 	updates = {"final_cost": final_cost}
 	company_cost = _get_company_cost(sr)

@@ -2458,6 +2458,9 @@ class GoFixOpsHub {
 			// operator to guess. The typed field stays authoritative so a
 			// negotiated price can still override the rate card.
 			frappe.xcall(`${API}.get_estimate_breakdown`, { sr_name: d.name }).then(est => {
+				// Kept so the Save handler knows what the rate card says without
+				// re-pricing, and can tell a match from a deviation before calling.
+				self._last_estimate_total = flt(est.total);
 				const box = content.find("#goh-est-breakdown");
 				if (!box.length) return;
 				if (!est.priced) {
@@ -2522,12 +2525,44 @@ class GoFixOpsHub {
 
 			content.find("#goh-save-est-cost").on("click", () => {
 				const cost = parseFloat(content.find("#goh-est-cost").val()) || 0;
-				frappe.xcall("frappe.client.set_value", {
-					doctype: "Service Request", name: d.name,
-					fieldname: "estimated_cost", value: cost,
-				}).then(() => {
-					frappe.show_alert({ message: __("Estimated cost updated."), indicator: "green" });
+				const calculated = flt(self._last_estimate_total);
+				// Matching the rate card needs no ceremony. Departing from it is
+				// an exception, so the reason is collected here rather than
+				// letting the server reject the click with nothing to send.
+				const save = (reason) => frappe.xcall(`${API}.set_estimated_cost`, {
+					sr_name: d.name, estimated_cost: cost, reason: reason || "",
+				}).then((r) => {
+					if (r && r.override && r.exception) {
+						const approved = flt(r.estimated_cost) === cost;
+						frappe.msgprint({
+							title: approved ? __("Override Approved") : __("Sent for Approval"),
+							indicator: approved ? "green" : "orange",
+							message: approved
+								? __("Approved under exception {0}. The customer is quoted {1}.",
+									[r.exception, format_currency(r.estimated_cost)])
+								: __("Exception {0} is awaiting approval. Until it is approved the estimate stays at the rate-card price {1} — quote that to the customer.",
+									[r.exception, format_currency(r.calculated)]),
+						});
+					} else {
+						frappe.show_alert({ message: __("Estimated cost updated."), indicator: "green" });
+					}
+					self._refresh_all();
 				});
+
+				if (Math.abs(cost - calculated) < 0.01) {
+					save("");
+					return;
+				}
+				frappe.prompt(
+					[{
+						fieldname: "reason", fieldtype: "Small Text", reqd: 1,
+						label: __("Why is this different from the rate-card price of {0}?",
+							[format_currency(calculated)]),
+					}],
+					(v) => save(v.reason),
+					__("Price Change Needs Approval"),
+					__("Send for Approval"),
+				);
 			});
 		}
 

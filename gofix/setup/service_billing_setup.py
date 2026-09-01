@@ -10,32 +10,28 @@ REPAIR_CATEGORY = "Repair Services"
 REPAIR_SUB_CATEGORY = "Repair Services-Mobile Repair Labour"
 
 
-def _ensure_services_item_group() -> None:
-	# ERPNext only creates "All Item Groups" and "Services" via its
-	# interactive setup wizard (erpnext/setup/setup_wizard/operations/
-	# install_fixtures.py) — a site provisioned by scripting
-	# bench install-app directly (no wizard) gets neither. Without this, the
-	# very first migrate after install crashes here with
-	# "Could not find Item Group: Services" (or, once that's papered over,
-	# "Could not find Parent Item Group: All Item Groups").
-	if not frappe.db.exists("Item Group", "All Item Groups"):
-		frappe.get_doc({
-			"doctype": "Item Group",
-			"item_group_name": "All Item Groups",
-			"is_group": 1,
-		}).insert(ignore_permissions=True, ignore_if_duplicate=True)
+def _ensure_erpnext_baseline_defaults() -> None:
+	# ERPNext's Item Groups (All Item Groups, Services, ...), UOMs (Nos, Kg,
+	# Unit, ...), Territories, Customer/Supplier Groups etc. are normally
+	# seeded by its interactive Setup Wizard
+	# (erpnext/setup/setup_wizard/operations/install_fixtures.py). A site
+	# provisioned by scripting bench install-app directly (no wizard) never
+	# gets any of it — this function's own steps below assume it's all
+	# there, and previously failed one missing default at a time as each
+	# one was reached ("Item Group: Services", then "Item Group: All Item
+	# Groups", then "UOM: Nos", ...). Rather than hand-seed each one as it
+	# surfaces, defensively run the wizard's own installer once, idempotently
+	# (it uses insert(..., ignore_if_duplicate=True) per record, so it's
+	# safe to call even on a site that already has some or all of this).
+	if frappe.db.exists("Item Group", "All Item Groups"):
+		return
+	from erpnext.setup.setup_wizard.operations.install_fixtures import install as install_erpnext_defaults
 
-	if not frappe.db.exists("Item Group", "Services"):
-		frappe.get_doc({
-			"doctype": "Item Group",
-			"item_group_name": "Services",
-			"parent_item_group": "All Item Groups",
-			"is_group": 0,
-		}).insert(ignore_permissions=True, ignore_if_duplicate=True)
+	install_erpnext_defaults()
 
 
 def _ensure_repair_taxonomy() -> None:
-	_ensure_services_item_group()
+	_ensure_erpnext_baseline_defaults()
 	income_account = frappe.db.get_value(
 		"Company", {"gofix_enabled": 1}, "default_income_account"
 	)

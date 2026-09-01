@@ -1130,6 +1130,9 @@ def get_ticket_detail(sr_name) -> dict:
 			r.accessory for r in (sr.get("accessories_list") or []) if r.accessory
 		],
 		"coupon_code": sr.get("coupon_code") or "",
+		"coupon_scope": sr.get("coupon_scope") or "",
+		"coupon_solution": sr.get("coupon_solution") or "",
+		"coupon_discount_amount": flt(sr.get("coupon_discount_amount")),
 		"mode_of_service": sr.get("mode_of_service") or "",
 		"issue_category": sr.issue_category or "",
 		"issue_description": sr.issue_description or "",
@@ -4844,6 +4847,107 @@ def get_service_billing_line(sr_name) -> dict:
 		"final_cost": flt(s["final_cost"]),
 		"at_home_store": at_home_store,
 		"custody_message": custody_message,
+	}
+
+
+def _coupon_discount_on(base_amount, coupon_code):
+	"""What a coupon takes off ``base_amount``.
+
+	ERPNext keeps the money on the Pricing Rule the Coupon Code points at, so
+	the rule is the source of the percentage or flat amount. A coupon with no
+	rule behind it discounts nothing rather than guessing -- a discount nobody
+	configured is not a discount.
+	"""
+	if not coupon_code or base_amount <= 0:
+		return 0.0
+	rule = frappe.db.get_value("Coupon Code", coupon_code, "pricing_rule")
+	if not rule:
+		return 0.0
+	pr = frappe.db.get_value(
+		"Pricing Rule", rule,
+		["rate_or_discount", "discount_percentage", "discount_amount"], as_dict=True,
+	)
+	if not pr:
+		return 0.0
+
+	if pr.rate_or_discount == "Discount Percentage" and pr.discount_percentage:
+		discount = flt(base_amount) * flt(pr.discount_percentage) / 100.0
+	elif pr.rate_or_discount == "Discount Amount" and pr.discount_amount:
+		discount = flt(pr.discount_amount)
+	else:
+		return 0.0
+	# Never more than the thing it is discounting.
+	return flt(min(discount, flt(base_amount)), 2)
+
+
+@frappe.whitelist(methods=["POST"])
+def set_service_coupon(sr_name, coupon_code=None, scope=None, solution=None) -> dict:
+	"""Attach a coupon to the ticket, at invoice level or to one repair.
+
+	Coupons are presented at the counter, but which repairs the job actually
+	needs is only known after analysis -- so a coupon that pays for a display
+	replacement cannot be aimed at anything until the Confirm step. This is the
+	same split every mature system draws: SAP applies a condition record at
+	header or item level, Odoo runs a coupon programme either on the whole order
+	or on matching lines. "Entire Invoice" is the header case, "Specific Repair"
+	the line case.
+
+	Validity is not re-tested here. It was fixed when the customer handed the
+	device over -- the Service Request settles that on save -- and re-checking it
+	against today would expire a coupon while the device sat on our bench.
+	"""
+	_assert_sr_permission(sr_name, "write")
+	sr = frappe.get_doc("Service Request", sr_name)
+
+	coupon_code = (coupon_code or "").strip()
+	if not coupon_code:
+		sr.db_set({"coupon_code": None, "coupon_scope": None, "coupon_solution": None,
+		           "coupon_discount_amount": 0}, update_modified=True)
+		return {"coupon_code": "", "discount": 0, "scope": "", "solution": ""}
+
+	if not frappe.db.exists("Coupon Code", coupon_code):
+		frappe.throw(_("Coupon {0} does not exist.").format(coupon_code),
+			title=_("Unknown Coupon"))
+
+	scope = scope or "Entire Invoice"
+	if scope not in ("Entire Invoice", "Specific Repair"):
+		frappe.throw(_("Coupon scope must be Entire Invoice or Specific Repair."),
+			title=_("Validation Error"))
+
+	breakdown = get_estimate_breakdown(sr_name)
+	lines = breakdown.get("lines") or []
+
+	if scope == "Specific Repair":
+		if not solution:
+			frappe.throw(
+				_("Choose which repair the coupon pays towards."),
+				title=_("Repair Not Chosen"),
+			)
+		match = [l for l in lines if l.get("repair_solution") == solution]
+		if not match:
+			frappe.throw(
+				_("{0} is not one of the repairs chosen for this ticket, so a coupon "
+				  "cannot be applied to it.").format(solution),
+				title=_("Repair Not On This Ticket"),
+			)
+		base = sum(flt(l.get("total") or l.get("labour") or 0) for l in match)
+	else:
+		solution = None
+		base = flt(breakdown.get("total"))
+
+	discount = _coupon_discount_on(base, coupon_code)
+
+	sr.db_set({
+		"coupon_code": coupon_code,
+		"coupon_scope": scope,
+		"coupon_solution": solution,
+		"coupon_discount_amount": discount,
+	}, update_modified=True)
+
+	return {
+		"coupon_code": coupon_code, "scope": scope, "solution": solution or "",
+		"base": flt(base, 2), "discount": discount,
+		"net": flt(flt(breakdown.get("total")) - discount, 2),
 	}
 
 

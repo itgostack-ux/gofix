@@ -1538,6 +1538,28 @@ class ServiceRequest(Document):
 
 		apply_cost_center(invoice, warehouse=self.get("source_warehouse"))
 
+		# The coupon the customer produced at the counter. It was captured and
+		# validated at intake and aimed at a repair (or the whole job) on the
+		# Confirm step, but nothing ever took it off the bill -- so a customer
+		# handed over a coupon, was told it applied, and paid full price.
+		#
+		# Booked as a document-level discount rather than by editing a line:
+		# ERPNext then spreads it across the items itself, which keeps the
+		# labour/spares split and the separate income accounts this class
+		# deliberately routes to. Coupon usage is counted on submit, not here,
+		# so a draft invoice that is never submitted does not spend it.
+		coupon_discount = flt(self.get("coupon_discount_amount"))
+		if self.get("coupon_code") and coupon_discount > 0:
+			invoice.apply_discount_on = "Net Total"
+			invoice.discount_amount = coupon_discount
+			invoice.remarks = "{0} | {1}".format(
+				invoice.remarks,
+				_("Coupon {0} applied: {1}").format(
+					self.coupon_code,
+					frappe.format_value(coupon_discount, {"fieldtype": "Currency"}),
+				),
+			)
+
 		# Apply the advance, net of any refund already posted. An "advances" row
 		# must reference a real Payment Entry — ERPNext resolves any non-Journal
 		# reference through tabPayment Entry, so a "Service Request" reference can

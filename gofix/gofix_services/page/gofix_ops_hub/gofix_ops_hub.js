@@ -1505,6 +1505,22 @@ class GoFixOpsHub {
 					<button class="btn btn-xs btn-primary" id="goh-use-calc" style="white-space:nowrap;display:none"><i class="fa fa-calculator"></i> ${__("Use calculated")}</button>
 				</div>
 
+				<!-- Coupons are produced at the counter, but which repairs the job
+				     needs is only known after analysis -- so a coupon meant for a
+				     display replacement can only be aimed at one here. -->
+				<div class="goh-confirm-coupon" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px">
+					<span class="goh-kv-label"><i class="fa fa-ticket"></i> ${__("Coupon")}</span>
+					<input type="text" class="form-control" id="goh-coupon-code" style="max-width:190px"
+						value="${frappe.utils.escape_html(d.coupon_code || "")}" placeholder="${__("Coupon code")}">
+					<select class="form-control" id="goh-coupon-scope" style="max-width:190px">
+						<option value="Entire Invoice"${d.coupon_scope === "Entire Invoice" ? " selected" : ""}>${__("Entire Invoice")}</option>
+						<option value="Specific Repair"${d.coupon_scope === "Specific Repair" ? " selected" : ""}>${__("Specific Repair")}</option>
+					</select>
+					<select class="form-control" id="goh-coupon-solution" style="max-width:230px;display:${d.coupon_scope === "Specific Repair" ? "" : "none"}"></select>
+					<button class="btn btn-xs btn-default" id="goh-apply-coupon"><i class="fa fa-check"></i> ${__("Apply")}</button>
+					${flt(d.coupon_discount_amount) ? `<span class="goh-badge badge-green">− ₹${format_number(d.coupon_discount_amount)}</span>` : ""}
+				</div>
+
 				${sentAt ? `<div class="goh-sent-indicator"><i class="fa fa-whatsapp text-success"></i> ${__("WhatsApp sent")} ${sentAt}</div>` : ""}
 
 				<div class="goh-section-actions">
@@ -2481,6 +2497,7 @@ class GoFixOpsHub {
 				// Kept so the Save handler knows what the rate card says without
 				// re-pricing, and can tell a match from a deviation before calling.
 				self._last_estimate_total = flt(est.total);
+				self._last_estimate_lines = est.lines || [];
 				const box = content.find("#goh-est-breakdown");
 				if (!box.length) return;
 				if (!est.priced) {
@@ -2541,6 +2558,42 @@ class GoFixOpsHub {
 			content.find("#goh-back-to-analysis").on("click", () => {
 				frappe.xcall(`${API}.go_back_to_stage`, { sr_name: d.name, target_stage: "analysis" })
 					.then(() => self._refresh_all());
+			});
+
+			// Populate the repair picker from what was actually chosen, so a
+			// coupon can only be pointed at work on this ticket.
+			const $scope = content.find("#goh-coupon-scope");
+			const $sol = content.find("#goh-coupon-solution");
+			const fillSolutions = () => {
+				const lines = (self._last_estimate_lines || []);
+				$sol.html(lines.map((l) =>
+					`<option value="${frappe.utils.escape_html(l.repair_solution || "")}"${
+						d.coupon_solution === l.repair_solution ? " selected" : ""
+					}>${frappe.utils.escape_html(l.solution_name || l.repair_solution || "")}</option>`
+				).join(""));
+			};
+			fillSolutions();
+			$scope.on("change", () => {
+				const specific = $scope.val() === "Specific Repair";
+				$sol.toggle(specific);
+				if (specific) fillSolutions();
+			});
+
+			content.find("#goh-apply-coupon").on("click", () => {
+				frappe.xcall(`${API}.set_service_coupon`, {
+					sr_name: d.name,
+					coupon_code: content.find("#goh-coupon-code").val().trim(),
+					scope: $scope.val(),
+					solution: $sol.val() || "",
+				}).then((r) => {
+					frappe.show_alert({
+						message: r && r.discount
+							? __("Coupon {0} applied — {1} off.", [r.coupon_code, format_currency(r.discount)])
+							: __("Coupon cleared."),
+						indicator: r && r.discount ? "green" : "blue",
+					});
+					self._refresh_all();
+				});
 			});
 
 			content.find("#goh-save-est-cost").on("click", () => {

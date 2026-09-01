@@ -21,6 +21,26 @@ class ServiceRequest(Document):
 		"substitution_exception_request",
 	)
 
+	def _stamp_service_outcome(self):
+		"""Record who signed off the outcome, and when, the first time it is set.
+
+		Stamped rather than left to the form so the sign-off survives a later
+		edit by someone else: the invoice gate treats this as the technician's
+		verdict, so it needs an author. Cleared if the outcome is blanked out,
+		otherwise a re-opened ticket would keep a stale confirmation.
+		"""
+		# get_doc_before_save() returns None on some paths even when the doc is
+		# not new, so resolve it the same way _validate_approval_evidence does
+		# rather than assuming a document is there to read.
+		before = self.get_doc_before_save() if not self.is_new() else None
+		previous = before.get("service_outcome") if before else None
+		if not self.get("service_outcome"):
+			self.service_outcome_by = None
+			self.service_outcome_on = None
+		elif self.service_outcome != previous:
+			self.service_outcome_by = frappe.session.user
+			self.service_outcome_on = now_datetime()
+
 	def _validate_approval_evidence(self):
 		before = self.get_doc_before_save() if not self.is_new() else None
 		if before is None:
@@ -235,6 +255,7 @@ class ServiceRequest(Document):
 		self.db_set("tracking_token", tracking_token_digest(token), update_modified=False)
 	
 	def validate(self):
+		self._stamp_service_outcome()
 		self._validate_approval_evidence()
 		self.detect_customer_type()
 		self.detect_visit_type()
@@ -271,6 +292,13 @@ class ServiceRequest(Document):
 					_("Customer estimate decisions must use the authenticated customer action or audited override endpoint."),
 					frappe.PermissionError,
 				)
+
+	def before_update_after_submit(self):
+		# The verdict is recorded after the repair, and this doctype is
+		# submittable -- Frappe runs validate() only for drafts, so without this
+		# the sign-off on a submitted request would save with no author or time
+		# against it, which is precisely the record the invoice gate relies on.
+		self._stamp_service_outcome()
 
 	def before_save(self):
 		"""Generate barcode if not exists and fetch warehouse details"""
@@ -1270,6 +1298,20 @@ class ServiceRequest(Document):
 					", ".join(gaps["open_solutions"]) or _("no solutions selected")
 				),
 				title=_("Open Issues Remain"),
+			)
+
+		# QC passing and every issue being closed says the *process* finished; it
+		# does not say the technician who did the work considers the repair a
+		# success. That verdict is what the customer is told at handover, so it is
+		# recorded before money is charged rather than inferred afterwards from
+		# status. Any outcome may be invoiced -- a device that came back
+		# unrepairable can still carry a legitimate diagnostic fee -- what is
+		# refused is billing with no verdict recorded at all.
+		if not self.get("service_outcome"):
+			frappe.throw(
+				_("Cannot invoice — the technician has not confirmed the service "
+				  "outcome. Set Service Outcome on this request first."),
+				title=_("Service Outcome Not Confirmed"),
 			)
 		
 		items = self.get_service_invoice_items()

@@ -44,6 +44,9 @@
   "withdrawal_reason",
   "open_requests_count",
   "section_device_info",
+  "device_category",
+  "device_brand",
+  "device_model",
   "device_item",
   "device_item_name",
   "serial_no",
@@ -51,6 +54,7 @@
   "column_break_device",
   "device_condition",
   "product_condition_desc",
+  "accessories_list",
   "accessories_received",
   "warranty_status",
   "warranty_expiry_date",
@@ -108,6 +112,12 @@
   "tracking_token",
   "tracking_token_salt",
   "is_barcode_generated",
+  "section_service_outcome",
+  "service_outcome",
+  "service_outcome_notes",
+  "column_break_service_outcome",
+  "service_outcome_by",
+  "service_outcome_on",
   "section_service_items",
   "service_items",
   "section_service_discount",
@@ -479,7 +489,7 @@
   {
    "fieldname": "accessories_received",
    "fieldtype": "Small Text",
-   "label": "Accessories Received"
+   "label": "Other Accessories / Notes"
   },
   {
    "fieldname": "warranty_status",
@@ -1337,6 +1347,70 @@
    "label": "Promise Revisions",
    "options": "GoFix ETA Revision",
    "read_only": 1
+  },
+  {
+   "fieldname": "device_category",
+   "fieldtype": "Link",
+   "options": "CH Category",
+   "label": "Category"
+  },
+  {
+   "fieldname": "device_brand",
+   "fieldtype": "Link",
+   "options": "Brand",
+   "label": "Brand"
+  },
+  {
+   "fieldname": "device_model",
+   "fieldtype": "Link",
+   "options": "CH Model",
+   "label": "Model"
+  },
+  {
+   "fieldname": "accessories_list",
+   "fieldtype": "Table MultiSelect",
+   "options": "GoFix Accessory Line",
+   "label": "Accessories Received",
+   "allow_on_submit": 1
+  },
+  {
+   "fieldname": "section_service_outcome",
+   "fieldtype": "Section Break",
+   "label": "Service Outcome"
+  },
+  {
+   "fieldname": "service_outcome",
+   "fieldtype": "Select",
+   "label": "Service Outcome",
+   "options": "\nSuccessful\nPartially Successful\nNot Repairable\nReturned Unrepaired",
+   "in_standard_filter": 1,
+   "allow_on_submit": 1
+  },
+  {
+   "fieldname": "service_outcome_notes",
+   "fieldtype": "Small Text",
+   "label": "Technician Remarks",
+   "depends_on": "eval:doc.service_outcome",
+   "allow_on_submit": 1
+  },
+  {
+   "fieldname": "column_break_service_outcome",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "service_outcome_by",
+   "fieldtype": "Link",
+   "options": "User",
+   "label": "Confirmed By",
+   "read_only": 1,
+   "allow_on_submit": 1
+  },
+  {
+   "fieldname": "service_outcome_on",
+   "fieldtype": "Datetime",
+   "label": "Confirmed On",
+   "read_only": 1,
+   "allow_on_submit": 1
   }
  ],
  "index_web_pages_for_search": 1,

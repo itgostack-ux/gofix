@@ -116,15 +116,40 @@ frappe.ui.form.on('Service Request', {
 			});
 		}
 		
-		// Filter device item: stock items (Variant Template / Simple / Asset).
+		// Filter device item: stock items (Variant Template / Simple / Asset),
+		// narrowed by whichever of category/brand/model the advisor has picked.
+		// A customer arriving with a dead handset cannot be asked for its full
+		// item name, so the cascade above this field does the narrowing and this
+		// query just honours it.
 		frm.set_query('device_item', function() {
-			return {
-				query: 'ch_item_master.ch_item_master.api.items_by_subcategory_nature',
-				filters: {
-					natures: ['Variant Template', 'Simple Auto-Named', 'Simple Custom-Named', 'Asset / Capital'],
-					is_stock_item: 1
-				}
+			const filters = {
+				natures: ['Variant Template', 'Simple Auto-Named', 'Simple Custom-Named', 'Asset / Capital'],
+				is_stock_item: 1
 			};
+			if (frm.doc.device_category) filters.ch_category = frm.doc.device_category;
+			if (frm.doc.device_brand) filters.brand = frm.doc.device_brand;
+			if (frm.doc.device_model) filters.ch_model = frm.doc.device_model;
+			return { query: 'ch_item_master.ch_item_master.api.items_by_subcategory_nature', filters };
+		});
+
+		// Brand and model have no category column of their own, so both are
+		// narrowed by existence of a matching Item rather than a direct field.
+		frm.set_query('device_brand', function() {
+			return {
+				query: 'ch_pos.api.item_search.search_brands',
+				filters: frm.doc.device_category ? { ch_category: frm.doc.device_category } : {}
+			};
+		});
+
+		frm.set_query('device_model', function() {
+			const filters = {};
+			if (frm.doc.device_category) filters.ch_category = frm.doc.device_category;
+			if (frm.doc.device_brand) filters.brand = frm.doc.device_brand;
+			return { query: 'ch_pos.api.item_search.search_ch_models', filters };
+		});
+
+		frm.set_query('accessories_list', 'accessories_list', function() {
+			return { filters: { is_active: 1 } };
 		});
 
 		// Service items: Service-nature items only (CH Sub Category.item_nature = 'Service').
@@ -186,6 +211,27 @@ frappe.ui.form.on('Service Request', {
 		}
 	},
 	
+	device_category: function(frm) {
+		// Clearing downwards keeps the form honest: a brand or model left over
+		// from the previous category would silently filter the item list down to
+		// nothing and look like missing data.
+		if (frm.doc.device_brand || frm.doc.device_model || frm.doc.device_item) {
+			frm.set_value({ device_brand: '', device_model: '', device_item: '' });
+		}
+	},
+
+	device_brand: function(frm) {
+		if (frm.doc.device_model || frm.doc.device_item) {
+			frm.set_value({ device_model: '', device_item: '' });
+		}
+	},
+
+	device_model: function(frm) {
+		if (frm.doc.device_item) {
+			frm.set_value('device_item', '');
+		}
+	},
+
 	device_item: function(frm) {
 		// Fetch device item details — use server API so variant brand falls back to template
 		if (frm.doc.device_item) {

@@ -32,12 +32,34 @@ def is_privileged_user(user: str | None = None) -> bool:
 	return bool(get_user_roles(user).intersection(IMMUTABLE_PRIVILEGED_ROLES))
 
 
+_NUMERIC_FIELDTYPES = ("Int", "Float", "Currency", "Percent")
+
+
 def get_setting(fieldname: str, default=None):
 	try:
 		value = frappe.get_cached_value("GoFix Settings", None, fieldname)
 	except Exception:
 		return default
-	return default if value in (None, "") else value
+	if value in (None, ""):
+		return default
+	if default is not None:
+		# A Single stores a never-edited numeric as 0, not NULL. Where the
+		# docfield declares a non-zero default, a stored 0 means "never
+		# configured": returning it raw made ber_cost_ratio 0 (every estimate
+		# flagged uneconomic) and capacity_warning_ratio 0 (everything over
+		# capacity). Check fields are excluded: an unchecked box must stay 0.
+		try:
+			df = frappe.get_meta("GoFix Settings").get_field(fieldname)
+		except Exception:
+			df = None
+		if (
+			df is not None
+			and df.fieldtype in _NUMERIC_FIELDTYPES
+			and flt(value) == 0
+			and flt(df.default) != 0
+		):
+			return default
+	return value
 
 
 def get_int_setting(fieldname: str, default: int, minimum: int = 1) -> int:

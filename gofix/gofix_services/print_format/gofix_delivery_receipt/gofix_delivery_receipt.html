@@ -124,7 +124,7 @@
       <span class="lbl">Service Reference</span>
       {%- if sr -%}
         <div><b>SR:</b> {{ sr.name }}</div>
-        <div style="font-size:9px; color:#059669; font-weight:bold">Status: {{ sr.status }}</div>
+        <div style="font-size:9px; color:#059669; font-weight:bold">Status: {{ sr.get("decision") or "Delivered" }}</div>
       {%- endif -%}
       {%- if doc.custom_gofix_service_order -%}
         <div><b>SO:</b> {{ doc.custom_gofix_service_order }}</div>

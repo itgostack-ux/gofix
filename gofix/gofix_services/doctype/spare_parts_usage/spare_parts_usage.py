@@ -1293,6 +1293,23 @@ def approve_spare_part(name, remarks=None) -> dict:
 	doc.approval_datetime = frappe.utils.now()
 	doc.approval_remarks = remarks or ""
 	doc.save()
+	# The approval fields sit at permlevel 1, and core's permlevel reset
+	# silently REVERTS them during save for any approver who is not a System
+	# Manager -- the API answered "approved" while the DB stayed Pending, so
+	# managers could never actually approve a spare. This endpoint has already
+	# authorised the approver (SoD + configured approver role above), so the
+	# decision is persisted directly and then proven back from the DB.
+	doc.db_set(
+		{
+			"approval_status": "Approved",
+			"approved_by": frappe.session.user,
+			"approval_datetime": frappe.utils.now(),
+			"approval_remarks": remarks or "",
+		},
+		update_modified=True,
+	)
+	if frappe.db.get_value("Spare Parts Usage", doc.name, "approval_status") != "Approved":
+		frappe.throw(_("Approval did not persist. Report this to the administrator."))
 	return {"message": "Spare part approved"}
 
 

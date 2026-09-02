@@ -313,19 +313,36 @@ def allocate_received_spares_to_tickets(doc, method=None):
 			)
 			if not lines:
 				continue
+			# Which warehouse each item was actually booked into. "It has
+			# arrived" is only half an answer on a business with hubs and
+			# twenty-four counters -- the technician still has to know which
+			# shelf to walk to, and the ticket never recorded it.
+			landed_in = {}
+			for row in item_rows:
+				if row.get("material_request") == mr_name and row.get("item_code"):
+					landed_in.setdefault(row.get("item_code"), row.get("warehouse"))
+
 			for line in lines:
 				# Arrived: it is no longer in transit, so the promised date stops
 				# being a forecast and would only mislead if left on screen.
+				values = {"status": "Reserved", "expected_date": None}
+				warehouse = landed_in.get(line.spare_item)
+				if warehouse:
+					values["warehouse"] = warehouse
 				frappe.db.set_value(
-					"SR Spare Line", line.name,
-					{"status": "Reserved", "expected_date": None},
-					update_modified=False,
+					"SR Spare Line", line.name, values, update_modified=False,
 				)
+				line.warehouse = warehouse
 			sr = frappe.get_doc("Service Request", sr_name)
 			sr.add_comment(
 				"Comment",
 				_("Spares received via {0}: {1} — reserved for this ticket.").format(
-					doc.name, ", ".join(f"{l.item_name or l.spare_item} × {l.qty:g}" for l in lines)
+					doc.name,
+					", ".join(
+						f"{l.item_name or l.spare_item} × {l.qty:g}"
+						+ (_(" at {0}").format(l.warehouse) if l.get("warehouse") else "")
+						for l in lines
+					),
 				),
 			)
 			# Ping the assigned technician (best effort).
@@ -340,7 +357,13 @@ def allocate_received_spares_to_tickets(doc, method=None):
 				frappe.publish_realtime(
 					"msgprint",
 					{
-						"message": _("Spares for {0} have arrived ({1}).").format(sr_name, doc.name),
+						"message": _("Spares for {0} have arrived ({1}){2}.").format(
+							sr_name,
+							doc.name,
+							_(" — held at {0}").format(
+								", ".join(sorted({l.warehouse for l in lines if l.get("warehouse")}))
+							) if any(l.get("warehouse") for l in lines) else "",
+						),
 						"alert": True,
 					},
 					user=user,

@@ -448,7 +448,7 @@
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-08-31 13:00:00.000000",
+ "modified": "2026-09-01 19:21:30.000000",
  "modified_by": "Administrator",
  "module": "GoFix Services",
  "name": "Spare Parts Usage",
@@ -476,7 +476,8 @@
    "permlevel": 1,
    "read": 1,
    "write": 1,
-   "create": 1
+   "create": 1,
+   "submit": 1
   },
   {
    "role": "Service Manager",

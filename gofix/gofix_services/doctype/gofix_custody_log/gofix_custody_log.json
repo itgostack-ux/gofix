@@ -52,7 +52,8 @@
    "in_standard_filter": 1,
    "label": "Technician",
    "options": "Employee",
-   "reqd": 1
+   "reqd": 1,
+   "ignore_user_permissions": 1
   },
   {
    "fieldname": "technician_name",
@@ -95,7 +96,7 @@
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-07-18 15:00:00.000000",
+ "modified": "2026-09-01 19:00:16.000000",
  "modified_by": "Administrator",
  "module": "GoFix Services",
  "name": "GoFix Custody Log",

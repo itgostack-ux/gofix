@@ -3530,6 +3530,14 @@ def release_spare_reservation(sr_name, spare_row_name) -> dict:
 				usage = frappe.get_doc("Spare Parts Usage", usage_name)
 				if usage.docstatus != 0:
 					frappe.throw(_("Consumed spare usage {0} must be recovered, not removed.").format(usage.name))
+				# The spare line still points at the usage; break the link first
+				# or the delete refuses with LinkExistsError and the release
+				# dead-ends on its own bookkeeping.
+				if row.get("spare_usage"):
+					row.spare_usage = None
+					frappe.db.set_value(
+						"SR Spare Line", row.name, "spare_usage", None, update_modified=False
+					)
 				usage.delete()
 			sr.remove(row)
 			sr.save()
@@ -3593,8 +3601,13 @@ def _raise_spare_requisition(sr, lines, *, mr_type, destination, source_warehous
 			row["from_warehouse"] = source_warehouse
 		mr.append("items", row)
 
-	frappe.has_permission("Material Request", "create", throw=True)
-	mr.insert()
+	# Raised on the technician's behalf as a policy decision -- the sourcing
+	# search has already proved the need. Gating it on the technician's own
+	# Material Request DocPerm meant a spare request silently raised NOTHING
+	# whenever a technician (rather than a manager) hit "add spare": the line
+	# sat Awaiting Procurement with no requisition and nobody the wiser.
+	mr.flags.ignore_permissions = True
+	mr.insert(ignore_permissions=True)
 
 	released = False
 	if mr.meta.get_field("custom_approval_status"):

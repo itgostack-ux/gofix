@@ -127,6 +127,12 @@ def _customer_device_custody_fields():
 				"insert_after": "customer_device_section",
 				"read_only": 1,
 				"allow_on_submit": 1,
+				# Blank until custody is taken. Under strict user permissions a
+				# blank Warehouse link DENIES the whole document to any user who
+				# carries Warehouse User Permissions -- i.e. every scoped store
+				# user -- which blocked Service Request creation outright. The
+				# custody trail is enforced by its own logic, not by this field.
+				"ignore_user_permissions": 1,
 				"description": "The Customer Device bin currently holding this handset.",
 			},
 			{

@@ -386,12 +386,24 @@ class ServiceRequest(Document):
 		self._store_tracking_token_digest()
 
 	def _store_tracking_token_digest(self):
-		"""Persist the digest of the deterministic tracking token once the name exists."""
+		"""Persist the digest of the deterministic tracking token once the name exists.
+
+		The salt is minted here (``db_set``) and not trusted from the document:
+		both fields sit at permlevel 1, and ``validate_higher_perm_levels`` in
+		core resets permlevel-1 values on insert for any creator without a
+		manager role -- so a salt set in ``before_insert`` silently vanished for
+		every ordinary front-desk user and their customers' /track links were
+		never minted. ``db_set`` writes past the permlevel machinery, which is
+		correct for a server-generated secret: it belongs to the document, not
+		to whoever happened to key the intake in.
+		"""
 		if not self.meta.has_field("tracking_token") or self.get("tracking_token"):
 			return
 		salt = self.get("tracking_token_salt")
 		if not salt:
-			return
+			from gofix.tracking import make_tracking_salt
+			salt = make_tracking_salt()
+			self.db_set("tracking_token_salt", salt, update_modified=False)
 		from gofix.tracking import derive_tracking_token, tracking_token_digest
 		token = derive_tracking_token(self.name, salt)
 		self.db_set("tracking_token", tracking_token_digest(token), update_modified=False)

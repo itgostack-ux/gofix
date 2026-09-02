@@ -2452,9 +2452,24 @@ def is_spare_compatible_with_device(spare_item, device_item) -> bool:
 		{"parent": spare_item, "parenttype": "Item"},
 	)
 	if has_any:
+		# Fitment rows carry the MODEL ("Apple iPhone 11"), not the item code
+		# ("I00003"): one display is sold as many colour/storage Items and the
+		# spare fits them all. Comparing the row against the raw item code made
+		# every one of the ~1,000 seeded fitment rows unmatchable, which turned
+		# tier 2 into "always incompatible" for any spare careful enough to
+		# declare its fitment. Accept the device's model by CH Model id and by
+		# display name, and keep the item code for rows keyed the old way.
+		accepted = {device_item}
+		if frappe.db.has_column("Item", "ch_model"):
+			model_id = frappe.db.get_value("Item", device_item, "ch_model")
+			if model_id:
+				accepted.add(model_id)
+				model_name = frappe.db.get_value("CH Model", model_id, "model_name")
+				if model_name:
+					accepted.add(model_name)
 		return bool(frappe.db.exists(
 			"GoFix Spare Compatible Model",
-			{"parent": spare_item, "parenttype": "Item", "device_model": device_item},
+			{"parent": spare_item, "parenttype": "Item", "device_model": ("in", sorted(accepted))},
 		))
 
 	device_brand, device_category = _device_brand_and_category(device_item)

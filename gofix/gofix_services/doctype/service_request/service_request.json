@@ -1034,6 +1034,7 @@
    "description": "Auto-populated from Job Assignment",
    "fieldname": "service_engineer",
    "fieldtype": "Link",
+   "ignore_user_permissions": 1,
    "label": "Service Engineer",
    "options": "Employee",
    "read_only": 1
@@ -1511,7 +1512,7 @@
  "index_web_pages_for_search": 1,
  "is_submittable": 1,
  "links": [],
- "modified": "2026-08-31 19:00:00.000000",
+ "modified": "2026-09-01 19:00:16.000000",
  "modified_by": "Administrator",
  "module": "GoFix Services",
  "name": "Service Request",

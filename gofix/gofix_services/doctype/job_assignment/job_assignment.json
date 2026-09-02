@@ -133,7 +133,8 @@
    "in_standard_filter": 1,
    "label": "Service Engineer",
    "options": "Employee",
-   "search_index": 1
+   "search_index": 1,
+   "ignore_user_permissions": 1
   },
   {
    "fieldname": "section_break_11",
@@ -280,7 +281,7 @@
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-08-28 10:30:00.000000",
+ "modified": "2026-09-01 19:22:21.000000",
  "modified_by": "Administrator",
  "module": "GoFix Services",
  "name": "Job Assignment",
@@ -299,7 +300,8 @@
    "import": 1,
    "print": 1,
    "report": 1,
-   "share": 1
+   "share": 1,
+   "submit": 1
   },
   {
    "role": "Service Manager",
@@ -312,7 +314,8 @@
    "export": 1,
    "print": 1,
    "report": 1,
-   "share": 1
+   "share": 1,
+   "submit": 1
   },
   {
    "role": "Service Engineer",
@@ -323,7 +326,8 @@
    "export": 1,
    "print": 1,
    "report": 1,
-   "share": 1
+   "share": 1,
+   "submit": 1
   },
   {
    "role": "Service User",
@@ -349,7 +353,8 @@
    "role": "GoFix Floor Manager",
    "read": 1,
    "write": 1,
-   "create": 1
+   "create": 1,
+   "submit": 1
   }
  ],
  "sort_field": "modified",
@@ -374,5 +379,6 @@
  ],
  "track_changes": 1,
  "search_fields": "service_request,technician,assignment_status",
- "title_field": "service_request"
+ "title_field": "service_request",
+ "is_submittable": 1
 }

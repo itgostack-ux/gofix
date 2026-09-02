@@ -11,6 +11,12 @@ MANAGER_TRANSACTION_GRANTS = {
     "Stock Entry": {"create", "read", "write", "submit"},
     "Payment Entry": {"create", "read", "write", "submit"},
     "Serial No": {"create", "read", "write"},
+    # The Ops Hub creates AND immediately submits these on the floor manager's
+    # behalf (assign_diagnosis_technician, spare consumption). Every live role
+    # row carried submit=0, so technician assignment worked only for
+    # Administrator -- the flow's first step was dead for real users.
+    "Job Assignment": {"create", "read", "write", "submit", "cancel"},
+    "Spare Parts Usage": {"create", "read", "write", "submit", "cancel"},
 }
 
 INTAKE_TRANSACTION_GRANTS = {
@@ -70,6 +76,21 @@ def _grant_missing_permission_types(specs: dict[str, dict[str, set[str]]]) -> in
 
     changed = 0
     touched = set()
+    # Frappe refuses cancel without submit, and Custom DocPerm's own on_update
+    # re-validates the WHOLE doctype on every row save -- so a historically
+    # inconsistent row (System Manager on Job Assignment) makes every later
+    # grant explode. Heal those rows before touching anything.
+    for doctype in specs:
+        if not frappe.db.exists("DocType", doctype):
+            continue
+        for name in frappe.get_all(
+            "Custom DocPerm",
+            filters={"parent": doctype, "cancel": 1, "submit": 0},
+            pluck="name",
+        ):
+            frappe.db.set_value("Custom DocPerm", name, "submit", 1, update_modified=False)
+            changed += 1
+            touched.add(doctype)
     for doctype, role_map in specs.items():
         if not frappe.db.exists("DocType", doctype):
             continue

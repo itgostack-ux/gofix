@@ -492,7 +492,12 @@ class SparePartsUsage(Document):
 
 		try:
 			frappe.has_permission("Stock Entry", "create", throw=True)
-			stock_entry.insert()
+			# Role gate authorises the human; the move itself is system policy
+			# (server-chosen warehouses), so it must not hang on the user's own
+			# Warehouse User Permissions.
+			stock_entry.flags.ignore_permissions = True
+			stock_entry.flags.ignore_write_scope = True
+			stock_entry.insert(ignore_permissions=True)
 			stock_entry.submit()
 			self.db_set("stock_entry", stock_entry.name, update_modified=False)
 			frappe.msgprint(_("Stock Entry {0} created").format(stock_entry.name))
@@ -679,7 +684,15 @@ class SparePartsUsage(Document):
 		})
 
 		frappe.has_permission("Stock Entry", "create", throw=True)
-		stock_entry.insert()
+		# The role gate above authorises the HUMAN to move stock; the insert runs
+		# as a system action because the warehouses are server-chosen policy
+		# (quarantine / return bins). A technician does not carry a personal
+		# Warehouse User Permission for the quarantine bin, and must not need
+		# one to send a broken part there -- doc-level user permissions denied
+		# this for every technician and the damaged-spare flow died.
+		stock_entry.flags.ignore_permissions = True
+		stock_entry.flags.ignore_write_scope = True
+		stock_entry.insert(ignore_permissions=True)
 		stock_entry.submit()
 		self.db_set("defective_stock_entry", stock_entry.name, update_modified=False)
 
@@ -712,7 +725,12 @@ class SparePartsUsage(Document):
 
 		try:
 			frappe.has_permission("Stock Entry", "create", throw=True)
-			stock_entry.insert()
+			# Role gate authorises the human; the move itself is system policy
+			# (server-chosen warehouses), so it must not hang on the user's own
+			# Warehouse User Permissions.
+			stock_entry.flags.ignore_permissions = True
+			stock_entry.flags.ignore_write_scope = True
+			stock_entry.insert(ignore_permissions=True)
 			stock_entry.submit()
 		except Exception as e:
 			frappe.log_error(message=str(e), title="Spare Parts Return Stock Entry Error")
@@ -943,7 +961,10 @@ class SparePartsUsage(Document):
 			"serial_no": self.barcode_value if self.barcode_value else None,
 		})
 		frappe.has_permission("Stock Entry", "create", throw=True)
-		se.insert()
+		# Role gate authorises the human; warehouses are server-chosen policy.
+		se.flags.ignore_permissions = True
+		se.flags.ignore_write_scope = True
+		se.insert(ignore_permissions=True)
 		se.submit()
 		self.db_set("recovery_stock_entry", se.name, update_modified=False)
 
@@ -1012,6 +1033,7 @@ class SparePartsUsage(Document):
 				"serial_no": self.barcode_value or None,
 			})
 			se.flags.ignore_permissions = True
+			se.flags.ignore_write_scope = True
 			se.insert(ignore_permissions=True)
 			# Left in DRAFT deliberately: submitting is the hub's acknowledgement
 			# that the goods arrived. Submitting it here would book the receipt
@@ -1124,7 +1146,10 @@ class SparePartsUsage(Document):
 			"serial_no": self.barcode_value if self.barcode_value else None,
 		})
 		frappe.has_permission("Stock Entry", "create", throw=True)
-		se.insert()
+		# Role gate authorises the human; warehouses are server-chosen policy.
+		se.flags.ignore_permissions = True
+		se.flags.ignore_write_scope = True
+		se.insert(ignore_permissions=True)
 		se.submit()
 		self.db_set("recovery_stock_entry", se.name, update_modified=False)
 

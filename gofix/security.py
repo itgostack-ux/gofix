@@ -230,7 +230,8 @@ def get_service_request_query(user=None):
     return " AND ".join([*(f"({clause})" for clause in scope_clauses), own_clause])
 
 
-def has_service_request_permission(doc=None, user=None, permission_type=None):
+def has_service_request_permission(doc=None, user=None, permission_type=None, ptype=None):
+    permission_type = permission_type or ptype
     user = user or frappe.session.user
     if not _can_access_service_requests(user):
         return False
@@ -314,7 +315,13 @@ def get_gofix_token_query(user=None):
     )
 
 
-def has_gofix_token_permission(doc=None, user=None, permission_type=None):
+def has_gofix_token_permission(doc=None, user=None, permission_type=None, ptype=None):
+    # Frappe invokes has_permission hooks as ``frappe.call(method, doc=doc,
+    # ptype=ptype, user=user, debug=debug)`` and frappe.call silently DROPS any
+    # keyword the function does not declare. Naming the parameter only
+    # ``permission_type`` meant ptype never arrived, the Guest tablet branch
+    # below compared None == "create", and every walk-in token was refused.
+    permission_type = permission_type or ptype
     """Deny named-token access unless both company and store are in scope."""
     user = user or frappe.session.user
     if user == "Guest":
@@ -376,7 +383,8 @@ def get_job_assignment_query(user=None):
     )
 
 
-def has_job_assignment_permission(doc=None, user=None, permission_type=None):
+def has_job_assignment_permission(doc=None, user=None, permission_type=None, ptype=None):
+    permission_type = permission_type or ptype
     user = user or frappe.session.user
     if not _can_access_service_requests(user):
         return False

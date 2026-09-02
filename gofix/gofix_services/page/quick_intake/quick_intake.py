@@ -4,7 +4,7 @@
 import re
 import frappe
 from frappe import _
-from frappe.utils import today, flt
+from frappe.utils import cint, today, flt
 
 from gofix.config import get_int_setting, require_role_setting
 from gofix.gofix_services.store_context import active_company, build_store_context
@@ -391,6 +391,11 @@ def submit_intake(data) -> dict:
 	sr.source_warehouse = data["source_warehouse"]
 	sr.priority = data.get("priority", "Medium")
 	sr.service_date = today()
+	# Compliance gate: the SR refuses to book a device in until the customer has
+	# acknowledged possible data loss. The POS intake passes this through; this
+	# endpoint dropped it, which made quick intake unable to create ANY ticket
+	# once the gate landed.
+	sr.data_backup_disclaimer = cint(data.get("data_backup_disclaimer"))
 
 	sr.insert()
 	sr.submit()

@@ -687,6 +687,14 @@
    "reqd": 1
   },
   {
+   "fieldname": "default_labour_charge",
+   "fieldtype": "Currency",
+   "label": "Default Labour Charge",
+   "default": "200",
+   "non_negative": 1,
+   "description": "Minimum/fallback labour charge applied to a repair invoice when no priced service line resolves. A repair is never billed with zero labour."
+  },
+  {
    "default": "30",
    "fieldname": "default_solution_minutes",
    "fieldtype": "Int",
@@ -724,7 +732,7 @@
  ],
  "index_web_pages_for_search": 0,
  "issingle": 1,
- "modified": "2026-07-22 00:00:00.000000",
+ "modified": "2026-09-02 06:45:23.000000",
  "module": "GoFix Services",
  "name": "GoFix Settings",
  "owner": "Administrator",

@@ -1697,6 +1697,55 @@ class ServiceRequest(Document):
 		name = f"{label} - {abbr}"
 		return name if frappe.db.exists("Account", name) else None
 
+	def _resolve_labour_line(self) -> dict | None:
+		"""The labour line for a repair, never zero.
+
+		Priority: the Service Order's own service (non-stock) line at its
+		confirmed rate; then the company's bound default repair item; then the
+		generic GOFIX-REPAIR-SERVICE. The rate falls back to
+		``GoFix Settings.default_labour_charge`` (₹200) whenever the resolved
+		source carries no rate, so a repair is never billed with no labour.
+		"""
+		from frappe.utils import flt
+
+		default_charge = flt(
+			frappe.db.get_single_value("GoFix Settings", "default_labour_charge")
+		) or 200.0
+
+		item_code = None
+		rate = 0.0
+		if self.service_order:
+			so_service = frappe.db.sql(
+				"""
+				SELECT soi.item_code, soi.rate
+				FROM `tabSales Order Item` soi
+				JOIN `tabItem` i ON i.name = soi.item_code
+				WHERE soi.parent = %s AND IFNULL(i.is_stock_item, 0) = 0
+				ORDER BY soi.idx LIMIT 1
+				""",
+				self.service_order,
+				as_dict=True,
+			)
+			if so_service:
+				item_code = so_service[0].item_code
+				rate = flt(so_service[0].rate)
+
+		if not item_code and frappe.db.has_column("Company", "gofix_default_service_item"):
+			item_code = frappe.db.get_value("Company", self.company, "gofix_default_service_item")
+		if not item_code and frappe.db.exists("Item", "GOFIX-REPAIR-SERVICE"):
+			item_code = "GOFIX-REPAIR-SERVICE"
+		if not item_code:
+			return None
+
+		return {
+			"item_code": item_code,
+			"item_name": frappe.db.get_value("Item", item_code, "item_name") or item_code,
+			"description": _("Repair labour"),
+			"qty": 1,
+			"rate": rate or default_charge,
+			"uom": "Nos",
+		}
+
 	def get_service_invoice_items(self):
 		# Route repair revenue to the service P&L rather than letting it fall
 		# through to the company default income account. Without this, service
@@ -1723,6 +1772,8 @@ class ServiceRequest(Document):
 			if labour_account:
 				row["income_account"] = labour_account
 			items.append(row)
+
+		labour_present = bool(self.service_items)
 
 		# Billing re-checks the spare's CURRENT disposition; it never trusts the
 		# status a caller happens to send.
@@ -1758,6 +1809,20 @@ class ServiceRequest(Document):
 			if spares_account:
 				row["income_account"] = spares_account
 			items.append(row)
+
+		# A repair invoice must ALWAYS carry a labour line. The Ops Hub flow
+		# prices labour on the POS side and populates no ``service_items`` here,
+		# so a ticket that consumed spares used to bill spares-only and the
+		# customer paid nothing for the work. When labour is absent but there
+		# are billable spares, add it now — from the Service Order's own service
+		# line (the confirmed estimate), falling back to the configured default
+		# labour charge so it is never zero.
+		if items and not labour_present:
+			labour = self._resolve_labour_line()
+			if labour:
+				if labour_account:
+					labour["income_account"] = labour_account
+				items.insert(0, labour)
 
 		if items:
 			return self._apply_final_cost(items)

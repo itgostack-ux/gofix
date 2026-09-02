@@ -44,3 +44,4 @@ gofix.patches.v12_backfill_repair_service_items # 2026-09-01 - v01 swallowed eve
 gofix.patches.seed_estimate_override_exception_type #2026-09-01 - CH Exception Type for Confirm-step estimate price gate
 gofix.patches.v13_backfill_device_taxonomy #2026-09-01 - category/brand/model became mandatory; derive them for existing tickets
 gofix.patches.v13_backfill_missing_tracking_tokens # 2026-09-01 - permlevel-1 wipe left SRs created by non-managers with no public tracking token
+gofix.patches.v14_seed_default_labour_charge # 2026-09-02 - guarantee a labour line on repair invoices (fallback ₹200)

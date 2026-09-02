@@ -2545,15 +2545,11 @@ def advance_to_repair(sr_name) -> dict:
 def _validate_pause(pause_reason, remarks) -> dict:
 	"""Fields to write when a repair is paused. Refuses an unexplained pause."""
 	if not pause_reason:
-		options = frappe.get_all(
-			"GoFix Pause Reason", filters={"is_active": 1},
-			fields=["name", "reason_type"], order_by="reason_type, name",
-			limit_page_length=50,
-		)
+		# The screen offers a reason dropdown; this is the defensive fallback
+		# for an API caller that skipped it. Keep it short — no wall of options.
 		frappe.throw(
-			_("Say why the repair is being paused. A job sitting On Hold with no "
-			  "reason cannot be chased by anyone.<br><br>Available: {0}").format(
-				", ".join(f"{o.name} ({o.reason_type})" for o in options) or _("none configured")),
+			_("Pick a reason for the hold. A job sitting On Hold with no reason "
+			  "cannot be chased by anyone."),
 			title=_("Pause Reason Required"),
 		)
 

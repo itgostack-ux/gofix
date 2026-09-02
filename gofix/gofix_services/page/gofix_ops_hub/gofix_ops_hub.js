@@ -2748,18 +2748,46 @@ class GoFixOpsHub {
 
 			content.on("click", ".goh-sol-hold", function () {
 				const rowName = $(this).data("row");
-				const dlg = new frappe.ui.Dialog({
-					title: __("Put Solution On Hold"),
-					fields: [{ fieldname: "remarks", label: __("Reason"), fieldtype: "Small Text",
-						default: __("Waiting for spare parts"),
-						description: __("The device is released — another technician can work their own solution meanwhile.") }],
-					primary_action_label: __("Hold"),
-					primary_action: v => {
-						frappe.xcall(`${API}.update_solution_status`, { sr_name: d.name, solution_row_name: rowName, status: "On Hold", remarks: v.remarks || "" })
-							.then(() => { dlg.hide(); self._load_detail(d.name); });
-					},
+				// Pick the coded reason from a dropdown rather than sending a
+				// bare "On Hold" the server has to reject. Reasons are grouped
+				// by type so the list reads at a glance, and the note field
+				// appears only for a reason that needs one.
+				frappe.xcall(`${API}.get_pause_reasons`).then(reasons => {
+					reasons = reasons || [];
+					const needsNote = {};
+					const options = reasons.map(r => {
+						needsNote[r.name] = !!r.requires_note;
+						return { label: `${r.reason_name} — ${r.reason_type}`, value: r.name };
+					});
+					const dlg = new frappe.ui.Dialog({
+						title: __("Put Solution On Hold"),
+						fields: [
+							{ fieldname: "pause_reason", label: __("Reason"), fieldtype: "Select",
+								options: options, reqd: 1,
+								description: __("The device is released — another technician can work their own solution meanwhile.") },
+							{ fieldname: "remarks", label: __("Note"), fieldtype: "Small Text",
+								depends_on: "eval:doc.pause_reason",
+								description: __("What actually happened — required for some reasons.") },
+						],
+						primary_action_label: __("Hold"),
+						primary_action: v => {
+							if (!v.pause_reason) { frappe.msgprint(__("Choose a reason for the hold.")); return; }
+							if (needsNote[v.pause_reason] && !(v.remarks || "").trim()) {
+								frappe.msgprint(__("This reason needs a note saying what happened.")); return;
+							}
+							frappe.xcall(`${API}.update_solution_status`, {
+								sr_name: d.name, solution_row_name: rowName, status: "On Hold",
+								pause_reason: v.pause_reason, remarks: v.remarks || "",
+							}).then(() => { dlg.hide(); self._load_detail(d.name); });
+						},
+					});
+					// Surface the picked reason's own description under the field.
+					dlg.fields_dict.pause_reason.$input.on("change", function () {
+						const r = reasons.find(x => x.name === dlg.get_value("pause_reason"));
+						dlg.fields_dict.pause_reason.set_description((r && r.description) || "");
+					});
+					dlg.show();
 				});
-				dlg.show();
 			});
 
 			content.on("click", ".goh-sol-cancel", function () {

@@ -2424,6 +2424,78 @@ def _device_brand_and_category(item_code):
 	return brand, category
 
 
+# Simple colour tokens a part name and a device colour can be compared on.
+# Device colours are marketing names ("Starlight", "Space Black"); part colours
+# are plain words ("White", "Black"). We compare on the base token they share.
+# Only genuine base-colour words. Pure marketing names with no base colour in
+# them (Midnight, Starlight) are deliberately absent: a device colour we cannot
+# reduce to a base word is treated as "cannot compare" and fails open, so a
+# physically fitting cosmetic part is never hidden over an ambiguous colour.
+# Marketing names that DO contain a base word ("Midnight Green", "Space Black")
+# still reduce correctly.
+_BASE_COLOURS = (
+	"black", "white", "blue", "red", "green", "pink", "purple", "gold",
+	"silver", "grey", "gray", "yellow", "orange", "teal", "coral",
+	"lavender", "cream", "bronze", "copper", "rose",
+)
+# Words that look like a trailing colour but are quality tiers, not colours.
+_NOT_COLOURS = {"original", "genuine", "compatible", "set", "oem", "aaa", "hq", "bms"}
+
+
+def _colour_tokens(value: str) -> set:
+	value = (value or "").strip().lower()
+	if not value:
+		return set()
+	return {c for c in _BASE_COLOURS if c in value}
+
+
+def _device_colour_storage(device_item):
+	"""The device's colour and storage, from its Item Variant Attributes."""
+	rows = frappe.get_all(
+		"Item Variant Attribute",
+		filters={"parent": device_item},
+		fields=["attribute", "attribute_value"],
+	)
+	colour = storage = None
+	for r in rows:
+		attr = (r.attribute or "").strip().lower()
+		if attr in ("colour", "color"):
+			colour = r.attribute_value
+		elif attr in ("storage", "capacity"):
+			storage = r.attribute_value
+	return colour, storage
+
+
+def _qualifier_matches(row_value, device_value) -> bool:
+	"""A compatibility qualifier narrows only when it can, never falsely rejects.
+
+	* Row blank            → no constraint, matches.
+	* Device value unknown → we cannot compare, so do NOT reject (a physically
+	                          fitting part must never be hidden over a colour).
+	* Both known           → compare on the shared base token; equal/overlapping
+	                          passes, a genuine mismatch fails.
+	"""
+	row_value = (row_value or "").strip()
+	if not row_value:
+		return True
+	if not device_value:
+		return True
+	row_tokens = _colour_tokens(row_value)
+	dev_tokens = _colour_tokens(device_value)
+	if row_tokens and dev_tokens:
+		return bool(row_tokens & dev_tokens)
+	# Fall back to a normalised substring test for non-colour qualifiers
+	# (e.g. storage "128GB"): compare digits/letters case-insensitively.
+	rn = row_value.replace(" ", "").lower()
+	dn = str(device_value).replace(" ", "").lower()
+	if rn and dn and (rn in dn or dn in rn):
+		return True
+	# Row has a value we could not recognise as a base colour and it does not
+	# substring-match — treat as a real constraint only when both sides are
+	# recognisable; otherwise fail open.
+	return not (row_tokens and dev_tokens)
+
+
 def is_spare_compatible_with_device(spare_item, device_item) -> bool:
 	"""Return True if `spare_item` may be used on `device_item`.
 
@@ -2467,10 +2539,27 @@ def is_spare_compatible_with_device(spare_item, device_item) -> bool:
 				model_name = frappe.db.get_value("CH Model", model_id, "model_name")
 				if model_name:
 					accepted.add(model_name)
-		return bool(frappe.db.exists(
+		# Tier 1 — the model family must match. Then tiers 2/3 (colour, storage)
+		# narrow ONLY when a row fills them in; a blank qualifier fits all, and
+		# a qualifier we cannot compare against never rejects — a black housing
+		# still physically fits, so colour must not turn a real fit into a miss.
+		device_colour, device_storage = _device_colour_storage(device_item)
+		rows = frappe.get_all(
 			"GoFix Spare Compatible Model",
-			{"parent": spare_item, "parenttype": "Item", "device_model": ("in", sorted(accepted))},
-		))
+			filters={
+				"parent": spare_item,
+				"parenttype": "Item",
+				"device_model": ("in", sorted(accepted)),
+			},
+			fields=["colour", "storage"],
+		)
+		for row in rows:
+			if not _qualifier_matches(row.get("colour"), device_colour):
+				continue
+			if not _qualifier_matches(row.get("storage"), device_storage):
+				continue
+			return True
+		return False
 
 	device_brand, device_category = _device_brand_and_category(device_item)
 

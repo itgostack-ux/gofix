@@ -2105,7 +2105,8 @@ def reopen_repair(solution_line, description=None, company=None) -> dict:
 	).format(line.repair_solution, old.name)
 	sr.service_date = nowdate()
 	sr.decision = "Draft"
-	sr.warranty_status = old.get("warranty_status") or "Out of Warranty"
+	from ch_erp15.warranty import normalize as _normalize_warranty, OUT_OF_WARRANTY
+	sr.warranty_status = _normalize_warranty(old.get("warranty_status")) or OUT_OF_WARRANTY
 	sr.device_condition = old.get("device_condition") or "Damaged"
 	sr.data_backup_disclaimer = 1
 	# Submission gates on these two, and a return visit that cannot be submitted

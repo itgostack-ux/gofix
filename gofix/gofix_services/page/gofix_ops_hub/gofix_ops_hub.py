@@ -2030,7 +2030,12 @@ def get_technicians_for_grade(minimum_grade=None, issue_category=None, company=N
 
 
 def _assert_technician_can_take_solutions(technician, repair_solutions) -> None:
-	"""Block assignment when a technician is below a solution's minimum grade."""
+	"""Warn (do not block) when a technician is below a solution's minimum grade.
+
+	Policy decision (go-live): a grade mismatch is advisory. The shop is small
+	and often one qualified technician is unavailable; assignment proceeds with a
+	visible warning so a supervisor can override on the spot, rather than being
+	hard-blocked. A missing technician (bad reference) is still a hard error."""
 	repair_solutions = list({s for s in (repair_solutions or []) if s})
 	if not repair_solutions:
 		return
@@ -2063,12 +2068,16 @@ def _assert_technician_can_take_solutions(technician, repair_solutions) -> None:
 	if not emp:
 		frappe.throw(_("Technician {0} not found.").format(technician), title=_("Technician Grade Required"))
 	if not emp.technician_grade:
-		frappe.throw(
-			_("Technician {0} has no Technician Grade. Set it on the Employee record before assigning graded solutions.").format(
+		frappe.msgprint(
+			_("⚠️ Technician {0} has no Technician Grade set, so the skill match "
+			  "could not be checked. Assignment is allowed — set a grade on the "
+			  "Employee record to enforce skill matching.").format(
 				emp.employee_name or technician
 			),
-			title=_("Technician Grade Required"),
+			title=_("Skill Match Not Verified"),
+			indicator="orange",
 		)
+		return
 
 	tech_grade = frappe.db.get_value(
 		"Technician Grade",
@@ -2083,19 +2092,20 @@ def _assert_technician_can_take_solutions(technician, repair_solutions) -> None:
 
 	needed = max(cint(row.grade_level or 0) for row in blocked)
 	solution_names = ", ".join(row.solution_name or row.name for row in blocked)
-	frappe.throw(
+	frappe.msgprint(
 		_(
-			"Technician {0} is {1}, but {2} requires L{3} or above. "
-			"Tip: uncheck the higher-grade solution(s) and assign them to a "
-			"qualified technician separately — one ticket can be split across "
-			"L1/L2/L3/L4 technicians, each taking the solutions their grade covers."
+			"⚠️ Skill match warning: Technician {0} is {1}, but {2} requires L{3} "
+			"or above. Assignment is allowed — proceed only if a supervisor has "
+			"approved it, or split the ticket so the higher-grade solution(s) go "
+			"to a qualified technician (one ticket can span L1/L2/L3/L4)."
 		).format(
 			emp.employee_name or technician,
 			tech_grade.grade_name if tech_grade else emp.technician_grade,
 			solution_names,
 			needed,
 		),
-		title=_("Technician Grade Mismatch"),
+		title=_("Skill Match Warning"),
+		indicator="orange",
 	)
 
 

@@ -2,6 +2,10 @@
 # For license information, please see license.txt
 
 import frappe
+from ch_erp15.warranty import (
+	UNDER_WARRANTY, OUT_OF_WARRANTY, NO_WARRANTY,
+	normalize as normalize_warranty_status,
+)
 from frappe import _
 from frappe.model.document import Document
 from frappe.model.naming import getseries
@@ -751,7 +755,7 @@ class ServiceRequest(Document):
 		plan, our own repair warranty, a fitted part still in its window) is
 		found by check_warranty further down and sets this field itself.
 		"""
-		if (self.warranty_status or "").strip() != "Under Warranty":
+		if (self.warranty_status or "").strip() != UNDER_WARRANTY:
 			return
 		# A claim-driven ticket carries its own authority and sets the status
 		# before this ever runs.
@@ -777,7 +781,8 @@ class ServiceRequest(Document):
 				_("no IMEI or serial number was entered, so no cover can be looked up")
 			)
 			if not self.warranty_status:
-				self.warranty_status = "No Warranty"
+				self.warranty_status = NO_WARRANTY
+			self._classify_coverage()
 			return
 
 		# For walk-in repairs the device's IMEI may not yet be registered in
@@ -789,7 +794,8 @@ class ServiceRequest(Document):
 				  "past repair of ours to claim against").format(self.serial_no)
 			)
 			if not self.warranty_status:
-				self.warranty_status = "No Warranty"
+				self.warranty_status = NO_WARRANTY
+			self._classify_coverage()
 			return
 
 		serial = frappe.get_doc("Serial No", self.serial_no)
@@ -805,17 +811,23 @@ class ServiceRequest(Document):
 			result = check_warranty(serial_no=self.serial_no, company=self.company)
 
 			if result.get("warranty_covered"):
-				self.warranty_status = "Under Warranty"
+				# A live VAS / protection plan. By policy VAS is settled through
+				# the claims flow (a separate auto-ticket), NOT by zeroing this
+				# repair — so we CAPTURE the exact plan for that flow and classify
+				# the ticket as a VAS claim, but we do NOT force
+				# warranty_status="Under Warranty" (which would make the pricing
+				# engine quote the repair at zero). The device's own cover, if
+				# any, still decides warranty_status via the fallback below.
 				covering = result.get("covering_plan") or {}
 				self.warranty_plan = covering.get("warranty_plan")
 				self.warranty_plan_name = covering.get("plan_title")
 				self.warranty_deductible = covering.get("deductible_amount")
-				self.warranty_expiry_date = covering.get("end_date")
-				# Capture the specific Active VAS Plans row so on_submit can
+				# Capture the specific Active VAS Plans row so the claim flow can
 				# increment claims_used on the correct policy. The master
 				# warranty_plan link alone is insufficient — a serial can carry
 				# multiple plans (own + extended) and only one is being consumed.
 				self.active_warranty_plan = covering.get("name")
+				self._fallback_warranty_from_serial(serial)
 			else:
 				# No active sold plan — fallback to Serial No expiry
 				self._fallback_warranty_from_serial(serial)
@@ -838,6 +850,29 @@ class ServiceRequest(Document):
 			# error and still logged, but must not block intake.
 			frappe.log_error(frappe.get_traceback(), f"Warranty lookup failed for {self.serial_no}")
 			self._fallback_warranty_from_serial(serial)
+
+		# Whatever branch ran, settle the bifurcation label from the final state.
+		self._classify_coverage()
+
+	def _classify_coverage(self):
+		"""Bifurcate the ticket for routing and reporting.
+
+		Three mutually-exclusive buckets, strongest first:
+		  In-Warranty  — the repair is on our tab: a live device warranty, or
+		                 our own rework (rework is confirmed later, at estimate
+		                 time, and upgrades the label there).
+		  VAS Claim    — a live VAS / protection plan exists; the repair is quoted
+		                 normally and recovered through the separate claims flow.
+		  Non-Warranty — nothing covers it; the customer pays.
+		The estimate engine only zeroes a repair for In-Warranty, never VAS."""
+		if (self.warranty_status or "") == UNDER_WARRANTY:
+			cat = "In-Warranty"
+		elif self.get("active_warranty_plan"):
+			cat = "VAS Claim"
+		else:
+			cat = "Non-Warranty"
+		self._set_optional_field("coverage_category", cat)
+		return cat
 
 	def _notify_customer_on_status_change(self, old_status, new_status):
 		"""GF-11: Send email/SMS notification to customer on key status transitions."""
@@ -900,13 +935,13 @@ class ServiceRequest(Document):
 		if serial.warranty_expiry_date:
 			self.warranty_expiry_date = serial.warranty_expiry_date
 			if getdate(serial.warranty_expiry_date) >= getdate(today()):
-				self.warranty_status = "Under Warranty"
+				self.warranty_status = UNDER_WARRANTY
 			else:
-				self.warranty_status = "Out of Warranty"
+				self.warranty_status = OUT_OF_WARRANTY
 		else:
-			self.warranty_status = "No Warranty"
+			self.warranty_status = NO_WARRANTY
 
-		if claimed == "Under Warranty" and self.warranty_status != "Under Warranty":
+		if claimed == UNDER_WARRANTY and self.warranty_status != UNDER_WARRANTY:
 			frappe.msgprint(
 				_("No live cover was found for IMEI/serial {0} — no VAS plan, no "
 				  "repair of ours still in warranty, and no unexpired device "
@@ -1263,7 +1298,7 @@ class ServiceRequest(Document):
 		
 		# Copy Service Planning
 		so.service_priority = self.priority
-		so.warranty_status = self.warranty_status
+		so.warranty_status = normalize_warranty_status(self.warranty_status)
 		so.warranty_expiry_date = self.warranty_expiry_date
 		so.warranty_plan = self.warranty_plan
 		so.warranty_deductible = self.warranty_deductible
@@ -1434,7 +1469,7 @@ class ServiceRequest(Document):
 		"""
 		if not self.active_warranty_plan:
 			return
-		if (self.warranty_status or "").strip() != "Under Warranty":
+		if (self.warranty_status or "").strip() != UNDER_WARRANTY:
 			return
 		if self.warranty_claim:
 			return  # CH Warranty Claim closure owns the counter for this event.
@@ -1564,6 +1599,12 @@ class ServiceRequest(Document):
 		if self.get("coupon_code") and coupon_discount > 0:
 			invoice.apply_discount_on = "Net Total"
 			invoice.discount_amount = coupon_discount
+			# Record the coupon on the invoice so ch_pos.increment_coupon_usage
+			# (on_submit) counts the redemption. Without this stamp the counter
+			# never advances and a single-use voucher can be applied to every
+			# repair forever — a live revenue leak.
+			if invoice.meta.get_field("custom_coupon_code"):
+				invoice.custom_coupon_code = self.coupon_code
 			invoice.remarks = "{0} | {1}".format(
 				invoice.remarks,
 				_("Coupon {0} applied: {1}").format(
@@ -1753,7 +1794,7 @@ class ServiceRequest(Document):
 		# from a phone sale, leaving the purpose-built service accounts unused.
 		warranty = (self.warranty_status or "").strip()
 		labour_account = self._service_income_account(
-			"Service Revenue — In Warranty" if warranty == "Under Warranty"
+			"Service Revenue — In Warranty" if warranty == UNDER_WARRANTY
 			else "Service Revenue — Out of Warranty"
 		)
 		spares_account = self._service_income_account("Spare Parts Revenue")
@@ -2312,7 +2353,7 @@ class ServiceRequest(Document):
 		schema. Skips silently when the plan cannot be resolved or limits
 		are unset (0 = unlimited per the field's own description).
 		"""
-		if (self.warranty_status or "").strip() != "Under Warranty":
+		if (self.warranty_status or "").strip() != UNDER_WARRANTY:
 			return
 		if not self.warranty_plan or not self.serial_no:
 			return
@@ -2332,7 +2373,7 @@ class ServiceRequest(Document):
 		base_filters = {
 			"serial_no": self.serial_no,
 			"warranty_plan": self.warranty_plan,
-			"warranty_status": "Under Warranty",
+			"warranty_status": UNDER_WARRANTY,
 			"docstatus": 1,
 			"name": ["!=", self.name or ""],
 		}

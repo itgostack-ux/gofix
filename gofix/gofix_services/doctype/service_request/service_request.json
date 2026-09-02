@@ -57,6 +57,7 @@
   "accessories_list",
   "accessories_received",
   "warranty_status",
+  "coverage_category",
   "warranty_expiry_date",
   "warranty_plan",
   "active_warranty_plan",
@@ -505,7 +506,18 @@
    "fieldname": "warranty_status",
    "fieldtype": "Select",
    "label": "Warranty Status",
-   "options": "\nUnder Warranty\nOut of Warranty\nNo Warranty"
+   "options": "\nUnder Warranty\nOut of Warranty\nNo Warranty",
+   "read_only": 1
+  },
+  {
+   "fieldname": "coverage_category",
+   "fieldtype": "Select",
+   "label": "Coverage Category",
+   "options": "Non-Warranty\nIn-Warranty\nVAS Claim",
+   "read_only": 1,
+   "in_standard_filter": 1,
+   "in_list_view": 1,
+   "description": "How this ticket is settled: Non-Warranty (customer pays), In-Warranty (our tab \u2014 device warranty or our rework, estimate zeroed), or VAS Claim (settled via the separate claims flow, repair quoted normally)."
   },
   {
    "fieldname": "warranty_expiry_date",

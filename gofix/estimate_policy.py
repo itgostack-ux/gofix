@@ -37,8 +37,23 @@ def warranty_rework_context(sr) -> dict:
 	run out — a repeat complaint about a different fault, or one that arrives
 	after the warranty lapses, is ordinary paid work.
 	"""
-	out = {"covered": False, "previous": None, "expiry": None, "reason": ""}
+	out = {"covered": False, "previous": None, "expiry": None, "reason": "", "kind": None}
 
+	# ── Same-part cover: the fitted spare is failing again inside its window ──
+	# The strongest and most specific claim: a part WE fitted on a prior repair
+	# is back on the bench for the SAME part, and its part-warranty window is
+	# still open. This is granted regardless of whether a previous_service_request
+	# link was set, by matching the current ticket's chosen spare(s) against the
+	# parts covered on this serial.
+	part = _same_part_rework(sr)
+	if part:
+		out.update(covered=True, kind="part", previous=part["service_request"],
+		           expiry=part["expires_on"],
+		           reason=_("Same part ({0}) failed again inside its warranty from repair {1} "
+		                    "(to {2}).").format(part["covers"], part["service_request"], part["expires_on"]))
+		return out
+
+	# ── Workmanship cover: a linked prior repair whose labour warranty is live ──
 	previous = sr.get("previous_service_request")
 	if not previous:
 		return out
@@ -64,11 +79,41 @@ def warranty_rework_context(sr) -> dict:
 		)
 		return out
 
-	out["covered"] = True
+	out.update(covered=True, kind="workmanship")
 	out["reason"] = _(
 		"Return visit within the workmanship warranty on repair {0}, which runs to {1}."
 	).format(prev.name, frappe.utils.formatdate(prev.repair_warranty_expiry))
 	return out
+
+
+def _same_part_rework(sr) -> dict | None:
+	"""The covered part on this serial that matches a spare chosen on THIS ticket.
+
+	Reads live part cover from the warranty API (each entry carries the fitted
+	item_code and its expiry) and intersects it with the spares the technician
+	has chosen on this ticket. A match means the same part is failing again
+	inside its warranty — the customer must not pay for it twice.
+	"""
+	serial = sr.get("serial_no")
+	if not serial:
+		return None
+	chosen = {
+		(r.get("spare_item") if hasattr(r, "get") else getattr(r, "spare_item", None))
+		for r in (sr.get("spare_lines") or [])
+	}
+	chosen = {c for c in chosen if c}
+	if not chosen:
+		return None
+	try:
+		from ch_item_master.ch_item_master.warranty_api import _repair_and_part_coverage
+	except ImportError:
+		return None
+	for cov in _repair_and_part_coverage(serial, sr.get("company")) or []:
+		if cov.get("coverage_type") == "spare_warranty" and cov.get("item_code") in chosen:
+			# Never a self-match: the covering repair must be a different ticket.
+			if cov.get("service_request") and cov["service_request"] != sr.get("name"):
+				return cov
+	return None
 
 
 def apply_warranty_rework(sr, labor: float, spare: float, total: float) -> tuple:

@@ -5,6 +5,7 @@ import frappe
 from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 
 from gofix.constants.device_condition import as_select_options
+from ch_erp15.warranty import SELECT_OPTIONS as WARRANTY_SELECT_OPTIONS
 
 
 def create_sales_order_custom_fields():
@@ -206,12 +207,13 @@ def create_sales_order_custom_fields():
 				"fieldname": "warranty_status",
 				"label": "Warranty Status",
 				"fieldtype": "Select",
-				# "Under Warranty" is the term the Service Request uses, the term on the
-				# intake form, and the value every branch in service_request.py tests
-				# for. This field was the only place saying "In Warranty", so copying
-				# SR.warranty_status onto the Sales Order failed validation and no
-				# Service Order could be created for a device under warranty at all.
-				"options": "\nUnder Warranty\nOut of Warranty\nNo Warranty",
+				# Sourced from the ONE master (ch_erp15.warranty) rather than
+				# hard-coded — this installer runs on every migrate with
+				# update=True, so it is what keeps the Sales Order field aligned
+				# with the Service Request. This field once said "In Warranty"
+				# (the buyback vocabulary); copying SR.warranty_status onto it then
+				# failed validation and no Service Order could be created at all.
+				"options": WARRANTY_SELECT_OPTIONS,
 				"insert_after": "service_planning_column_break"
 			},
 			{

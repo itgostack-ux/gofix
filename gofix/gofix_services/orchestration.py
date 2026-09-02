@@ -48,7 +48,16 @@ def create_estimate_version(service_request, reason=None, send_to_customer=False
 	labor_cost, spare_cost, estimate_total, warranty_ctx = apply_warranty_rework(
 		sr, labor_cost, spare_cost, estimate_total
 	)
-	if not warranty_ctx["covered"]:
+	if warranty_ctx["covered"]:
+		# A confirmed rework (same fitted part still in its part-warranty, or a
+		# linked repair still in workmanship warranty) is on our tab — upgrade
+		# the bifurcation label so the ticket is reported and routed as
+		# In-Warranty even if intake had it as Non-Warranty.
+		if hasattr(sr, "_set_optional_field"):
+			sr._set_optional_field("coverage_category", "In-Warranty")
+		elif sr.meta.get_field("coverage_category"):
+			sr.coverage_category = "In-Warranty"
+	else:
 		flag_if_uneconomic(sr, estimate_total)
 
 	# Determine version number

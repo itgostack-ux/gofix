@@ -614,7 +614,13 @@ def get_fde_stores() -> list[dict]:
 	if not seen:
 		wh_rows = frappe.get_all(
 			"Warehouse",
-			filters={"company": ("in", companies), "is_group": 0, "disabled": 0},
+			filters={
+				"company": ("in", companies),
+				"is_group": 0,
+				"disabled": 0,
+				# Customer Device custody bins are internal-only.
+				"name": ("not like", "%-CustomerDevice%"),
+			},
 			fields=["name", "warehouse_name", "company"],
 			order_by="warehouse_name asc",
 			limit_page_length=get_int_setting("token_queue_limit", 200))

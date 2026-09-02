@@ -8,6 +8,17 @@ app_license = "custom"
 boot_session = "gofix.boot.boot_session"
 required_apps = ["frappe/erpnext"]
 
+# Customer Device custody bins are internal plumbing: no warehouse picker
+# anywhere may offer them (see gofix.overrides.warehouse_selection).
+standard_queries = {
+	"Warehouse": "gofix.overrides.warehouse_selection.warehouse_link_query",
+}
+# Link search resolves explicit field queries with frappe.get_attr, which
+# consults neither standard_queries nor override_whitelisted_methods — so
+# erpnext.controllers.queries.warehouse_query is wrapped in place, once
+# per web process.
+before_request = ["gofix.overrides.warehouse_selection.ensure_patched"]
+
 # Jinja helpers available to print formats (Repair Charge Sheet timeline)
 jinja = {
 	"methods": [

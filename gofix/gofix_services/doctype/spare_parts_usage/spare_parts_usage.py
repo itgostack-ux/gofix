@@ -38,6 +38,12 @@ class SparePartsUsage(Document):
 		"approval_rule",
 		"approval_threshold",
 	)
+	# Approval protects the COMMERCIAL substance: which part, how many, at what
+	# price, from where. barcode_value (the installed part's serial) was on this
+	# list, which made every install invalidate its own approval: approve ->
+	# record the serial -> silently un-approved -> consume refused -> approve
+	# again. Genealogy evidence is not money; serials are guarded separately
+	# (immutable once stock is consumed).
 	_APPROVAL_SENSITIVE_FIELDS = (
 		"service_request",
 		"service_request_spare_line",
@@ -46,7 +52,6 @@ class SparePartsUsage(Document):
 		"sales_price",
 		"purchase_cost",
 		"warehouse",
-		"barcode_value",
 	)
 	_SYSTEM_STATE_FIELDS = (
 		"status",

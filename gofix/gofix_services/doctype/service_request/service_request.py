@@ -793,6 +793,14 @@ class ServiceRequest(Document):
 				_("IMEI/serial {0} is not registered, so there is no sale, plan or "
 				  "past repair of ours to claim against").format(self.serial_no)
 			)
+			# ...but a VAS plan CAN cover a device we never sold. Plans with
+			# `allow_external_device` are issued against the customer's own
+			# hardware — sold at the repair counter, keyed on the IMEI — and
+			# such a device is by definition absent from Serial No. Returning
+			# here without asking meant a GoCare plan was invisible to the very
+			# tickets it exists to cover: the ticket came out Non-Warranty with
+			# no plan attached, so the claims flow never picked it up.
+			self._capture_vas_plan_cover()
 			if not self.warranty_status:
 				self.warranty_status = NO_WARRANTY
 			self._classify_coverage()
@@ -853,6 +861,44 @@ class ServiceRequest(Document):
 
 		# Whatever branch ran, settle the bifurcation label from the final state.
 		self._classify_coverage()
+
+	def _capture_vas_plan_cover(self) -> bool:
+		"""Capture a live VAS / protection plan for this IMEI, if there is one.
+
+		Keyed on the IMEI rather than on a Serial No record, because that is how
+		Active VAS Plans stores cover for an external (customer-owned) device.
+		Sets only the plan fields — warranty_status is deliberately untouched,
+		since VAS is settled through the claims flow and must not zero the
+		repair (see fetch_warranty_from_serial). Returns whether cover was found.
+		"""
+		if not self.serial_no:
+			return False
+		try:
+			from ch_item_master.ch_item_master.warranty_api import check_warranty
+
+			result = check_warranty(serial_no=self.serial_no, company=self.company)
+		except ImportError:
+			return False
+		except frappe.PermissionError:
+			# The VAS scope guard fails closed when it cannot place the serial
+			# in a company. For an unregistered walk-in device that is the
+			# expected answer, not a fault.
+			return False
+		except Exception:
+			frappe.log_error(
+				frappe.get_traceback(), f"VAS plan lookup failed for {self.serial_no}"
+			)
+			return False
+
+		if not result.get("warranty_covered"):
+			return False
+
+		covering = result.get("covering_plan") or {}
+		self.warranty_plan = covering.get("warranty_plan")
+		self.warranty_plan_name = covering.get("plan_title")
+		self.warranty_deductible = covering.get("deductible_amount")
+		self.active_warranty_plan = covering.get("name")
+		return True
 
 	def _classify_coverage(self):
 		"""Bifurcate the ticket for routing and reporting.

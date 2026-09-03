@@ -14,6 +14,9 @@
   "column_break_3",
   "assignment_date",
   "assignment_datetime",
+  "accepted_at",
+  "accepted_by",
+  "accept_wait_hours",
   "assigned_by",
   "section_break_7",
   "team",
@@ -99,6 +102,31 @@
    "read_only": 1
   },
   {
+   "fieldname": "accepted_at",
+   "fieldtype": "Datetime",
+   "label": "Accepted At",
+   "read_only": 1,
+   "allow_on_submit": 1,
+   "description": "When the technician accepted the job. The clock only starts from here."
+  },
+  {
+   "fieldname": "accepted_by",
+   "fieldtype": "Link",
+   "options": "User",
+   "label": "Accepted By",
+   "read_only": 1,
+   "allow_on_submit": 1
+  },
+  {
+   "fieldname": "accept_wait_hours",
+   "fieldtype": "Float",
+   "label": "Accept Wait (hours)",
+   "read_only": 1,
+   "allow_on_submit": 1,
+   "precision": "2",
+   "description": "Time between assignment and the technician accepting it."
+  },
+  {
    "default": "user",
    "fieldname": "assigned_by",
    "fieldtype": "Link",
@@ -156,13 +184,13 @@
    "default": "Repair"
   },
   {
-   "default": "Open",
+   "default": "Pending Accept",
    "fieldname": "assignment_status",
    "fieldtype": "Select",
    "in_list_view": 1,
    "in_standard_filter": 1,
    "label": "Job Status",
-   "options": "Open\nIn Progress\nOn Hold\nCompleted\nCancelled",
+   "options": "Pending Accept\nAccepted\nOpen\nIn Progress\nOn Hold\nCompleted\nCancelled",
    "search_index": 1
   },
   {

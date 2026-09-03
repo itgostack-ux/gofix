@@ -133,10 +133,59 @@ def _log_ops_stage(sr_name, from_stage, to_stage):
 # previous row. Reading them as one list therefore counted every wall-clock hour
 # twice — which is how a ticket open for 7 hours reported 14 hours of tracked
 # time. Durations are only ever summed WITHIN a track.
+#   Assignment        who the job is with and whether they have taken it on —
+#                     Pending Accept, Accepted. Assigning a technician is not
+#                     the same event as that technician picking the job up, and
+#                     the gap between the two is the thing worth measuring.
 TIMELINE_TRACKS = {
 	"Lifecycle": "Lifecycle",
 	"Operations Stage": "Operations",
+	"Assignment": "Assignment",
 }
+
+# Job Assignment statuses that mean "handed to a technician who has not taken
+# it on yet". The clock does not run and the device is not theirs until they do.
+JA_PENDING_ACCEPT = "Pending Accept"
+JA_ACCEPTED = "Accepted"
+
+
+def _log_assignment_event(sr_name, from_status, to_status, technician_name=None):
+	"""Append an Assignment-track row to the ticket timeline.
+
+	Kept separate from _log_ops_stage: the shop-floor stage does not change
+	when a job is handed over or picked up, and forcing these through the
+	Operations track would invent stage transitions that never happened.
+	"""
+	from frappe.utils import time_diff_in_hours
+
+	sr = frappe.get_doc("Service Request", sr_name)
+	rows = [r for r in (sr.get("status_log") or []) if r.get("event_type") == "Assignment"]
+	prev_at = rows[-1].changed_at if rows else None
+
+	now_ = now_datetime()
+	elapsed = round(time_diff_in_hours(now_, prev_at), 2) if prev_at else 0
+
+	label_to = f"{to_status} — {technician_name}" if technician_name else to_status
+	if rows and rows[-1].from_status == from_status and rows[-1].to_status == label_to:
+		return elapsed
+
+	sr.flags.ignore_validate_update_after_submit = True
+	sr.flags.skip_completion_artifacts = True
+	sr.append("status_log", {
+		"event_type": "Assignment",
+		"from_status": from_status,
+		"to_status": label_to,
+		"changed_by": frappe.session.user,
+		"changed_at": now_,
+		"time_in_previous_status_hours": elapsed,
+	})
+	# A technician accepting a job is not editing the ticket, and requiring
+	# write access to the whole Service Request just to stamp an audit row
+	# would mean only ticket-editors could ever accept. Whether this person may
+	# accept is already decided by _assert_may_accept; the row itself is
+	# system-written, and `changed_by` records who caused it.
+	sr.save(ignore_permissions=True)
+	return elapsed
 
 
 def _build_status_timeline(sr) -> list:
@@ -1001,8 +1050,12 @@ def get_ticket_detail(sr_name) -> dict:
 		},
 		fields=[
 			"name", "service_engineer", "job_type", "assignment_status",
-			"assignment_date", "priority", "estimated_hours", "actual_hours",
+			"assignment_date", "assignment_datetime", "priority",
+			"estimated_hours", "actual_hours",
 			"work_performed", "technician_remarks", "repair_outcome", "assignment_type",
+			# Acceptance: the hub renders the Accept button off these and shows
+			# how long a job sat before it was taken on.
+			"accepted_at", "accepted_by", "accept_wait_hours",
 		],
 		order_by="assignment_date asc, creation asc",
 		limit_page_length=related_limit + 1,
@@ -1025,8 +1078,24 @@ def get_ticket_detail(sr_name) -> dict:
 		eng_name_map = {r.name: r.employee_name for r in emp_rows}
 	else:
 		eng_name_map = {}
+	_now = now_datetime()
+	_my_employee = frappe.db.get_value("Employee", {"user_id": frappe.session.user}, "name")
+	_can_accept_for_others = has_role_setting("job_assignment_manager_roles")
 	for a in assignments:
 		a["engineer_display"] = eng_name_map.get(a.service_engineer) or a.service_engineer or ""
+		# The hub cannot work out on its own whether the person looking at the
+		# screen is the one who has to accept, so decide it here.
+		a["awaiting_accept"] = a.assignment_status == JA_PENDING_ACCEPT
+		a["can_accept"] = bool(
+			a["awaiting_accept"]
+			and (_can_accept_for_others or (_my_employee and a.service_engineer == _my_employee))
+		)
+		if a["awaiting_accept"] and a.get("assignment_datetime"):
+			a["waiting_hours"] = round(
+				max(flt(time_diff_in_hours(_now, a.assignment_datetime)), 0), 2
+			)
+		else:
+			a["waiting_hours"] = 0
 
 	# Fetch QC status from linked Service Order
 	qc_status = ""
@@ -2759,8 +2828,19 @@ def _get_or_create_job_assignment(sr, technician, assignment_type, estimated_hou
 		ja.estimated_hours = flt(estimated_hours)
 	if comments:
 		ja.comments = comments
+	# Assigning is an offer, not a start. The job sits with the technician as
+	# Pending Accept until they take it on; the clock and device custody only
+	# begin at acceptance (see accept_job_assignment). Assignment used to land
+	# on Open, which read the same in the UI but recorded no acceptance moment,
+	# so "how long did the technician take to pick this up?" was unanswerable.
+	ja.assignment_status = JA_PENDING_ACCEPT
 	ja.insert()
 	ja.submit()
+	if sr.name:
+		_log_assignment_event(
+			sr.name, "Unassigned", JA_PENDING_ACCEPT,
+			frappe.db.get_value("Employee", technician, "employee_name") or technician,
+		)
 	return ja
 
 
@@ -2778,7 +2858,11 @@ def _reconcile_device_custody(sr_name) -> None:
 		filters={
 			"service_order": so_name,
 			"docstatus": ("<", 2),
-			"assignment_status": ("not in", ("Completed", "Cancelled")),
+			# Pending Accept is excluded deliberately: a job nobody has taken on
+			# yet is not a zombie holder — it holds nothing and blocks nobody.
+			# Reconciling it away would delete the offer before the technician
+			# ever saw it, and with it the wait time we are trying to measure.
+			"assignment_status": ("not in", ("Completed", "Cancelled", JA_PENDING_ACCEPT)),
 		},
 		fields=["name", "service_engineer"],
 	):
@@ -2845,6 +2929,30 @@ def _assert_can_work_solution(sr_name, solution_row_name):
 			),
 			title=_("Not Your Solution"),
 		)
+
+	# The technician must have taken the job on before any clock starts. This
+	# is the single gate every start path goes through (start, restart,
+	# complete), so refusing here is enough — there is no way round it.
+	if so_name:
+		pending = frappe.db.get_value(
+			"Job Assignment",
+			{
+				"service_order": so_name,
+				"service_engineer": line.technician,
+				"docstatus": ("<", 2),
+				"assignment_status": JA_PENDING_ACCEPT,
+			},
+			"name",
+		)
+		if pending:
+			assignee = frappe.db.get_value(
+				"Employee", line.technician, "employee_name"
+			) or line.technician
+			frappe.throw(
+				_("{0} has not accepted this job yet. The clock starts when they "
+				  "accept it — open the ticket and press Accept first.").format(assignee),
+				title=_("Not Accepted Yet"),
+			)
 	return line
 
 
@@ -5750,3 +5858,158 @@ def return_unrepaired_device(sr_name, remarks="") -> dict:
 				f"Return device: SO update failed for {sr.service_order}")
 
 	return {"message": _("Device returned to customer")}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Technician acceptance
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# A sales executive picking a technician's name is an offer, not a start. The
+# job used to go straight to work-ready and the clock effectively began at the
+# counter, which charged the technician for time before they had even been told.
+# Now assignment parks the job at Pending Accept and the technician takes it on
+# explicitly — the gap between the two is recorded on the Assignment timeline
+# track, so "how long did it sit unaccepted?" is a number rather than a guess.
+
+
+def _job_assignment_for_accept(ja_name, *, for_write=True):
+	ja = frappe.get_doc("Job Assignment", ja_name)
+	if for_write:
+		ja.check_permission("write")
+	else:
+		ja.check_permission("read")
+	return ja
+
+
+def _caller_is_assigned_technician(ja) -> bool:
+	if not ja.service_engineer:
+		return False
+	return frappe.db.get_value("Employee", ja.service_engineer, "user_id") == frappe.session.user
+
+
+def _assert_may_accept(ja) -> None:
+    """Only the assigned technician takes a job on — or a manager on their behalf.
+
+    Accepting for someone else is a real operational need (the technician is on
+    the floor with no terminal), so it is allowed to the same role that can
+    assign in the first place, and the acceptance records who actually clicked.
+    """
+    if _caller_is_assigned_technician(ja):
+        return
+    if has_role_setting("job_assignment_manager_roles"):
+        return
+    frappe.throw(
+        _("Only {0} can accept this job.").format(
+            frappe.db.get_value("Employee", ja.service_engineer, "employee_name")
+            or ja.service_engineer
+        ),
+        frappe.PermissionError,
+    )
+
+
+@frappe.whitelist()
+def get_pending_acceptances(sr_name=None, technician=None) -> dict:
+    """Jobs waiting to be accepted — for the ticket, or for one technician.
+
+    With no arguments it answers "what is waiting for ME?", which is what the
+    technician's own view needs.
+    """
+    filters = {
+        "docstatus": ("<", 2),
+        "assignment_status": JA_PENDING_ACCEPT,
+    }
+    if sr_name:
+        _assert_sr_permission(sr_name, "read")
+        so_name = frappe.db.get_value("Service Request", sr_name, "service_order")
+        filters["service_request"] = sr_name
+        if so_name:
+            del filters["service_request"]
+            filters["service_order"] = so_name
+    else:
+        if not technician:
+            technician = frappe.db.get_value(
+                "Employee", {"user_id": frappe.session.user}, "name"
+            )
+        if not technician:
+            return {"rows": [], "count": 0}
+        filters["service_engineer"] = technician
+
+    rows = frappe.get_all(
+        "Job Assignment",
+        filters=filters,
+        fields=[
+            "name", "service_request", "service_order", "service_engineer",
+            "job_type", "priority", "assignment_datetime", "imei_serial",
+            "estimated_hours", "comments",
+        ],
+        order_by="assignment_datetime asc",
+        limit_page_length=100,
+    )
+    now = now_datetime()
+    for row in rows:
+        row["engineer_display"] = frappe.db.get_value(
+            "Employee", row.service_engineer, "employee_name"
+        ) or row.service_engineer
+        row["waiting_hours"] = round(
+            max(flt(time_diff_in_hours(now, row.assignment_datetime)), 0), 2
+        ) if row.assignment_datetime else 0
+    return {"rows": rows, "count": len(rows)}
+
+
+@frappe.whitelist(methods=["POST"])
+def accept_job_assignment(ja_name, remarks=None) -> dict:
+    """The technician takes the job on. This is what starts the clock.
+
+    Acceptance alone does not open a custody period — the device is not
+    necessarily in their hands yet. It records that the job was picked up and
+    unblocks the Start action, which is where custody and hours begin.
+    """
+    ja = _job_assignment_for_accept(ja_name)
+    _assert_may_accept(ja)
+
+    if ja.assignment_status not in (JA_PENDING_ACCEPT, "Open"):
+        # Already taken on (or already running) — accepting again would reset a
+        # measurement that has meaning.
+        return {
+            "ok": True,
+            "already": True,
+            "job_assignment": ja.name,
+            "assignment_status": ja.assignment_status,
+            "accepted_at": ja.get("accepted_at"),
+        }
+
+    now = now_datetime()
+    waited = round(
+        max(flt(time_diff_in_hours(now, ja.assignment_datetime)), 0), 2
+    ) if ja.assignment_datetime else 0
+
+    ja.flags.ignore_validate_update_after_submit = True
+    ja.assignment_status = JA_ACCEPTED
+    ja.accepted_at = now
+    ja.accepted_by = frappe.session.user
+    ja.accept_wait_hours = waited
+    if remarks:
+        ja.technician_remarks = (
+            (ja.technician_remarks or "") + ("\n" if ja.technician_remarks else "") + remarks
+        )
+    ja.save()
+
+    sr_name = ja.service_request or frappe.db.get_value(
+        "Service Request", {"service_order": ja.service_order}, "name"
+    )
+    if sr_name:
+        _log_assignment_event(
+            sr_name, JA_PENDING_ACCEPT, JA_ACCEPTED,
+            frappe.db.get_value("Employee", ja.service_engineer, "employee_name")
+            or ja.service_engineer,
+        )
+
+    return {
+        "ok": True,
+        "already": False,
+        "job_assignment": ja.name,
+        "assignment_status": ja.assignment_status,
+        "accepted_at": now,
+        "accept_wait_hours": waited,
+        "service_request": sr_name,
+    }

@@ -1940,11 +1940,34 @@ class GoFixOpsHub {
 			const hoursBadge = hrs
 				? ` <span class="goh-badge badge-muted" title="${__("Hands-on time recorded against this technician")}">${hrs.toFixed(1)}h</span>`
 				: "";
+
+			// Assigned but not taken on yet: the clock is NOT running, and the
+			// chip says so rather than looking like work in progress. The wait
+			// counts up so a job sitting unaccepted is visible at a glance.
+			if (a.awaiting_accept) {
+				const waited = flt(a.waiting_hours);
+				const waitBadge = waited >= 0.02
+					? ` <span class="goh-badge badge-orange" title="${__("Waiting for this technician to accept")}">${waited.toFixed(1)}h ${__("waiting")}</span>`
+					: "";
+				return `
+				<span class="goh-assign-chip-sm" style="background:var(--orange-100,#ffedd5);border:1.5px dashed var(--orange-600,#ea580c)">
+					<i class="fa fa-hourglass-half" style="color:var(--orange-600,#ea580c)"></i>
+					${esc(a.engineer_display)}
+					<span class="goh-badge badge-orange">${__("pending accept")}</span>
+					${waitBadge}
+					${a.can_accept ? `<button class="btn btn-xs btn-primary goh-accept-ja" data-ja="${esc(a.name)}" title="${__("Take this job on — the clock starts now")}"><i class="fa fa-check"></i> ${__("Accept")}</button>` : ""}
+				</span>`;
+			}
+
+			const acceptedBadge = flt(a.accept_wait_hours) >= 0.02
+				? ` <span class="goh-badge badge-muted" title="${__("Time between assignment and the technician accepting")}">${__("accepted after")} ${flt(a.accept_wait_hours).toFixed(1)}h</span>`
+				: "";
 			return `
 			<span class="goh-assign-chip-sm" style="${holds ? "background:var(--green-100,#dcfce7);border:1.5px solid var(--green-600,#16a34a);font-weight:600" : ""}">
 				<i class="fa ${holds ? "fa-mobile" : "fa-user"}" ${holds ? 'style="color:var(--green-600,#16a34a)"' : ""}></i>
 				${esc(a.engineer_display)}
 				${holds ? `<span class="goh-badge badge-green">${__("has device")}</span>` : `<span class="goh-badge badge-muted">${esc(a.assignment_status)}</span>`}
+				${acceptedBadge}
 				${hoursBadge}
 			</span>`;
 		}).join("");
@@ -3057,6 +3080,35 @@ class GoFixOpsHub {
 					},
 				});
 				dlg.show();
+			});
+
+			// Technician takes the job on. Assigning them was an offer; this is
+			// where the clock actually starts, so the wait until this click is
+			// what the Assignment timeline track measures.
+			content.find(".goh-accept-ja").on("click", (e) => {
+				const ja = $(e.currentTarget).data("ja");
+				if (!ja) return;
+				frappe.call({
+					method: "gofix.gofix_services.page.gofix_ops_hub.gofix_ops_hub.accept_job_assignment",
+					args: { ja_name: ja },
+					freeze: true,
+					freeze_message: __("Accepting…"),
+					callback: (r) => {
+						if (!r.message) return;
+						if (r.message.already) {
+							frappe.show_alert({ message: __("Already accepted."), indicator: "orange" });
+						} else {
+							const waited = flt(r.message.accept_wait_hours);
+							frappe.show_alert({
+								message: waited >= 0.02
+									? __("Job accepted after {0}h waiting. The clock starts now.", [waited.toFixed(1)])
+									: __("Job accepted. The clock starts now."),
+								indicator: "green",
+							});
+						}
+						self._load_detail(d.name);
+					},
+				});
 			});
 
 			// Device handover — custody moves, solution assignments stay

@@ -18,7 +18,7 @@
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "Event Type",
-   "options": "Lifecycle\nOperations Stage",
+   "options": "Lifecycle\nOperations Stage\nAssignment",
    "read_only": 1
   },
   {

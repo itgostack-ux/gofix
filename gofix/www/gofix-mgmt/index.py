@@ -1,9 +1,8 @@
-"""GoFix Token — Management Dashboard entrypoint.
+"""GoFix management dashboard entrypoint.
 
-Thin redirect that opens the shared ``/queue-mgmt`` page with the GoFix
-backend toggle. The HTML/CSS/JS lives in ``ch_pos`` (single source of
-truth) and reads ``?system=gofix`` to route API calls to
-``gofix.api.token_api`` instead of ``ch_pos.api.token_api``.
+Thin redirect to the shared ``/queue-mgmt`` page in ``ch_pos``. Walk-in
+tokens from the self check-in tablet and the counter are one POS Kiosk
+Token doctype, so there is a single backend and nothing to toggle.
 
 Accessible at ``/gofix-mgmt`` (with optional ``?store=<CH Store name>``).
 Requires login — the dashboard talks to FDE/store-manager endpoints.
@@ -25,9 +24,9 @@ def get_context(context):
 			"You must be logged in to access the GoFix management dashboard.",
 			frappe.PermissionError,
 		)
-	params = {"system": "gofix"}
+	params = {}
 	store = (frappe.form_dict.get("store") or "").strip()
 	if store:
 		params["store"] = store
-	frappe.local.flags.redirect_location = "/queue-mgmt?" + urlencode(params)
+	frappe.local.flags.redirect_location = "/queue-mgmt" + ("?" + urlencode(params) if params else "")
 	raise frappe.Redirect

@@ -6,7 +6,7 @@
 Two fields are managed here:
 
 * ``gofix_enabled`` (Check) — flags a tenant Company as a GoFix operator so
-  the ``/gofix-token`` self-serve tablet, GoFix Token DocType and dashboard
+  the ``/gofix-token`` self-serve tablet (writes POS Kiosk Token) and dashboard
   endpoints will accept its stores.
 
 * ``store_code_prefix`` (Data, 2 chars) — the configured brand prefix that
@@ -25,7 +25,7 @@ def create_company_custom_fields() -> None:
 		"Company": [
 			{
 				"fieldname": "gofix_enabled",
-				"label": "GoFix Token Enabled",
+				"label": "GoFix Self Check-In Enabled",
 				"fieldtype": "Check",
 				"insert_after": "abbr",
 				"default": "0",

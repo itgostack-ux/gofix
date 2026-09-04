@@ -1,8 +1,9 @@
-"""GoFix Token — Self-Serve Customer Tablet page context.
+"""GoFix self check-in tablet page context.
 
 Accessible at ``/gofix-token?store=<CH Store name | store_code | POS Profile |
-Warehouse>``. No login required — the create_token API is guest-allowed and
-rate-limited per store.
+Warehouse>``. No login required — the create_tablet_token API in ch_pos is
+guest-allowed and rate-limited per store. The token it creates is the same
+POS Kiosk Token the counter logs, so tablet and counter share one queue.
 """
 
 from __future__ import annotations
@@ -30,8 +31,21 @@ def get_context(context):
 	context.store_resolved = None
 	if store_param:
 		try:
-			from gofix.api.token_api import _resolve_store
+			from ch_pos.api.token_api import (
+				_company_is_gofix_enabled,
+				_resolve_pos_profile,
+				_store_identity,
+			)
 
-			context.store_resolved = _resolve_store(store_param)
+			profile = _resolve_pos_profile(store_param)
+			if profile and _company_is_gofix_enabled(profile.company):
+				code, name = _store_identity(profile)
+				context.store_resolved = {
+					"warehouse": profile.warehouse,
+					"company": profile.company,
+					"store_code": code,
+					"store_name": name,
+					"pos_profile": profile.name,
+				}
 		except Exception:
 			context.store_resolved = None

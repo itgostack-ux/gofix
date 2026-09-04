@@ -20,7 +20,7 @@ Sections mapped from the GoFix Token BRD (updated change requirements,
             service taxonomy.
 
 Symptoms retired by the 2026-07-16 catalogue revision are disabled, never
-deleted — historical ``GoFix Token Issue`` rows keep a valid ``symptom_ref``.
+deleted — historical ``POS Kiosk Token Symptom`` rows keep a valid ``symptom_ref``.
 """
 
 from __future__ import annotations

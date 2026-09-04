@@ -48,9 +48,9 @@ class QuickIntake {
 		setTimeout(() => this.wrapper.find("#qi-serial").focus(), 200);
 	}
 
-	// GoFix Token Queue hands off via localStorage when the FDE hits
-	// "Job Card → Create New" — prefill from the token's masters so the SR and
-	// the queue token stay in sync, and link back on submit.
+	// The queue dashboard (/queue-mgmt) hands a walk-in token off via
+	// localStorage when the FDE hits "Job Card" — prefill from the token's
+	// masters so the SR and the token stay in sync, and link back on submit.
 	async _consume_token_prefill() {
 		let stash = null;
 		try {

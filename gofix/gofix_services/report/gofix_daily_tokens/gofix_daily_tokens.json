@@ -9,13 +9,22 @@
  "is_standard": "Yes",
  "module": "GoFix Services",
  "name": "GoFix Daily Tokens",
- "ref_doctype": "GoFix Token",
+ "ref_doctype": "POS Kiosk Token",
  "report_name": "GoFix Daily Tokens",
  "report_type": "Script Report",
  "roles": [
-  {"role": "System Manager"},
-  {"role": "Service Manager"},
-  {"role": "Store Manager"},
-  {"role": "Store Executive"}
- ]
+  {
+   "role": "System Manager"
+  },
+  {
+   "role": "Service Manager"
+  },
+  {
+   "role": "Store Manager"
+  },
+  {
+   "role": "Store Executive"
+  }
+ ],
+ "modified": "2026-09-04 12:00:00.000000"
 }

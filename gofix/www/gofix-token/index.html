@@ -547,7 +547,7 @@
 	// ------ Bootstrap ---------------------------------------------------
 
 	function boot() {
-		api("gofix.api.token_api.get_tablet_config", { store: STORE_PARAM })
+		api("ch_pos.api.token_api.get_tablet_config", { store: STORE_PARAM })
 			.then((cfg) => {
 				state.config = cfg;
 				$("#store-pill").textContent = cfg.store.name || cfg.store.warehouse;
@@ -784,7 +784,7 @@
 			additional_notes: f.additional_notes,
 		};
 
-		api("gofix.api.token_api.create_token", payload)
+		api("ch_pos.api.token_api.create_tablet_token", payload)
 			.then((result) => {
 				state.result = result;
 				showConfirmation(result);

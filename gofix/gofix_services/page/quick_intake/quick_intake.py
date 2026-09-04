@@ -219,34 +219,39 @@ def get_customer_classification(customer: str) -> dict:
 
 @frappe.whitelist()
 def get_token_intake_defaults(token_name: str) -> dict:
-	"""Prefill payload for a job card raised from a GoFix queue token.
+	"""Prefill payload for a job card raised from a walk-in token.
 
-	Returns the customer/device/symptom details captured on the self check-in
-	tablet plus the Issue Category the first mapped symptom points at
-	(GoFix Symptom.backend_category), so the Service Request lands in the same
-	service taxonomy the token reports use.
+	The token is the POS Kiosk Token the self check-in tablet (or the counter)
+	created. Returns the customer/device/symptom details plus the Issue
+	Category the first mapped symptom points at (GoFix Symptom.backend_category),
+	so the Service Request lands in the same service taxonomy the reports use.
 	"""
-	from gofix.api.token_api import _assert_token_scope, _ensure_fde
+	from ch_pos.api.token_api import _assert_token_scope, _ensure_can_operate_token
 
-	_ensure_fde()
-	_require_intake_access("GoFix Token")
-	if not token_name or not frappe.db.exists("GoFix Token", token_name):
-		frappe.throw(_("GoFix Token {0} not found.").format(token_name or ""))
-	token = frappe.get_doc("GoFix Token", token_name)
+	_ensure_can_operate_token()
+	_require_intake_access("POS Kiosk Token")
+	if not token_name or not frappe.db.exists("POS Kiosk Token", token_name):
+		frappe.throw(_("Walk-in token {0} not found.").format(token_name or ""))
+	token = frappe.get_doc("POS Kiosk Token", token_name)
 	token.check_permission("read")
-	_assert_token_scope(token)
+	_assert_token_scope(token_name)
 
 	# Canonical item-master Brand behind the customer-facing label (e.g.
-	# "Google Pixel" → "Google") so the job card and Item analytics agree.
+	# "Google Pixel" -> "Google") so the job card and Item analytics agree.
 	canonical_brand = None
-	if token.device_type and token.device_brand:
+	if token.device_type and token.device_brand and frappe.db.table_exists("GoFix Brand Option"):
 		canonical_brand = frappe.db.get_value(
 			"GoFix Brand Option", f"{token.device_type}::{token.device_brand}", "brand"
 		)
 
+	symptoms = list(token.get("symptoms") or [])
+	store_name = None
+	if token.store and frappe.db.table_exists("CH Store"):
+		store_name = frappe.db.get_value("CH Store", {"warehouse": token.store, "disabled": 0}, "store_name")
+
 	return {
 		"token": token.name,
-		"token_number": token.token_number,
+		"token_number": token.token_display,
 		"status": token.status,
 		"customer_name": token.customer_name,
 		"customer_phone": token.customer_phone,
@@ -256,17 +261,19 @@ def get_token_intake_defaults(token_name: str) -> dict:
 		"canonical_brand": canonical_brand or token.device_brand,
 		"device_model": token.device_model,
 		"other_device_hint": token.other_device_hint,
-		"symptoms": [r.symptom_name for r in (token.selected_issues or [])],
-		"additional_notes": token.additional_notes,
-		"issue_category": _resolve_backend_category(token),
+		"symptoms": [r.symptom_name for r in symptoms],
+		"additional_notes": token.issue_description,
+		"issue_category": _resolve_backend_category(symptoms) or (token.issue_category or ""),
 		"store": token.store,
-		"store_name": token.store_name,
+		"store_name": store_name or token.store,
 	}
 
 
-def _resolve_backend_category(token) -> str:
+def _resolve_backend_category(symptom_rows) -> str:
 	"""First mapped Issue Category across the token's selected symptoms."""
-	for row in token.selected_issues or []:
+	if not frappe.db.has_column("GoFix Symptom", "backend_category"):
+		return ""
+	for row in symptom_rows or []:
 		category = None
 		if row.symptom_ref:
 			category = frappe.db.get_value("GoFix Symptom", row.symptom_ref, "backend_category")
@@ -279,32 +286,28 @@ def _resolve_backend_category(token) -> str:
 	return ""
 
 
-def _link_gofix_token(sr, token_name: str) -> None:
-	"""Bind a freshly created Service Request back to its queue token.
+def _link_walkin_token(sr, token_name: str) -> None:
+	"""Bind a freshly created Service Request back to its walk-in token.
 
-	Walks the token through its allowed transitions to "Job Card Created" so
-	the FDE queue and the token-to-job-card conversion reports stay accurate.
-	Raises inside the intake transaction — if linking fails, the Service
+	Closes the POS Kiosk Token as Converted with the Service Request link so
+	the queue, the CEO walk-in conversion report and the daily token report
+	agree. Raises inside the intake transaction: if linking fails, the Service
 	Request rolls back with it rather than leaving an orphan job card.
 	"""
-	from gofix.gofix_services.doctype.gofix_token.gofix_token import (
-		STATUS_ATTENDING,
-		STATUS_CALLED,
-		STATUS_JOB_CARD,
-		STATUS_WAITING,
-		TERMINAL_STATUSES,
-	)
+	from frappe.utils import now_datetime
 
-	if not frappe.db.exists("GoFix Token", token_name):
-		frappe.throw(_("GoFix Token {0} not found.").format(token_name))
-	token = frappe.get_doc("GoFix Token", token_name)
+	from ch_pos.pos_kiosk.doctype.pos_kiosk_token.pos_kiosk_token import TERMINAL_STATUSES
+
+	if not frappe.db.exists("POS Kiosk Token", token_name):
+		frappe.throw(_("Walk-in token {0} not found.").format(token_name))
+	token = frappe.get_doc("POS Kiosk Token", token_name)
 	token.check_permission("write")
-	label = token.token_number or token_name
-	if token.service_request and token.service_request != sr.name:
+	label = token.token_display or token_name
+	if token.linked_service_request and token.linked_service_request != sr.name:
 		frappe.throw(
-			_("Token {0} is already linked to Service Request {1}.").format(label, token.service_request)
+			_("Token {0} is already linked to Service Request {1}.").format(label, token.linked_service_request)
 		)
-	if token.status in TERMINAL_STATUSES:
+	if token.status in TERMINAL_STATUSES and token.linked_service_request != sr.name:
 		frappe.throw(_("Token {0} is already closed ({1}).").format(label, token.status))
 	if token.company and token.company != sr.company:
 		frappe.throw(
@@ -317,13 +320,16 @@ def _link_gofix_token(sr, token_name: str) -> None:
 			_("Token {0} belongs to another store and cannot be linked to this job card.").format(label),
 			frappe.PermissionError,
 		)
-	if token.status in {STATUS_WAITING, STATUS_CALLED}:
-		token.status = STATUS_ATTENDING
-		token.save()
-	token.service_request = sr.name
-	if token.status == STATUS_ATTENDING:
-		token.status = STATUS_JOB_CARD
-	token.save()
+	frappe.db.set_value(
+		"POS Kiosk Token",
+		token_name,
+		{
+			"status": "Converted",
+			"linked_service_request": sr.name,
+			"technician": token.technician or frappe.session.user,
+			"started_at": token.started_at or now_datetime(),
+		},
+	)
 
 
 @frappe.whitelist(methods=["POST"])
@@ -403,7 +409,7 @@ def submit_intake(data) -> dict:
 	# Queue-token handoff: bind the token so the FDE queue flips to
 	# "Job Card Created" and walk-in conversion reporting stays intact.
 	if data.get("gofix_token"):
-		_link_gofix_token(sr, data["gofix_token"])
+		_link_walkin_token(sr, data["gofix_token"])
 
 	return {
 		"name": sr.name,

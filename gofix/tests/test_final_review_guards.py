@@ -9,8 +9,6 @@ from gofix import config
 from gofix.gofix_services.doctype.service_request import service_request
 from gofix.gofix_services.doctype.gofix_sla_rule import gofix_sla_rule
 from gofix.api import app_switcher
-from gofix.api import token_api
-from gofix import security
 from gofix.overrides import sales_order
 
 
@@ -81,30 +79,6 @@ class TestFinalReviewGuards(TestCase):
 			patch.object(app_switcher, "is_privileged_user", return_value=False),
 		):
 			self.assertEqual(app_switcher.get_allowed_pages(), [])
-
-	def test_guest_token_create_uses_narrow_capability_without_permission_bypass(self):
-		doc = frappe._dict({"source": "Tablet", "company": "Company A", "store": "Store A"})
-		with patch.object(security.frappe, "flags", frappe._dict()):
-			self.assertFalse(
-				security.has_gofix_token_permission(doc, user="Guest", permission_type="create")
-			)
-			security.frappe.flags.gofix_guest_token_creation = True
-			self.assertTrue(
-				security.has_gofix_token_permission(doc, user="Guest", permission_type="create")
-			)
-			self.assertFalse(
-				security.has_gofix_token_permission(doc, user="Guest", permission_type="write")
-			)
-		self.assertNotIn("ignore_permissions", inspect.getsource(token_api.create_token))
-
-	def test_token_company_enablement_fails_closed_without_schema(self):
-		with patch.object(token_api.frappe.db, "has_column", return_value=False):
-			self.assertFalse(token_api._company_is_gofix_enabled("Company A"))
-
-	def test_token_analytics_queries_are_bounded_by_setting(self):
-		for function in (token_api.get_dashboard_stats, token_api.get_reports):
-			source = inspect.getsource(function)
-			self.assertIn('get_int_setting("token_analytics_row_limit", 5000)', source)
 
 	def test_business_notification_resolver_is_scoped_and_bounded(self):
 		from ch_erp15.ch_erp15 import notification_router

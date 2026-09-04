@@ -326,19 +326,19 @@ def _fallback_sms(phone, template_name, params):
         pass
 
 
-# ── GoFix Token: check-in confirmation ──────────────────────────────
+# ── Walk-in token: check-in confirmation ──────────────────────────────
 
 def send_token_confirmation(token_name: str) -> None:
     """Send the queue-token confirmation WhatsApp to the walk-in customer.
 
-    Enqueued from ``gofix.api.token_api.create_token`` after the token is
-    committed. Uses the per-company ``gofix_token_confirmation`` template
+    Enqueued from ``ch_pos.api.token_api.create_tablet_token`` after the token
+    is committed (the tablet writes the same POS Kiosk Token the counter logs). Uses the per-company ``gofix_token_confirmation`` template
     key resolved via ``ch_item_master.ch_core.whatsapp.get_template`` so
     ops can override the actual provider template name per company.
 
     Body values (positional):
       1 → customer name
-      2 → token number (e.g. AKG-024)
+      2 → token number (e.g. GF-VEPERY-024)
       3 → store name
       4 → queue position (1-based) or empty when the customer is already up
 
@@ -350,7 +350,7 @@ def send_token_confirmation(token_name: str) -> None:
     if not token_name:
         return
     try:
-        token = frappe.get_doc("GoFix Token", token_name)
+        token = frappe.get_doc("POS Kiosk Token", token_name)
     except frappe.DoesNotExistError:
         return
 
@@ -367,7 +367,7 @@ def send_token_confirmation(token_name: str) -> None:
         # No WhatsApp configured for this company — mark as skipped so ops can
         # see the confirmation was intentionally not sent.
         frappe.db.set_value(
-            "GoFix Token",
+            "POS Kiosk Token",
             token.name,
             {
                 "whatsapp_status": "Failed",
@@ -382,7 +382,7 @@ def send_token_confirmation(token_name: str) -> None:
     template_name, _lang = get_template(token.company, "gofix_token_confirmation")
     if not template_name:
         frappe.db.set_value(
-            "GoFix Token",
+            "POS Kiosk Token",
             token.name,
             {
                 "whatsapp_status": "Failed",
@@ -395,16 +395,21 @@ def send_token_confirmation(token_name: str) -> None:
     # Recompute queue position at send time — the customer may have already
     # been called between token creation and the async send.
     try:
-        from gofix.api.token_api import _queue_position
+        from ch_pos.api.token_api import _queue_position
 
-        position = _queue_position(token.name, token.store, token.business_date)
+        position = _queue_position(token.name, token.pos_profile)
     except Exception:
         position = 0
 
+    store_name = (
+        frappe.db.get_value("CH Store", {"warehouse": token.store, "disabled": 0}, "store_name")
+        if frappe.db.table_exists("CH Store") else None
+    ) or token.store or ""
+
     body_values = {
         "1": token.customer_name or "Customer",
-        "2": token.token_number or token.name,
-        "3": token.store_name or "",
+        "2": token.token_display or token.name,
+        "3": store_name,
         "4": str(position) if position else "",
     }
 
@@ -414,12 +419,12 @@ def send_token_confirmation(token_name: str) -> None:
             event="gofix_token_confirmation",
             body_values=body_values,
             customer_name=token.customer_name,
-            ref_doctype="GoFix Token",
+            ref_doctype="POS Kiosk Token",
             ref_name=token.name,
             company=token.company,
         )
         frappe.db.set_value(
-            "GoFix Token",
+            "POS Kiosk Token",
             token.name,
             {
                 "whatsapp_status": "Queued",
@@ -434,7 +439,7 @@ def send_token_confirmation(token_name: str) -> None:
             f"gofix_token_confirmation WhatsApp failed for {token.name}",
         )
         frappe.db.set_value(
-            "GoFix Token",
+            "POS Kiosk Token",
             token.name,
             {
                 "whatsapp_status": "Failed",

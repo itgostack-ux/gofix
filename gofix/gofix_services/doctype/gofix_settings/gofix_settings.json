@@ -17,12 +17,9 @@
   "guest_rate_limit",
   "guest_rate_window_seconds",
   "token_queue_limit",
-  "token_report_max_days",
-  "token_analytics_row_limit",
   "app_access_roles",
   "service_dashboard_roles",
   "token_transition_roles",
-  "token_transition_override_roles",
   "sales_operation_roles",
   "estimate_decision_override_roles",
   "billing_roles",
@@ -189,22 +186,6 @@
    "reqd": 1
   },
   {
-   "default": "90",
-   "description": "Maximum reporting period accepted by token reports.",
-   "fieldname": "token_report_max_days",
-   "fieldtype": "Int",
-   "label": "Token Report Maximum Days",
-   "reqd": 1
-  },
-  {
-   "default": "5000",
-   "description": "Maximum token rows processed by one dashboard or report request.",
-   "fieldname": "token_analytics_row_limit",
-   "fieldtype": "Int",
-   "label": "Token Analytics Row Limit",
-   "reqd": 1
-  },
-  {
    "default": "Service Manager\nService Engineer\nService Viewer\nService User\nStore Manager\nStore Executive\nGoFix Floor Manager",
    "description": "Non-privileged roles allowed to open the GoFix app. Administrator and System Manager are always allowed. Pick roles from the list.",
    "fieldname": "app_access_roles",
@@ -222,17 +203,10 @@
   },
   {
    "default": "System Manager\nService Manager\nStore Manager\nStore Executive",
-   "description": "Roles allowed to change token status. Pick roles from the list.",
+   "description": "Roles that operate walk-in tokens (POS Kiosk Token) and get the intake grants; token permissions themselves are native DocPerms on POS Kiosk Token.",
    "fieldname": "token_transition_roles",
    "fieldtype": "Table MultiSelect",
-   "label": "Token Transition Roles",
-   "options": "CH Role Link"
-  },
-  {
-   "description": "Roles allowed to override the token transition matrix. Leave empty to restrict overrides to Administrator and System Manager. Pick roles from the list.",
-   "fieldname": "token_transition_override_roles",
-   "fieldtype": "Table MultiSelect",
-   "label": "Token Transition Override Roles",
+   "label": "Front Desk Roles (walk-in tokens & intake)",
    "options": "CH Role Link"
   },
   {
@@ -732,7 +706,7 @@
  ],
  "index_web_pages_for_search": 0,
  "issingle": 1,
- "modified": "2026-09-02 06:45:23.000000",
+ "modified": "2026-09-04 12:00:00.000000",
  "module": "GoFix Services",
  "name": "GoFix Settings",
  "owner": "Administrator",

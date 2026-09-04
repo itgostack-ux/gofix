@@ -36,15 +36,14 @@ module with no content.
 **Masters (24)** — `GoFix Approval Rule`, `GoFix Brand Option`, `GoFix Cancellation Reason`,
 `GoFix Custody Log`, `GoFix Device Type`, `GoFix Pricing Rule`, `GoFix QC Template`,
 `GoFix Repair Cost Template`, `GoFix SLA Rule`, `GoFix Settings` (Single),
-`GoFix Symptom`, `GoFix Token`, `GoFix Visit Reason`, `Issue Category`, `Job Assignment`,
+`GoFix Symptom`, `GoFix Visit Reason`, `Issue Category`, `Job Assignment`,
 `Repair Solution`, `Service Order State`, `Service Order Transition`, `Service Request`,
 `Solution Spare Mapping`, `Spare Parts Usage`, `Technician Grade`, `Walkin Source`,
 `Withdrawal Reason`.
 
 **Child tables (16)** — `Estimate Version`, `GoFix Item Repair Solution`, `GoFix QC Checklist`,
 `GoFix QC Template Item`, `GoFix Repair Cost Template Item`, `GoFix Solution Applicability`,
-`GoFix Spare Compatible Model`, `GoFix Status Log`, `GoFix Token Issue`,
-`GoFix Token Status Log`, `SR Issue Line`, `SR Solution Line`, `SR Spare Line`,
+`GoFix Spare Compatible Model`, `GoFix Status Log`, `SR Issue Line`, `SR Solution Line`, `SR Spare Line`,
 `Service Request Service Item`, `Technician Audit`, `Technician Skill`.
 
 ### `Service Request` — the aggregate root

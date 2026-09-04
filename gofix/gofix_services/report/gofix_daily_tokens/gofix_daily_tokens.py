@@ -1,17 +1,21 @@
 # Copyright (c) 2026, GoStack and contributors
 # For license information, please see license.txt
 
-"""GoFix Daily Tokens — store-level daily token report.
+"""GoFix Daily Tokens — store-level daily walk-in token report.
 
-One row per (business_date, store), aggregating token counts per status,
-average waiting time to completion, and cancellation ratio. Ops uses this
-to spot understaffed stores and unusually high walk-away rates.
+One row per (date, store), aggregating token counts per status, average
+waiting time to completion, and walk-away ratio. Ops uses this to spot
+understaffed stores and unusually high walk-away rates.
+
+Reads ``POS Kiosk Token`` — the one walk-in token doctype shared by the self
+check-in tablet and the counter — restricted to GoFix-enabled companies by
+default.
 
 Filters
 -------
 company                → Link Company (optional, else all gofix_enabled)
 store                  → Link Warehouse (optional single-store view)
-from_date / to_date    → business_date range (default: last 30 days)
+from_date / to_date    → token date range (default: last 30 days)
 """
 
 from __future__ import annotations
@@ -21,17 +25,19 @@ from typing import Any
 import frappe
 from ch_erp15.ch_erp15.report_scope import scope_where_clause
 from frappe import _
-from frappe.utils import add_days, cint, flt, get_datetime, nowdate
+from frappe.utils import add_days, flt, get_datetime, nowdate
 
 
 _STATUS_BUCKETS = {
-	"Waiting":          "waiting",
-	"Called":           "in_progress",
-	"Attending":        "in_progress",
-	"Job Card Created": "in_progress",
-	"Completed":        "completed",
-	"Cancelled":        "cancelled",
-	"Customer Left":    "dropped",
+	"Waiting":     "waiting",
+	"Hold":        "in_progress",
+	"Engaged":     "in_progress",
+	"In Progress": "in_progress",
+	"Completed":   "completed",
+	"Converted":   "completed",
+	"Cancelled":   "cancelled",
+	"Expired":     "cancelled",
+	"Dropped":     "dropped",
 }
 
 
@@ -44,7 +50,7 @@ def execute(filters: dict | None = None):
 
 def _columns() -> list[dict[str, Any]]:
 	return [
-		{"label": _("Business Date"), "fieldname": "business_date", "fieldtype": "Date", "width": 110},
+		{"label": _("Date"),          "fieldname": "business_date", "fieldtype": "Date", "width": 110},
 		{"label": _("Store"),         "fieldname": "store",         "fieldtype": "Link", "options": "Warehouse", "width": 200},
 		{"label": _("Store Code"),    "fieldname": "store_code",    "fieldtype": "Data", "width": 110},
 		{"label": _("Company"),       "fieldname": "company",       "fieldtype": "Link", "options": "Company", "width": 160},
@@ -64,11 +70,14 @@ def _fetch(filters: dict) -> list[dict]:
 	to_date = filters.get("to_date") or nowdate()
 	from_date = filters.get("from_date") or add_days(to_date, -29)
 
-	conds: list[str] = ["business_date BETWEEN %(from_date)s AND %(to_date)s"]
+	conds: list[str] = [
+		"t.docstatus < 2",
+		"DATE(t.creation) BETWEEN %(from_date)s AND %(to_date)s",
+	]
 	params: dict[str, Any] = {"from_date": from_date, "to_date": to_date}
 
 	if filters.get("company"):
-		conds.append("company = %(company)s")
+		conds.append("t.company = %(company)s")
 		params["company"] = filters["company"]
 	else:
 		# Restrict to gofix-enabled companies only when the column exists.
@@ -78,25 +87,33 @@ def _fetch(filters: dict) -> list[dict]:
 			)
 			if not companies:
 				return []
-			conds.append("company IN %(companies)s")
+			conds.append("t.company IN %(companies)s")
 			params["companies"] = tuple(companies)
 
 	if filters.get("store"):
-		conds.append("store = %(store)s")
+		conds.append("t.store = %(store)s")
 		params["store"] = filters["store"]
 
 	# Row-level scope: only tokens for stores the user is scoped to.
-	scope = scope_where_clause(warehouse_field="store")
+	scope = scope_where_clause(warehouse_field="t.store")
 	if scope:
 		conds.append(scope)
+
+	store_code_sql = "''"
+	if frappe.db.table_exists("CH Store"):
+		store_code_sql = (
+			"(SELECT s.store_code FROM `tabCH Store` s "
+			"WHERE s.warehouse = t.store AND s.disabled = 0 ORDER BY s.name LIMIT 1)"
+		)
 
 	where = " AND ".join(conds)
 	rows = frappe.db.sql(
 		f"""
 		SELECT
-			business_date, store, store_code, store_name, company,
-			status, creation, completed_at
-		FROM `tabGoFix Token`
+			DATE(t.creation) AS business_date, t.store, t.company,
+			{store_code_sql} AS store_code,
+			t.status, t.creation, t.completed_at
+		FROM `tabPOS Kiosk Token` t
 		WHERE {where}
 		""",
 		params,
@@ -130,7 +147,7 @@ def _fetch(filters: dict) -> list[dict]:
 			bucket["_wait_count"] += 1
 
 	out: list[dict] = []
-	for bucket in sorted(agg.values(), key=lambda b: (b["business_date"], b["store_code"])):
+	for bucket in sorted(agg.values(), key=lambda b: (str(b["business_date"]), b["store_code"], b["store"] or "")):
 		wait_count = bucket.pop("_wait_count")
 		wait_sum = bucket.pop("_wait_sum")
 		bucket["avg_wait_min"] = flt(wait_sum / wait_count, 1) if wait_count else 0

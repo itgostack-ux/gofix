@@ -383,7 +383,8 @@
 				</div>
 				<div class="field">
 					<label for="in-model">Model (optional)</label>
-					<input id="in-model" type="text" placeholder="e.g. Galaxy S23, iPhone 15" maxlength="140">
+					<input id="in-model" type="text" placeholder="Start typing — e.g. Galaxy S23, iPhone 15" maxlength="140" list="model-list" autocomplete="off">
+					<datalist id="model-list"></datalist>
 				</div>
 				<div class="field" id="other-device-block" style="display:none">
 					<label for="in-other-device">What device is it?</label>
@@ -455,6 +456,7 @@
 	const state = {
 		step: 1,
 		config: null,
+		modelByLabel: {},
 		form: {
 			customer_name: "",
 			customer_phone: "",
@@ -612,6 +614,7 @@
 			} else {
 				// Non-repair: skip device + symptoms straight to review
 				state.form.device_type = "";
+				state.form.device_label = "";
 				state.form.device_brand = "";
 				state.form.device_model = "";
 				state.form.selected_issues = [];
@@ -636,19 +639,23 @@
 			tile.addEventListener("click", () => {
 				$$("#device-grid .tile").forEach((t) => t.classList.remove("selected"));
 				tile.classList.add("selected");
-				state.form.device_type = dt.name;
+				state.form.device_type = dt.is_other ? "" : dt.name;
+				state.form.device_label = dt.name;
 				populateBrands(dt.name);
+				populateModels("");
 				$("#brand-block").style.display = "block";
-				$("#other-device-block").style.display = dt.name === "Other" ? "block" : "none";
+				$("#other-device-block").style.display = dt.is_other ? "block" : "none";
 				$("#btn-next-3").disabled = false;
 			});
 			grid.appendChild(tile);
 		});
 		$("#btn-next-3").addEventListener("click", () => {
 			state.form.device_brand = $("#in-brand").value;
-			state.form.device_model = $("#in-model").value.trim();
+			const modelText = $("#in-model").value.trim();
+			state.form.device_model = state.modelByLabel[modelText] || modelText;
+			state.form.device_model_label = modelText;
 			state.form.other_device_hint = $("#in-other-device").value.trim();
-			renderSymptoms(state.form.device_type);
+			renderSymptoms(state.form.device_label);
 			showStep(4);
 		});
 	}
@@ -663,6 +670,33 @@
 			opt.textContent = b.name;
 			sel.appendChild(opt);
 		});
+		if (!sel._bound) {
+			sel.addEventListener("change", () => populateModels(sel.value));
+			sel._bound = true;
+		}
+	}
+
+	// Models come from the CH Model master for the chosen brand (and category).
+	// A model that is not listed can still be typed; the server keeps it as
+	// "other device" text rather than a master link.
+	function populateModels(brand) {
+		const list = $("#model-list");
+		list.innerHTML = "";
+		$("#in-model").value = "";
+		state.modelByLabel = {};
+		if (!brand || brand === "Other") return;
+		api("ch_pos.api.token_api.get_tablet_models", {
+			store: STORE_PARAM,
+			brand: brand,
+			category: state.form.device_type || "",
+		}).then((models) => {
+			(models || []).forEach((m) => {
+				const opt = document.createElement("option");
+				opt.value = m.label;
+				list.appendChild(opt);
+				state.modelByLabel[m.label] = m.value;
+			});
+		}).catch(() => { /* typing still works without suggestions */ });
 	}
 
 	// ------ Step 4 (Symptoms) -------------------------------------------
@@ -742,9 +776,9 @@
 		rows.push(["Mobile", f.customer_phone]);
 		rows.push(["Visit reason", f.visit_reason]);
 		if (f.is_repair_visit) {
-			rows.push(["Device", f.device_type + (f.other_device_hint ? ` — ${f.other_device_hint}` : "")]);
+			rows.push(["Device", (f.device_label || f.device_type || "Other") + (f.other_device_hint ? ` — ${f.other_device_hint}` : "")]);
 			if (f.device_brand) rows.push(["Brand", f.device_brand]);
-			if (f.device_model) rows.push(["Model", f.device_model]);
+			if (f.device_model_label || f.device_model) rows.push(["Model", f.device_model_label || f.device_model]);
 			const symptomText = f.selected_issues.map((x) => x.name).join(", ");
 			if (symptomText) rows.push(["Symptoms", symptomText]);
 			if (f.additional_notes) rows.push(["Notes", f.additional_notes]);
@@ -835,6 +869,8 @@
 		$("#in-phone").value = "";
 		$("#in-brand").innerHTML = '<option value="">— Choose brand —</option>';
 		$("#in-model").value = "";
+		$("#model-list").innerHTML = "";
+		state.modelByLabel = {};
 		$("#in-other-device").value = "";
 		$("#in-notes").value = "";
 		$$("#visit-grid .tile, #device-grid .tile, #symptom-grid .tile").forEach((t) => t.classList.remove("selected"));

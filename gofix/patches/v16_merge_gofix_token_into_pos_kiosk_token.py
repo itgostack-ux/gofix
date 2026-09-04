@@ -130,10 +130,32 @@ def _unique_display(r, profile: str | None) -> str:
 	return renumbered
 
 
+def _category_for(device_type: str | None) -> str | None:
+	"""CH Category behind a retired GoFix Device Type label (None for Other)."""
+	if not device_type:
+		return None
+	if frappe.db.table_exists("GoFix Device Type") and frappe.db.has_column("GoFix Device Type", "ch_category"):
+		mapped = frappe.db.get_value("GoFix Device Type", device_type, "ch_category")
+		if mapped and frappe.db.exists("CH Category", mapped):
+			return mapped
+	from ch_pos.api.token_api import _LEGACY_DEVICE_TYPE_TO_CATEGORY
+
+	mapped = _LEGACY_DEVICE_TYPE_TO_CATEGORY.get(device_type)
+	return mapped if mapped and frappe.db.exists("CH Category", mapped) else None
+
+
+def _normalise(r) -> dict:
+	"""Device fields as item-master links (CH Category / Brand / CH Model)."""
+	from ch_pos.api.token_api import _normalise_device
+
+	return _normalise_device(_category_for(r.device_type) or "", r.device_brand, r.device_model, r.other_device_hint)
+
+
 def _copy_one(r, issue_rows) -> None:
 	status = STATUS_MAP.get(r.status, "Waiting")
 	notes = (r.cancellation_notes or "").strip()
 	profile = _profile_for(r)
+	device = _normalise(r)
 	payload = {
 		"doctype": "POS Kiosk Token",
 		"pos_profile": profile,
@@ -147,10 +169,10 @@ def _copy_one(r, issue_rows) -> None:
 		"visit_source": "Kiosk" if (r.source or "Tablet") == "Tablet" else "Counter",
 		"visit_purpose": "Repair" if r.is_repair_visit else "Enquiry",
 		"visit_reason": r.visit_reason if frappe.db.exists("GoFix Visit Reason", r.visit_reason or "") else None,
-		"device_type": r.device_type or "",
-		"device_brand": r.device_brand or "",
-		"device_model": r.device_model or "",
-		"other_device_hint": r.other_device_hint or "",
+		"device_type": device["device_type"],
+		"device_brand": device["device_brand"],
+		"device_model": device["device_model"],
+		"other_device_hint": device["other_device_hint"],
 		"issue_description": r.additional_notes or "",
 		"technician": r.assigned_fde or None,
 		"engaged_at": r.called_at,
@@ -166,7 +188,7 @@ def _copy_one(r, issue_rows) -> None:
 		"symptoms": [
 			{
 				"symptom_name": i.symptom_name,
-				"device_type": i.device_type,
+				"device_category": _category_for(i.device_type),
 				"is_expert_check": i.is_expert_check,
 				"is_other": i.is_other,
 				"symptom_ref": i.symptom_ref if i.symptom_ref and frappe.db.exists("GoFix Symptom", i.symptom_ref) else None,

@@ -8,14 +8,14 @@ from frappe.model.document import Document
 
 class GoFixSymptom(Document):
 	def validate(self) -> None:
-		# Only one "Not-sure / expert check" symptom per device type — the tablet
+		# Only one "Not-sure / expert check" symptom per device category — the tablet
 		# uses this flag to enforce mutual exclusivity, so more than one would
 		# make the client rule ambiguous.
 		if self.is_expert_check:
 			existing = frappe.db.exists(
 				"GoFix Symptom",
 				{
-					"device_type": self.device_type,
+					"device_category": self.device_category,
 					"is_expert_check": 1,
 					"name": ("!=", self.name or ""),
 				},
@@ -23,14 +23,14 @@ class GoFixSymptom(Document):
 			if existing:
 				frappe.throw(
 					_("A \"Not sure / expert check\" symptom already exists for {0}: {1}").format(
-						self.device_type, existing
+						self.device_category or _("generic devices"), existing
 					)
 				)
 		if self.is_other:
 			existing = frappe.db.exists(
 				"GoFix Symptom",
 				{
-					"device_type": self.device_type,
+					"device_category": self.device_category,
 					"is_other": 1,
 					"name": ("!=", self.name or ""),
 				},
@@ -38,6 +38,6 @@ class GoFixSymptom(Document):
 			if existing:
 				frappe.throw(
 					_("An \"Other\" symptom already exists for {0}: {1}").format(
-						self.device_type, existing
+						self.device_category or _("generic devices"), existing
 					)
 				)

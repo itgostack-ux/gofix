@@ -2,14 +2,14 @@
  "actions": [],
  "allow_import": 1,
  "allow_rename": 1,
- "autoname": "format:{device_type}::{symptom_name}",
+ "autoname": "hash",
  "creation": "2026-07-03 09:00:00.000000",
  "doctype": "DocType",
  "editable_grid": 1,
  "engine": "InnoDB",
  "description": "Symptoms shown on the GoFix tablet's issue-selection step. Symptom is customer-facing language (\"Battery draining fast\") that the backend can map to a service category later.",
  "field_order": [
-  "device_type",
+  "device_category",
   "symptom_name",
   "symptom_code",
   "display_order",
@@ -20,13 +20,13 @@
  ],
  "fields": [
   {
-   "fieldname": "device_type",
+   "fieldname": "device_category",
    "fieldtype": "Link",
    "in_list_view": 1,
    "in_standard_filter": 1,
-   "label": "Device Type",
-   "options": "GoFix Device Type",
-   "reqd": 1
+   "label": "Device Category",
+   "options": "CH Category",
+   "description": "Item-master category this symptom is offered for. Leave blank for a generic symptom (shown when the customer picks Other)."
   },
   {
    "fieldname": "symptom_name",
@@ -80,11 +80,11 @@
   }
  ],
  "links": [],
- "modified": "2026-07-18 14:00:00.000000",
+ "modified": "2026-09-04 14:00:00.000000",
  "modified_by": "Administrator",
  "module": "GoFix Services",
  "name": "GoFix Symptom",
- "naming_rule": "Expression",
+ "naming_rule": "Random",
  "owner": "Administrator",
  "permissions": [
   {
@@ -125,5 +125,8 @@
  "sort_field": "display_order",
  "sort_order": "ASC",
  "states": [],
- "track_changes": 1
+ "track_changes": 1,
+ "title_field": "symptom_name",
+ "show_title_field_in_link": 1,
+ "search_fields": "symptom_name,device_category"
 }

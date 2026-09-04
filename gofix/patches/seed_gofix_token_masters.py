@@ -1,4 +1,4 @@
-"""Seed GoFix Token master data.
+"""Seed the GoFix walk-in intake masters (symptoms, visit and cancellation reasons).
 
 Loads the BRD-defined device types, per-device brands and symptoms, walk-in
 visit reasons, cancellation reasons, the backend Issue Category taxonomy the
@@ -32,81 +32,24 @@ import frappe
 # Seed data
 # ---------------------------------------------------------------------------
 
-# ch_category maps each kiosk device type onto the common item-master
-# taxonomy (CH Category) so token demand joins catalogue analytics.
-_DEVICE_TYPES = [
-	{"device_type": "Mobile", "icon": "\U0001f4f1", "display_order": 10, "ch_category": "Smart Phones"},
-	{"device_type": "Tablet", "icon": "\U0001f4f2", "display_order": 20, "ch_category": "Tablets"},
-	{"device_type": "Laptop", "icon": "\U0001f4bb", "display_order": 30, "ch_category": "Laptops"},
-	{"device_type": "Smartwatch", "icon": "⌚", "display_order": 40, "ch_category": "Watches"},
-	{"device_type": "Other", "icon": "\U0001f527", "display_order": 90, "ch_category": None},
+# Device taxonomy lives in the item master (CH Category / Brand / CH Model).
+# The seed only flags which categories the kiosk and tablet offer for repair
+# and keys the symptom catalogue by those categories. Keys below are the
+# historical BRD labels; the map turns them into CH Category names.
+_DEVICE_TYPE_CATEGORY = {
+	"Mobile": "Smart Phones",
+	"Tablet": "Tablets",
+	"Laptop": "Laptops",
+	"Smartwatch": "Watches",
+	"Other": None,  # generic symptoms: device_category left blank
+}
+_REPAIRABLE_CATEGORIES = [
+	{"category": "Smart Phones", "icon": "\U0001f4f1", "order": 10},
+	{"category": "Tablets", "icon": "\U0001f4f2", "order": 20},
+	{"category": "Laptops", "icon": "\U0001f4bb", "order": 30},
+	{"category": "Watches", "icon": "⌚", "order": 40},
 ]
 
-_BRANDS: dict[str, list[str]] = {
-	"Mobile": [
-		"Samsung", "Apple", "OnePlus", "Vivo", "Oppo", "Redmi", "Xiaomi",
-		"Realme", "Motorola", "Nothing", "Poco", "Google Pixel", "Nokia",
-		"Infinix", "Tecno", "Lava", "iQOO", "Other",
-	],
-	"Tablet": [
-		"Apple", "Samsung", "Lenovo", "Xiaomi", "Redmi", "OnePlus", "Realme",
-		"Oppo", "Honor", "Huawei", "Nokia", "Motorola", "Microsoft Surface",
-		"Other",
-	],
-	"Laptop": [
-		"HP", "Dell", "Lenovo", "Apple", "Asus", "Acer", "Microsoft Surface",
-		"MSI", "Samsung", "LG", "Avita", "Honor", "Xiaomi", "Fujitsu",
-		"Toshiba", "Other",
-	],
-	"Smartwatch": [
-		"Apple", "Samsung", "Noise", "Boat", "Fire-Boltt", "Fastrack", "Titan",
-		"Amazfit", "Garmin", "Fitbit", "OnePlus", "Oppo", "Realme", "Redmi",
-		"Xiaomi", "Huawei", "Honor", "Crossbeats", "Other",
-	],
-	"Other": [
-		"Other",
-	],
-}
-
-# Customer-facing labels whose canonical item-master Brand is spelled
-# differently. Everything not listed here maps to a Brand of the same name
-# (created in the Brand master if genuinely missing). "Other" is the one
-# pseudo-option that stays unlinked.
-_CANONICAL_BRAND = {
-	"Google Pixel": "Google",
-	"OnePlus": "Oneplus",
-	"Fire-Boltt": "Fire Boltt",
-	"Microsoft Surface": "Microsoft",
-}
-
-
-def _ensure_core_brand(name: str) -> str:
-	"""Return the item-master Brand for a canonical name, creating it if absent.
-
-	ch_item_master hardens Brand with a mandatory ``ch_manufacturers`` child
-	table (rows link to core Manufacturer), so on those sites the matching
-	Manufacturer is ensured first.
-	"""
-
-	existing = frappe.db.get_value("Brand", name, "name") or frappe.db.get_value(
-		"Brand", {"brand": ("like", name)}, "name"
-	)
-	if existing:
-		return existing
-
-	doc = frappe.new_doc("Brand")
-	doc.brand = name
-	if doc.meta.has_field("ch_manufacturers"):
-		manufacturer = frappe.db.get_value("Manufacturer", name, "name")
-		if not manufacturer:
-			m = frappe.new_doc("Manufacturer")
-			m.short_name = name
-			m.full_name = name
-			m.insert(ignore_permissions=True)
-			manufacturer = m.name
-		doc.append("ch_manufacturers", {"manufacturer": manufacturer})
-	doc.insert(ignore_permissions=True)
-	return doc.name
 
 # Backend service taxonomy (BRD §17: customer sees the symptom, the job
 # tracker works in service categories). category_name is the PK.
@@ -329,30 +272,24 @@ def _upsert(doctype: str, name_or_filters, values: dict) -> None:
 	doc.insert(ignore_permissions=True)
 
 
-def _seed_device_types() -> None:
-	ch_category_ok = frappe.db.table_exists("CH Category")
-	for row in _DEVICE_TYPES:
-		values = dict(row)
-		category = values.pop("ch_category", None)
-		# Only write the mapping when the target category exists in this
-		# environment — never clobber an ops-set mapping with None.
-		if category and ch_category_ok and frappe.db.exists("CH Category", category):
-			values["ch_category"] = category
-		_upsert("GoFix Device Type", row["device_type"], values)
-
-
-def _seed_brands() -> None:
-	for device_type, brands in _BRANDS.items():
-		for order, brand in enumerate(brands, start=1):
-			key = f"{device_type}::{brand}"
-			values = {
-				"device_type": device_type,
-				"brand_name": brand,
-				"display_order": order * 10,
-			}
-			if brand != "Other":
-				values["brand"] = _ensure_core_brand(_CANONICAL_BRAND.get(brand, brand))
-			_upsert("GoFix Brand Option", key, values)
+def _seed_repairable_categories() -> None:
+	"""Flag the item-master categories the kiosk and tablet offer for repair."""
+	if not frappe.db.has_column("CH Category", "is_repairable_device"):
+		return
+	for row in _REPAIRABLE_CATEGORIES:
+		if not frappe.db.exists("CH Category", row["category"]):
+			continue
+		current = frappe.db.get_value(
+			"CH Category", row["category"], ["is_repairable_device", "device_icon", "kiosk_display_order"], as_dict=True)
+		values = {}
+		if not current.is_repairable_device:
+			values["is_repairable_device"] = 1
+		if not current.device_icon:
+			values["device_icon"] = row["icon"]
+		if not current.kiosk_display_order:
+			values["kiosk_display_order"] = row["order"]
+		if values:
+			frappe.db.set_value("CH Category", row["category"], values, update_modified=False)
 
 
 _CATEGORY_CODES = {
@@ -379,21 +316,30 @@ def _seed_issue_categories() -> None:
 		_upsert("Issue Category", row["category_name"], values)
 
 
+def _symptom_filters(device_type: str, label: str) -> dict:
+	category = _DEVICE_TYPE_CATEGORY.get(device_type, device_type)
+	if category and not frappe.db.exists("CH Category", category):
+		category = None
+	return {"device_category": category or ("is", "not set"), "symptom_name": label}
+
+
 def _seed_symptoms() -> None:
 	for device_type, symptoms in _SYMPTOMS.items():
-		for order, (label, is_expert, is_other, category) in enumerate(symptoms, start=1):
-			key = f"{device_type}::{label}"
+		category = _DEVICE_TYPE_CATEGORY.get(device_type, device_type)
+		if category and not frappe.db.exists("CH Category", category):
+			category = None
+		for order, (label, is_expert, is_other, backend) in enumerate(symptoms, start=1):
 			_upsert(
 				"GoFix Symptom",
-				key,
+				_symptom_filters(device_type, label),
 				{
-					"device_type": device_type,
+					"device_category": category,
 					"symptom_name": label,
 					"is_expert_check": is_expert,
 					"is_other": is_other,
 					"display_order": order * 10,
-					"backend_category": category,
-					"symptom_code": f"{_CATEGORY_CODES.get(category, 'GEN')}-{order:02d}",
+					"backend_category": backend,
+					"symptom_code": f"{_CATEGORY_CODES.get(backend, 'GEN')}-{order:02d}",
 				},
 			)
 
@@ -409,8 +355,10 @@ def _retire_legacy_symptoms() -> None:
 	for device_type, legacy in _LEGACY_SYMPTOMS.items():
 		current = {label for (label, _e, _o, _c) in _SYMPTOMS.get(device_type, [])}
 		for label in set(legacy) - current:
-			name = f"{device_type}::{label}"
-			if frappe.db.exists("GoFix Symptom", {"name": name, "disabled": 0}):
+			filters = _symptom_filters(device_type, label)
+			filters["disabled"] = 0
+			name = frappe.db.exists("GoFix Symptom", filters)
+			if name:
 				frappe.db.set_value("GoFix Symptom", name, "disabled", 1, update_modified=False)
 				retired += 1
 	if retired:
@@ -457,8 +405,6 @@ def _register_whatsapp_event() -> None:
 
 def execute() -> None:
 	for doctype in (
-		"GoFix Device Type",
-		"GoFix Brand Option",
 		"GoFix Symptom",
 		"GoFix Visit Reason",
 		"GoFix Cancellation Reason",
@@ -472,8 +418,7 @@ def execute() -> None:
 			)
 			return
 
-	_seed_device_types()
-	_seed_brands()
+	_seed_repairable_categories()
 	_seed_issue_categories()
 	_seed_symptoms()
 	_retire_legacy_symptoms()
@@ -483,8 +428,7 @@ def execute() -> None:
 	frappe.db.commit()
 	print(
 		"Seeded GoFix Token masters: "
-		f"{len(_DEVICE_TYPES)} device types, "
-		f"{sum(len(v) for v in _BRANDS.values())} brands, "
+		f"{len(_REPAIRABLE_CATEGORIES)} repairable categories flagged, "
 		f"{len(_ISSUE_CATEGORIES)} issue categories, "
 		f"{sum(len(v) for v in _SYMPTOMS.values())} symptoms, "
 		f"{len(_VISIT_REASONS)} visit reasons, "

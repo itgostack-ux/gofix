@@ -236,14 +236,6 @@ def get_token_intake_defaults(token_name: str) -> dict:
 	token.check_permission("read")
 	_assert_token_scope(token_name)
 
-	# Canonical item-master Brand behind the customer-facing label (e.g.
-	# "Google Pixel" -> "Google") so the job card and Item analytics agree.
-	canonical_brand = None
-	if token.device_type and token.device_brand and frappe.db.table_exists("GoFix Brand Option"):
-		canonical_brand = frappe.db.get_value(
-			"GoFix Brand Option", f"{token.device_type}::{token.device_brand}", "brand"
-		)
-
 	symptoms = list(token.get("symptoms") or [])
 	store_name = None
 	if token.store and frappe.db.table_exists("CH Store"):
@@ -256,10 +248,14 @@ def get_token_intake_defaults(token_name: str) -> dict:
 		"customer_name": token.customer_name,
 		"customer_phone": token.customer_phone,
 		"visit_reason": token.visit_reason,
+		# Item-master links: CH Category / Brand / CH Model (brand is canonical
+		# already, so it doubles as canonical_brand for older callers).
 		"device_type": token.device_type,
+		"device_category": token.device_type,
 		"device_brand": token.device_brand,
-		"canonical_brand": canonical_brand or token.device_brand,
+		"canonical_brand": token.device_brand,
 		"device_model": token.device_model,
+		"device_model_name": token.device_model_name,
 		"other_device_hint": token.other_device_hint,
 		"symptoms": [r.symptom_name for r in symptoms],
 		"additional_notes": token.issue_description,
@@ -277,9 +273,14 @@ def _resolve_backend_category(symptom_rows) -> str:
 		category = None
 		if row.symptom_ref:
 			category = frappe.db.get_value("GoFix Symptom", row.symptom_ref, "backend_category")
-		if not category and row.device_type and row.symptom_name:
+		if not category and row.symptom_name:
 			category = frappe.db.get_value(
-				"GoFix Symptom", f"{row.device_type}::{row.symptom_name}", "backend_category"
+				"GoFix Symptom",
+				{
+					"symptom_name": row.symptom_name,
+					"device_category": row.device_category or ("is", "not set"),
+				},
+				"backend_category",
 			)
 		if category:
 			return category

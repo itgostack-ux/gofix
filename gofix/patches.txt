@@ -48,3 +48,4 @@ gofix.patches.v14_seed_default_labour_charge # 2026-09-02 - guarantee a labour l
 gofix.patches.v15_repoint_spare_compat_to_model # 2026-09-02 - spare compatibility keyed on device model family (CH Model) + optional colour/storage, not the sales SKU
 gofix.patches.v15_backfill_spare_line_warehouse #2026-09-02 - tickets said a spare had arrived but never where; fill it where derivable
 gofix.patches.v16_merge_gofix_token_into_pos_kiosk_token # 2026-09-04 - tablet check-in and counter walk-ins are ONE POS Kiosk Token; copy GoFix Token rows across, drop the doctype
+gofix.patches.v17_symptoms_keyed_by_item_master_category # 2026-09-04 - device taxonomy from the item master only: flag CH Category, re-key symptoms, drop GoFix Device Type + Brand Option

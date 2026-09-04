@@ -33,8 +33,8 @@ module with no content.
 
 ## 1.2 DocType inventory
 
-**Masters (24)** — `GoFix Approval Rule`, `GoFix Brand Option`, `GoFix Cancellation Reason`,
-`GoFix Custody Log`, `GoFix Device Type`, `GoFix Pricing Rule`, `GoFix QC Template`,
+**Masters (22)** — `GoFix Approval Rule`, `GoFix Cancellation Reason`,
+`GoFix Custody Log`, `GoFix Pricing Rule`, `GoFix QC Template`,
 `GoFix Repair Cost Template`, `GoFix SLA Rule`, `GoFix Settings` (Single),
 `GoFix Symptom`, `GoFix Visit Reason`, `Issue Category`, `Job Assignment`,
 `Repair Solution`, `Service Order State`, `Service Order Transition`, `Service Request`,

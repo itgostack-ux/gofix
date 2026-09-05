@@ -3,6 +3,7 @@
 
 import re
 import frappe
+from frappe.utils import get_datetime, now_datetime
 from frappe import _
 from frappe.utils import cint, today, flt
 
@@ -362,6 +363,17 @@ def submit_intake(data) -> dict:
 		if not data.get(field):
 			frappe.throw(_("{0} is required").format(field), title=_("Validation Error"))
 
+	# The promise is checked before anything is written: a time already in the
+	# past is a typo, and catching it after the ticket exists would leave a
+	# receipt with no deadline behind it.
+	promised = (data.get("promised_completion_datetime") or "").strip()
+	if promised and get_datetime(promised) < now_datetime():
+		frappe.throw(
+			_("The promised completion time {0} is already in the past. Give the customer a time that is still ahead.").format(
+				frappe.format(get_datetime(promised), {"fieldtype": "Datetime"})),
+			title=_("Validation Error"),
+		)
+
 	# Bind the intake to a warehouse the caller is entitled to — a technician
 	# must not file a Service Request against another store's warehouse.
 	from gofix.scope_guard import assert_warehouse
@@ -412,7 +424,22 @@ def submit_intake(data) -> dict:
 	if data.get("gofix_token"):
 		_link_walkin_token(sr, data["gofix_token"])
 
+	# Record the completion time promised at the counter. Done after the SR
+	# exists so the revision row can reference it; never fatal, but never
+	# silent either — the caller is told when the promise did not land.
+	promise_error = None
+	if promised:
+		try:
+			from gofix.gofix_services.page.gofix_ops_hub.gofix_ops_hub import set_promised_completion
+
+			set_promised_completion(sr.name, promised, reason=_("Promised to the customer at intake"))
+		except Exception as exc:
+			promise_error = str(exc)
+			frappe.log_error(frappe.get_traceback(), f"Quick intake: could not record promised completion for {sr.name}")
+
 	return {
 		"name": sr.name,
 		"message": _("Service Request {0} created successfully").format(sr.name),
+		"promised_completion_datetime": promised or None,
+		"promise_error": promise_error,
 	}

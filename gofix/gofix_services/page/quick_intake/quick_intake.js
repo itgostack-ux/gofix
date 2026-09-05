@@ -205,6 +205,11 @@ class QuickIntake {
 							<option value="Urgent">Urgent</option>
 						</select>
 					</div>
+					<div class="qi-field">
+						<label>Promised Completion *</label>
+						<input type="datetime-local" id="qi-promised">
+						<small class="text-muted">The date and time given to the customer. The Ops Hub counts down to it for the whole repair.</small>
+					</div>
 				</div>
 				<div class="qi-field">
 					<label>Fault Description *</label>
@@ -312,6 +317,10 @@ class QuickIntake {
 
 		// Submit
 		w.find("#qi-submit").on("click", () => self.submit_intake());
+		// A promise in the past is a typo; keep the picker from offering one.
+		const promised_input = w.find("#qi-promised");
+		const local_now = () => frappe.datetime.now_datetime().slice(0, 16).replace(" ", "T");
+		promised_input.attr("min", local_now()).on("focus", () => promised_input.attr("min", local_now()));
 
 		// Reset
 		w.find("#qi-reset").on("click", () => {
@@ -456,17 +465,26 @@ class QuickIntake {
 		d.password = this.wrapper.find("#qi-password").val().trim();
 		d.priority = this.wrapper.find("#qi-priority").val();
 		d.source_warehouse = this.wrapper.find("#qi-warehouse").val();
+		d.promised_completion_datetime = this.wrapper.find("#qi-promised").val() || "";
 
 		// Basic validation
 		if (!d.customer) { frappe.throw(__("Please select a customer")); return; }
 		if (!d.device_item) { frappe.throw(__("Please select a device item")); return; }
 		if (!d.contact_number) { frappe.throw(__("Phone number is required")); return; }
 		if (!d.issue_description) { frappe.throw(__("Please describe the fault")); return; }
+		if (!d.promised_completion_datetime) { frappe.throw(__("Give the customer a promised completion date and time")); return; }
+		if (new Date(d.promised_completion_datetime) <= new Date()) {
+			frappe.throw(__("The promised completion time is already in the past")); return;
+		}
 
 		this.wrapper.find("#qi-submit").prop("disabled", true).html('<i class="fa fa-spinner fa-spin"></i> Creating…');
 
 		try {
 			const result = await frappe.xcall(`${QI_API}.submit_intake`, { data: d });
+			if (result.promise_error) {
+				frappe.msgprint({ title: __("Promise not recorded"), indicator: "orange",
+					message: __("{0} was created, but the promised time could not be saved: {1}. Set it from the Ops Hub.", [result.name, result.promise_error]) });
+			}
 			this.show_success(result.name);
 		} catch (e) {
 			this.wrapper.find("#qi-submit").prop("disabled", false).html('<i class="fa fa-check"></i> Create Service Request');

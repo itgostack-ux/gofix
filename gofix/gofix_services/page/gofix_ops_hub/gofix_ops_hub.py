@@ -483,7 +483,8 @@ def get_ticket_queue(warehouse=None, search=None, date_from=None, date_to=None, 
 
 	extra_fields = []
 	# analysis_confirmed and customer_confirmed are custom fields
-	for cf in ("analysis_confirmed", "customer_confirmed"):
+	for cf in ("analysis_confirmed", "customer_confirmed",
+			"promised_completion_datetime", "actual_completion_date"):
 		if frappe.db.has_column("Service Request", cf):
 			extra_fields.append(cf)
 
@@ -630,6 +631,10 @@ def get_ticket_queue(warehouse=None, search=None, date_from=None, date_to=None, 
 		sr["qc_status"] = qc_map.get(n, "")
 		sr["all_solutions_done"] = sol_done_map.get(n, False)
 		sr["ops_stage"] = _derive_stage(sr)
+		# The promise clock belongs on the queue card, not only inside the open
+		# ticket: a technician choosing what to pick up next needs to see which
+		# customer's time is running out.
+		sr["countdown"] = get_completion_countdown(sr)
 
 	return sr_list
 

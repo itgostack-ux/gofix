@@ -291,6 +291,8 @@ class GoFixOpsHub {
 			: "";
 
 		container.html(countBar + this.queue.map(sr => this._queue_card(sr)).join(""));
+		// The cards carry promise countdowns too; one interval drives them all.
+		this._start_countdown_timer();
 
 		// Bind stage pill clicks → open SR list
 		container.find(".goh-stage-pill").on("click", (e) => {
@@ -336,6 +338,9 @@ class GoFixOpsHub {
 				<div class="goh-q-row3">
 					<span class="goh-q-device">${esc(device)}</span>
 					${sla}
+				</div>
+				<div class="goh-q-row3">
+					${this._html_countdown(sr, true)}
 				</div>
 				<div class="goh-q-row4 text-muted">
 					<span><i class="fa fa-calendar-o"></i> ${frappe.datetime.str_to_user(sr.service_date)}</span>
@@ -1054,10 +1059,12 @@ class GoFixOpsHub {
 	 * Ticks from the SERVER clock: the offset is measured once here, so a
 	 * workstation with a wrong clock cannot make a late job look on time.
 	 */
-	_html_countdown(d) {
+	_html_countdown(d, compact = false) {
 		const c = d.countdown || {};
 		const esc = frappe.utils.escape_html;
 		if (c.state === "unset") {
+			// A closed ticket that never had a promise has nothing to measure.
+			if (compact && c.stopped) return "";
 			return `<span class="goh-badge badge-muted" title="${esc(c.message || "")}">
 				<i class="fa fa-hourglass-o"></i> ${__("No promise set")}</span>`;
 		}
@@ -1071,9 +1078,49 @@ class GoFixOpsHub {
 				title="${__("Promised {0}", [esc(c.promised || "")])}">
 				<i class="fa fa-clock-o"></i> <span class="goh-countdown-text">${
 					label || __("calculating…")}</span></span>${
-			c.revision_count ? `<span class="text-muted small ml-1" title="${
+			!compact && c.revision_count ? `<span class="text-muted small ml-1" title="${
 				__("The promise has been moved {0} time(s)", [c.revision_count])}">
 				(${__("revised {0}×", [c.revision_count])})</span>` : ""}`;
+	}
+
+	/** Set the promise on a ticket that has none, or move an existing one with a reason. */
+	_html_promise_control(d) {
+		const c = d.countdown || {};
+		if (c.stopped) return "";
+		const unset = c.state === "unset";
+		return `<button type="button" class="btn btn-xs btn-default goh-set-promise ml-1"
+				title="${unset
+					? __("Record the completion time promised to the customer")
+					: __("Move the promised time — a reason is required, the customer planned around it")}">
+				<i class="fa fa-calendar-check-o"></i> ${unset ? __("Set promise") : __("Move")}</button>`;
+	}
+
+	_open_promise_dialog(d) {
+		const c = d.countdown || {};
+		const unset = c.state === "unset";
+		const dlg = new frappe.ui.Dialog({
+			title: unset ? __("Promise a completion time") : __("Move the promised time"),
+			fields: [
+				{ fieldname: "promised_datetime", fieldtype: "Datetime", reqd: 1,
+					label: __("Promised completion"),
+					default: c.promised || frappe.datetime.now_datetime(),
+					description: __("The date and time given to the customer. The countdown runs against it for the whole repair.") },
+				{ fieldname: "reason", fieldtype: "Small Text", reqd: unset ? 0 : 1,
+					label: __("Reason for moving it"), depends_on: unset ? "eval:false" : "eval:true" },
+			],
+			primary_action_label: unset ? __("Set promise") : __("Move promise"),
+			primary_action: (v) => {
+				frappe.xcall(`${API}.set_promised_completion`, {
+					sr_name: d.name, promised_datetime: v.promised_datetime, reason: v.reason || "",
+				}).then((r) => {
+					dlg.hide();
+					frappe.show_alert({ message: r.changed ? __("Promise recorded") : __("Promise unchanged"), indicator: "green" });
+					this._load_detail(d.name);
+					this._load_queue();
+				});
+			},
+		});
+		dlg.show();
 	}
 
 	/** One interval for every countdown on screen, driven by the server offset. */
@@ -1258,8 +1305,10 @@ class GoFixOpsHub {
 		};
 		const hasTime = t.by_technician && t.by_technician.length;
 		const hasPromise = (d.countdown || {}).state && d.countdown.state !== "unset";
-		// A ticket with no time logged still has a deadline to show.
-		if (!hasTime && !hasPromise) return "";
+		// A ticket with no time logged still has a deadline to show — and one
+		// with no promise yet needs the control that records it. Only a closed
+		// ticket with nothing at all stays silent.
+		if (!hasTime && !hasPromise && (d.countdown || {}).stopped) return "";
 
 		const stages = Object.entries(t.by_stage || {})
 			.filter(([, h]) => h > 0)
@@ -1310,6 +1359,7 @@ class GoFixOpsHub {
 					</span>
 					${stages}
 					${this._html_countdown(d)}
+					${this._html_promise_control(d)}
 					${runningBit}
 					<div style="flex:1"></div>
 					<span class="text-muted small">${techs}</span>
@@ -2317,6 +2367,11 @@ class GoFixOpsHub {
 		// below, which a completed ticket always takes.
 		this._start_countdown_timer();
 		this._start_age_timer();
+
+		content.off("click.gohpromise").on("click.gohpromise", ".goh-set-promise", (e) => {
+			e.preventDefault();
+			this._open_promise_dialog(d);
+		});
 
 		/* ── Device photos: bound before the read-only return, because the
 		   evidence strip stays viewable on a closed ticket. ───────────── */

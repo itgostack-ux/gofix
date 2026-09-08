@@ -59,8 +59,11 @@ def get_data(filters):
 				ja.actual_hours,
 				ja.repair_outcome,
 				ja.service_order,
-				so.qc_status,
-				so.rework_count,
+				ja.service_request,
+				-- QC lives on the request now. The order is read only as a
+				-- fallback for repairs certified before the move.
+				COALESCE(NULLIF(sr.qc_status, ''), so.qc_status) AS qc_status,
+				COALESCE(NULLIF(sr.rework_count, 0), so.rework_count) AS rework_count,
 				so.is_service_order
 			FROM `tabJob Assignment` ja
 			LEFT JOIN `tabEmployee` emp ON emp.name = ja.service_engineer
@@ -82,11 +85,14 @@ def get_data(filters):
 			GROUP BY technician_id, technician
 		),
 		completed_service_orders AS (
-			SELECT DISTINCT technician_id, service_order, qc_status, rework_count
+			-- Keyed on the request, which every service Job Assignment carries.
+			-- Keying on the order meant a repair raised under the single-
+			-- document model counted for nothing: no order, no QC statistics.
+			SELECT DISTINCT technician_id, service_request, qc_status, rework_count
 			FROM scoped_assignments
 			WHERE assignment_status IN ('Completed', 'Closed')
-			  AND service_order IS NOT NULL
-			  AND is_service_order = 1
+			  AND service_request IS NOT NULL
+			  AND service_request != ''
 		),
 		service_metrics AS (
 			SELECT

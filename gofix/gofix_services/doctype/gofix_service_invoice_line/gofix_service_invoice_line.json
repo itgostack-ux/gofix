@@ -1,0 +1,40 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "creation": "2026-09-08 16:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "description": "Every invoice raised against one Service Request. A repair can be billed more than once -- an initial bill, then additional work agreed after a reopen -- and a single Link field could only ever hold the last one.",
+ "field_order": [
+  "invoice",
+  "posting_date",
+  "grand_total",
+  "outstanding_amount",
+  "column_break_1",
+  "billing_reason",
+  "reopen_sequence",
+  "docstatus_label"
+ ],
+ "fields": [
+  {"fieldname": "invoice", "fieldtype": "Link", "options": "Sales Invoice", "label": "Invoice", "in_list_view": 1, "reqd": 1, "read_only": 1, "columns": 2},
+  {"fieldname": "posting_date", "fieldtype": "Date", "label": "Date", "in_list_view": 1, "read_only": 1, "columns": 1},
+  {"fieldname": "grand_total", "fieldtype": "Currency", "label": "Amount", "in_list_view": 1, "read_only": 1, "columns": 1},
+  {"fieldname": "outstanding_amount", "fieldtype": "Currency", "label": "Outstanding", "read_only": 1},
+  {"fieldname": "column_break_1", "fieldtype": "Column Break"},
+  {"fieldname": "billing_reason", "fieldtype": "Select", "label": "Reason", "options": "Initial\nAdditional Work\nReopen\nAdjustment", "default": "Initial", "in_list_view": 1, "read_only": 1, "columns": 2},
+  {"fieldname": "reopen_sequence", "fieldtype": "Int", "label": "After Reopen #", "description": "0 for the first billing; 1 after the first reopen, and so on.", "read_only": 1},
+  {"fieldname": "docstatus_label", "fieldtype": "Data", "label": "Status", "read_only": 1, "in_list_view": 1, "columns": 1}
+ ],
+ "istable": 1,
+ "links": [],
+ "modified": "2026-09-08 16:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "GoFix Services",
+ "name": "GoFix Service Invoice Line",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "idx",
+ "sort_order": "ASC",
+ "states": []
+}

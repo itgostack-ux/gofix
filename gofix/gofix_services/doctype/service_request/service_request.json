@@ -191,6 +191,15 @@
   "section_repair_tracking",
   "actual_completion_date",
   "service_invoice",
+  "billing_lock_section",
+  "service_invoices",
+  "is_billing_locked",
+  "reopen_count",
+  "column_break_reopen",
+  "reopen_active",
+  "reopen_reason",
+  "last_reopened_by",
+  "last_reopened_at",
   "data_backup_disclaimer",
   "unclaimed_flag",
   "column_break_repair_track",
@@ -1092,6 +1101,73 @@
    "read_only": 1
   },
   {
+   "fieldname": "billing_lock_section",
+   "fieldtype": "Section Break",
+   "label": "Billing & Reopen",
+   "description": "A repair is frozen once it has been billed. Reopening it is a recorded, reversible act rather than an edit."
+  },
+  {
+   "fieldname": "service_invoices",
+   "fieldtype": "Table",
+   "options": "GoFix Service Invoice Line",
+   "label": "Invoices",
+   "read_only": 1,
+   "description": "Every invoice raised against this repair. One repair may be billed more than once when work is added after a reopen.",
+   "allow_on_submit": 1
+  },
+  {
+   "fieldname": "is_billing_locked",
+   "fieldtype": "Check",
+   "default": "0",
+   "label": "Billing Locked",
+   "read_only": 1,
+   "description": "Set the moment a submitted invoice exists. While set, this request and its Service Order cannot be edited.",
+   "allow_on_submit": 1
+  },
+  {
+   "fieldname": "reopen_count",
+   "fieldtype": "Int",
+   "default": "0",
+   "label": "Times Reopened",
+   "read_only": 1,
+   "allow_on_submit": 1
+  },
+  {
+   "fieldname": "column_break_reopen",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "reopen_active",
+   "fieldtype": "Check",
+   "default": "0",
+   "label": "Reopen In Progress",
+   "read_only": 1,
+   "description": "Lifts the billing lock so the repair can be worked again. Cleared when it is billed.",
+   "allow_on_submit": 1
+  },
+  {
+   "fieldname": "reopen_reason",
+   "fieldtype": "Small Text",
+   "label": "Current Reopen Reason",
+   "read_only": 1,
+   "allow_on_submit": 1
+  },
+  {
+   "fieldname": "last_reopened_by",
+   "fieldtype": "Link",
+   "options": "User",
+   "label": "Last Reopened By",
+   "read_only": 1,
+   "allow_on_submit": 1
+  },
+  {
+   "fieldname": "last_reopened_at",
+   "fieldtype": "Datetime",
+   "label": "Last Reopened At",
+   "read_only": 1,
+   "allow_on_submit": 1
+  },
+  {
    "allow_on_submit": 1,
    "default": "0",
    "fieldname": "data_backup_disclaimer",
@@ -1524,7 +1600,7 @@
  "index_web_pages_for_search": 1,
  "is_submittable": 1,
  "links": [],
- "modified": "2026-09-01 19:00:16.000000",
+ "modified": "2026-09-08 17:30:00.000000",
  "modified_by": "Administrator",
  "module": "GoFix Services",
  "name": "Service Request",

@@ -2465,14 +2465,16 @@ class GoFixOpsHub {
 				frappe.xcall(`${API}.accept_and_create_service_order`, { sr_name: d.name })
 					.then((r) => {
 						frappe.show_alert({
-							message: __("Accepted — Service Order {0} created.", [r.service_order]),
+							message: r.service_order
+								? __("Accepted — Service Order {0} created.", [r.service_order])
+								: __("Accepted — the repair is on the floor."),
 							indicator: "green",
 						});
 						self._refresh_all();
 					})
 					.catch((err) => {
 						frappe.msgprint({ title: __("Could not accept"), message: err.message || String(err), indicator: "red" });
-						btn.prop("disabled", false).html(`<i class="fa fa-check"></i> ${__("Accept & Create Service Order")}`);
+						btn.prop("disabled", false).html(`<i class="fa fa-check"></i> ${__("Accept Job & Approve Estimate")}`);
 					});
 			});
 		}
@@ -3627,13 +3629,13 @@ class GoFixOpsHub {
 			<p class="text-muted" style="font-size:12px">
 				<b>${__("Take In")}</b> ${__("opens the job and sends it to Analysis. Nothing is quoted or ordered yet — the Service Order is raised once the customer confirms the estimate.")}
 				<br>
-				<b>${__("Accept & Create Service Order")}</b> ${__("additionally records estimate v1 as customer-approved and raises the Service Order up front. Use it only when the price is already agreed.")}
+				<b>${__("Accept Job & Approve Estimate")}</b> ${__("additionally records estimate v1 as customer-approved, so the job goes straight to the floor at an agreed price. Use it only when the price is already agreed.")}
 			</p>
 			<button class="btn btn-primary" id="goh-open-job">
 				<i class="fa fa-inbox"></i> ${__("Take In — start Analysis")}
 			</button>
 			<button class="btn btn-default" id="goh-accept-create-so" style="margin-left:6px">
-				<i class="fa fa-check"></i> ${__("Accept & Create Service Order")}
+				<i class="fa fa-check"></i> ${__("Accept Job & Approve Estimate")}
 			</button>
 		</div>`;
 	}

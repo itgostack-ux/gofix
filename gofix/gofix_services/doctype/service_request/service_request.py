@@ -1268,12 +1268,30 @@ class ServiceRequest(Document):
 	def create_service_order(self):
 		"""Create the Service Order (Sales Order) for this request, once.
 
-		Idempotent by design: several paths legitimately try to raise the order
-		for the same ticket — the post-submit handler, the accept hook, and
-		estimate approval — and whichever gets there first wins. Re-reading from
-		the database matters because the in-memory doc that calls this is often
-		the STALE one: a hook fired during a nested save already wrote the link.
+		OPTIONAL SINCE SEP-2026 and off by default. The repair is described by
+		ONE operational document now -- this Service Request -- and the invoice
+		is raised from it. The Sales Order had accreted 104 custom fields the
+		request did not have, duplicated 15 that it did, was never updated after
+		creation, and was never actually billed through: 14 of 15 submitted
+		service orders sat at 0% billed while a separate paid invoice hung off
+		the request. It described the same repair a second time and the two
+		drifted.
+
+		Existing orders are untouched and still readable. New repairs skip this
+		unless GoFix Settings.create_service_order is switched back on, for a
+		site that genuinely needs an ERPNext order book of committed-but-
+		unbilled work.
 		"""
+		from gofix.config import get_setting
+
+		if not get_setting("create_service_order", 0):
+			return None
+
+		# Idempotent by design: several paths legitimately try to raise the order
+		# for the same ticket — the post-submit handler, the accept hook, and
+		# estimate approval — and whichever gets there first wins. Re-reading from
+		# the database matters because the in-memory doc that calls this is often
+		# the STALE one: a hook fired during a nested save already wrote the link.
 		existing = self.service_order or frappe.db.get_value(
 			"Service Request", self.name, "service_order"
 		)
@@ -1553,11 +1571,29 @@ class ServiceRequest(Document):
 		return _get_scoped_open_requests(self)
 
 	def create_service_invoice(self):
-		"""Create Sales Invoice for completed service with service items and spare parts"""
-		if self.get("service_invoice"):
-			return
+		"""Create a Sales Invoice for this repair.
+
+		A repair may be billed more than once: an initial bill, then additional
+		work agreed after a reopen. Billing is refused only while the repair is
+		locked -- i.e. billed and not reopened -- so a second bill requires a
+		recorded reopen rather than being silently blocked or silently allowed.
+		"""
+		from gofix.gofix_services.billing_lock import is_locked
+
+		if is_locked(self):
+			frappe.throw(
+				_("This repair is already billed. Reopen it with a reason before "
+				  "billing again."),
+				title=_("Repair Is Billed"),
+			)
 		
-		if not self.is_completed_status():
+		# A repair that has already been billed reads "Invoiced", not "Completed",
+		# so the completion gate would refuse every subsequent bill -- the exact
+		# case a reopen exists to allow. Additional work agreed after a recorded
+		# reopen is billable; the reopen is the authorisation.
+		reopened_for_more_work = bool(self.get("reopen_active")) and bool(
+			self.get("service_invoice"))
+		if not self.is_completed_status() and not reopened_for_more_work:
 			frappe.throw(_("Service Invoice can only be created for Completed requests"), title=_("Service Request Error"))
 
 		# Last stop before the device goes home: if this repair touched the
@@ -1571,8 +1607,12 @@ class ServiceRequest(Document):
 		# passed, and every identified issue is closed — fixed or rejected with
 		# a reason. Without the second check a ticket could be invoiced with a
 		# fault still open, because a Skipped repair used to satisfy the QC gate.
-		qc_status = ""
-		if self.get("service_order"):
+		# The request is the operational document now, so its own QC verdict is
+		# the one that counts. A legacy repair that predates the move still
+		# carries its verdict on the order, so fall back to that rather than
+		# refusing to bill work that genuinely passed.
+		qc_status = self.get("qc_status") or ""
+		if not qc_status and self.get("service_order"):
 			qc_status = frappe.db.get_value("Sales Order", self.service_order, "qc_status") or ""
 		if qc_status != "Pass":
 			frappe.throw(
@@ -1687,12 +1727,20 @@ class ServiceRequest(Document):
 
 		invoice.submit()
 		
-		self._set_optional_field("service_invoice", invoice.name)
 		self.db_set("decision", "Invoiced", update_modified=True)
 
-		from gofix.gofix_services.api import auto_close_service_order_after_billing
+		# Register the bill and lock the repair. A repair may be billed more
+		# than once -- additional work agreed after a reopen -- so the register
+		# is a table, and `service_invoice` keeps pointing at the first bill for
+		# the code that still reads it.
+		from gofix.gofix_services.billing_lock import register_invoice
 
-		auto_close_service_order_after_billing(service_order=self.service_order)
+		register_invoice(self, invoice.name)
+
+		if self.get("service_order"):
+			from gofix.gofix_services.api import auto_close_service_order_after_billing
+
+			auto_close_service_order_after_billing(service_order=self.service_order)
 
 		frappe.msgprint(_("Service Invoice {0} created successfully").format(invoice.name))
 

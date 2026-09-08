@@ -84,7 +84,8 @@ def get_data(filters):
 			sr.transfer_status, sr.current_location, sr.transferred_to_store,
 			sr.estimated_cost, sr.service_invoice, sr.service_order,
 			sr.actual_completion_date,
-			so.qc_status,
+			-- The request is the QC document; the order is the legacy fallback.
+			COALESCE(NULLIF(sr.qc_status, ''), so.qc_status) AS qc_status,
 			si.grand_total AS billed_amount, si.status AS invoice_status,
 			(
 				SELECT emp.employee_name

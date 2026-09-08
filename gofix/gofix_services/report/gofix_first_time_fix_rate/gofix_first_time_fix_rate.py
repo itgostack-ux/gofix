@@ -117,12 +117,21 @@ def _technician_rows(conditions, params):
 			GROUP BY sl2.parent
 		) qc ON qc.parent = sr.name
 		LEFT JOIN (
-			SELECT so.service_request AS parent, COUNT(*) AS fails
-			FROM `tabGoFix QC Checklist` cl
-			JOIN `tabSales Order` so ON so.name = cl.parent
-			WHERE cl.parenttype = 'Sales Order' AND cl.result = 'Fail'
-			  AND IFNULL(so.service_request, '') != ''
-			GROUP BY so.service_request
+			-- Failed checks, wherever they were recorded. New repairs answer
+			-- their checklist on the request itself; the 198 older ones
+			-- answered it on their Sales Order, and both are real history.
+			SELECT ticket AS parent, COUNT(*) AS fails FROM (
+				SELECT cl.parent AS ticket
+				FROM `tabGoFix QC Checklist` cl
+				WHERE cl.parenttype = 'Service Request' AND cl.result = 'Fail'
+				UNION ALL
+				SELECT so.service_request AS ticket
+				FROM `tabGoFix QC Checklist` cl
+				JOIN `tabSales Order` so ON so.name = cl.parent
+				WHERE cl.parenttype = 'Sales Order' AND cl.result = 'Fail'
+				  AND IFNULL(so.service_request, '') != ''
+			) qc_fails
+			GROUP BY ticket
 		) qcl ON qcl.parent = sr.name
 
 		WHERE {' AND '.join(conditions)}
@@ -212,13 +221,21 @@ def get_data(filters):
 		) qc ON qc.parent = sr.name
 
 		LEFT JOIN (
-			SELECT so.service_request AS parent, COUNT(*) AS fails
-			FROM `tabGoFix QC Checklist` cl
-			JOIN `tabSales Order` so ON so.name = cl.parent
-			WHERE cl.parenttype = 'Sales Order'
-			  AND cl.result = 'Fail'
-			  AND IFNULL(so.service_request, '') != ''
-			GROUP BY so.service_request
+			-- Failed checks, wherever they were recorded. New repairs answer
+			-- their checklist on the request itself; the 198 older ones
+			-- answered it on their Sales Order, and both are real history.
+			SELECT ticket AS parent, COUNT(*) AS fails FROM (
+				SELECT cl.parent AS ticket
+				FROM `tabGoFix QC Checklist` cl
+				WHERE cl.parenttype = 'Service Request' AND cl.result = 'Fail'
+				UNION ALL
+				SELECT so.service_request AS ticket
+				FROM `tabGoFix QC Checklist` cl
+				JOIN `tabSales Order` so ON so.name = cl.parent
+				WHERE cl.parenttype = 'Sales Order' AND cl.result = 'Fail'
+				  AND IFNULL(so.service_request, '') != ''
+			) qc_fails
+			GROUP BY ticket
 		) qcl ON qcl.parent = sr.name
 
 		LEFT JOIN (

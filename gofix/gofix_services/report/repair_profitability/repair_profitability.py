@@ -18,7 +18,7 @@ def execute(filters=None):
 
 def get_columns():
 	return [
-		{"label": _("Service Order"), "fieldname": "name", "fieldtype": "Link", "options": "Sales Order", "width": 160},
+		{"label": _("Repair"), "fieldname": "name", "fieldtype": "Link", "options": "Service Request", "width": 175},
 		{"label": _("Customer"), "fieldname": "customer_name", "fieldtype": "Data", "width": 160},
 		{"label": _("Device"), "fieldname": "device_model", "fieldtype": "Data", "width": 140},
 		{"label": _("Issue"), "fieldname": "issue_category", "fieldtype": "Data", "width": 120},
@@ -34,44 +34,56 @@ def get_columns():
 
 
 def get_data(filters):
-	conditions = "WHERE so.is_service_order = 1 AND so.docstatus = 1"
+	# Anchored on the repair itself. Anchoring on the Sales Order meant this
+	# report only ever saw repairs that happened to raise one, so it would have
+	# gone quiet as the single-document flow took over.
+	conditions = "WHERE sr.docstatus = 1"
 	params = {}
 
 	if filters and filters.get("company"):
-		conditions += " AND so.company = %(company)s"
+		conditions += " AND sr.company = %(company)s"
 		params["company"] = filters["company"]
 	if filters and filters.get("from_date"):
-		conditions += " AND so.transaction_date >= %(from_date)s"
+		conditions += " AND DATE(sr.creation) >= %(from_date)s"
 		params["from_date"] = filters["from_date"]
 	if filters and filters.get("to_date"):
-		conditions += " AND so.transaction_date <= %(to_date)s"
+		conditions += " AND DATE(sr.creation) <= %(to_date)s"
 		params["to_date"] = filters["to_date"]
 	if filters and filters.get("warehouse"):
-		conditions += " AND so.set_warehouse = %(warehouse)s"
+		conditions += " AND sr.source_warehouse = %(warehouse)s"
 		params["warehouse"] = filters["warehouse"]
 
-	# Tier 4: fail-closed scope on Sales Order primary warehouse.
-	scope = scope_where_clause(warehouse_field="so.set_warehouse")
+	# Tier 4: fail-closed scope on the repair's own endpoints.
+	scope = scope_where_clause(
+		warehouse_field="sr.source_warehouse",
+		extra_warehouse_fields=("sr.transferred_to_store", "so.set_warehouse"),
+	)
 	if scope is not None:
 		conditions += f" AND {scope}"
 
 	query = f"""
 		SELECT
-			so.name,
-			so.customer_name,
-			so.device_model,
-			so.issue_category,
-			COALESCE(so.grand_total, so.total, 0) as revenue,
-			COALESCE(so.spare_parts_cost, 0) as spare_parts_cost,
-			COALESCE(so.labor_cost, 0) as labor_cost,
-			COALESCE(so.total_repair_cost, 0) as total_repair_cost,
-			COALESCE(so.repair_margin, 0) as repair_margin,
-			COALESCE(so.repair_margin_pct, 0) as repair_margin_pct,
-			COALESCE(so.cost_bearer, '') as cost_bearer,
-			COALESCE(so.warranty_status, '') as warranty_status
-		FROM `tabSales Order` so
+			sr.name,
+			sr.customer_name,
+			COALESCE(sr.device_model, so.device_model, '') as device_model,
+			COALESCE(sr.issue_category, so.issue_category, '') as issue_category,
+			COALESCE(NULLIF(sr.actual_billed, 0), so.grand_total, so.total, 0) as revenue,
+			COALESCE(NULLIF(sr.spare_parts_cost, 0), so.spare_parts_cost, 0)
+				as spare_parts_cost,
+			COALESCE(NULLIF(sr.labor_cost, 0), so.labor_cost, 0) as labor_cost,
+			COALESCE(NULLIF(sr.total_repair_cost, 0), so.total_repair_cost, 0)
+				as total_repair_cost,
+			COALESCE(NULLIF(sr.repair_margin, 0), so.repair_margin, 0) as repair_margin,
+			COALESCE(NULLIF(sr.repair_margin_pct, 0), so.repair_margin_pct, 0)
+				as repair_margin_pct,
+			COALESCE(NULLIF(sr.cost_bearer, ''), so.cost_bearer, '') as cost_bearer,
+			COALESCE(NULLIF(sr.warranty_status, ''), so.warranty_status, '')
+				as warranty_status
+		FROM `tabService Request` sr
+		LEFT JOIN `tabSales Order` so
+			ON so.name = sr.service_order AND so.is_service_order = 1
 		{conditions}
-		ORDER BY so.transaction_date DESC
+		ORDER BY sr.creation DESC
 	"""
 
 	return frappe.db.sql(query, params, as_dict=True)

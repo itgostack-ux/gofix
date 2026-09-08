@@ -96,6 +96,13 @@ after_migrate = [
     "gofix.setup.workflow.ensure_service_order_workflow",
     "gofix.setup.employee_custom_fields.create_employee_custom_fields",
     "gofix.setup.service_request_ops_fields.create_service_request_ops_fields",
+    # The QC verdict and the whole handover used to live on the Sales Order.
+    # They belong on the ticket that holds the device, which is now the single
+    # operational document.
+    "gofix.setup.service_request_delivery_fields.create_service_request_delivery_fields",
+    # Costing followed for the same reason: every input was already the
+    # request's, and two management reports read the results.
+    "gofix.setup.service_request_costing_fields.create_service_request_costing_fields",
     "gofix.setup.sales_invoice_custom_fields.create_sales_invoice_custom_fields",
     "gofix.setup.competitive_ops_fields.create_competitive_ops_fields",
     "gofix.setup.material_request_custom_fields.create_material_request_custom_fields",
@@ -139,9 +146,13 @@ doc_events = {
 		"validate": "gofix.catalogue_sync.validate_solution_spare_mapping",
 	},
 	"Sales Order": {
-		"validate": "gofix.overrides.sales_order.validate_service_order_before_submit",
+		"validate": [
+			"gofix.overrides.sales_order.validate_service_order_before_submit",
+			"gofix.gofix_services.billing_lock.guard_service_order",
+		],
+		"before_update_after_submit": "gofix.gofix_services.billing_lock.guard_service_order",
 		"on_update": "gofix.overrides.sales_order.update_service_request_on_qc",
-        "on_update_after_submit": "gofix.overrides.sales_order.update_service_request_on_qc",
+		"on_update_after_submit": "gofix.overrides.sales_order.update_service_request_on_qc",
 		"on_submit": "gofix.overrides.sales_order.update_service_request_on_qc",
 		"on_cancel": "gofix.overrides.sales_order.update_service_request_on_qc"
 	},
@@ -183,7 +194,15 @@ doc_events = {
 		# so a ticket waiting for it is released either way.
 		"on_submit": "gofix.purchase_api.allocate_transferred_spares_to_tickets",
 	},
+	# One block only: doc_events is a plain dict, so a second "Service Request"
+	# key would silently discard the first.
 	"Service Request": {
+		# A billed repair is frozen until it is reopened with a recorded reason.
+		# Service Request is submittable and every field the lock protects is
+		# allow_on_submit, so those edits run before_update_after_submit and
+		# never validate -- the guard has to sit on both or it only sees drafts.
+		"validate": "gofix.gofix_services.billing_lock.guard_service_request",
+		"before_update_after_submit": "gofix.gofix_services.billing_lock.guard_service_request",
 		"on_update": "gofix.gofix_services.whatsapp_notifications.on_service_request_update",
 		"on_update_after_submit": [
 			"gofix.gofix_services.doctype.service_request.service_request.ensure_service_order_on_accept",

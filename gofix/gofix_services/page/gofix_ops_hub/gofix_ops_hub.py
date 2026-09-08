@@ -16,7 +16,7 @@ import frappe
 from frappe import _
 from frappe.utils import add_days, cint, flt, get_datetime, getdate, now_datetime, nowdate, time_diff_in_hours
 
-from gofix.config import get_int_setting, get_user_roles, has_role_setting, require_role_setting
+from gofix.config import get_int_setting, get_setting, get_user_roles, has_role_setting, require_role_setting
 from gofix.gofix_services.store_context import (
 	active_company as _active_company,
 	get_store_options as _get_store_options,
@@ -755,8 +755,9 @@ def accept_and_create_service_order(sr_name) -> dict:
 	Walks the sanctioned chain in one step — issue line (seeded from the
 	header category when diagnosis hasn't added any), analysis confirmed,
 	repairability Repairable, estimate v1 recorded as customer-approved —
-	which births the Service Order (SAP notification→order moment). Every
-	step lands in the ops stage log / estimate versions for audit.
+	which puts the job on the floor as an accepted, priced repair. Every step
+	lands in the ops stage log / estimate versions for audit. A Service Order
+	is raised too only if the legacy two-document flow is switched on.
 
 	This is the REMOTE path — a request raised by phone or web, where someone
 	has to decide whether to take the job at all. A counter walk-in uses
@@ -802,7 +803,10 @@ def accept_and_create_service_order(sr_name) -> dict:
 	orchestration.customer_approve_estimate(sr_name, remarks=_("Accepted at Ops Hub — express acceptance"))
 
 	sr.reload()
-	if not sr.service_order:
+	# Under the single-document model the Service Request IS the operational
+	# document, so there is no order to check for. Only demand one when the
+	# legacy two-document flow is switched back on.
+	if get_setting("create_service_order", 0) and not sr.service_order:
 		frappe.throw(_("Acceptance completed but Service Order was not created — check estimate gates."))
 
 	updates = {"decision": "Accepted", "walkin_status": "Accepted"}
@@ -810,7 +814,7 @@ def accept_and_create_service_order(sr_name) -> dict:
 		updates["accepted_by"] = frappe.session.user
 	sr.db_set(updates, update_modified=False)
 
-	return {"ok": True, "service_order": sr.service_order, "estimate": estimate}
+	return {"ok": True, "service_order": sr.get("service_order"), "estimate": estimate}
 
 
 @frappe.whitelist(methods=["POST"])
@@ -1102,42 +1106,38 @@ def get_ticket_detail(sr_name) -> dict:
 		else:
 			a["waiting_hours"] = 0
 
-	# Fetch QC status from linked Service Order
-	qc_status = ""
-	qc_checked_by = ""
-	qc_datetime = ""
-	qc_checklist = []
+	# QC state comes off the request, which is the document being certified.
+	# A legacy repair whose verdict was only ever written on its Sales Order
+	# still reads through -- the request was backfilled, and checklist_rows
+	# falls back to the order for the answers themselves.
+	from gofix.gofix_services import qc as qc_module
+
+	qc_status = sr.get("qc_status") or ""
+	qc_checked_by = sr.get("qc_checked_by") or ""
+	qc_datetime = str(sr.get("qc_datetime") or "")
+	rework_count = cint(sr.get("rework_count"))
 	so_workflow_state = ""
-	rework_count = 0
 	if sr.service_order:
 		so_data = frappe.db.get_value(
 			"Sales Order", sr.service_order,
 			["qc_status", "qc_checked_by", "qc_datetime", "workflow_state", "rework_count"],
 			as_dict=True,
 		) or {}
-		qc_status = so_data.get("qc_status") or ""
-		qc_checked_by = so_data.get("qc_checked_by") or ""
-		qc_datetime = str(so_data.get("qc_datetime") or "")
 		so_workflow_state = so_data.get("workflow_state") or ""
-		rework_count = cint(so_data.get("rework_count"))
+		# Fall back to the order only where the request has nothing to say.
+		qc_status = qc_status or (so_data.get("qc_status") or "")
+		qc_checked_by = qc_checked_by or (so_data.get("qc_checked_by") or "")
+		qc_datetime = qc_datetime or str(so_data.get("qc_datetime") or "")
+		rework_count = rework_count or cint(so_data.get("rework_count"))
 
-		# Fetch QC checklist from SO
-		qc_rows = frappe.get_all(
-			"GoFix QC Checklist",
-			filters={"parent": sr.service_order},
-			fields=["name", "check_name", "result", "remarks",
-				"linked_solution", "fail_reason", "rework_required", "rework_iteration"],
-			order_by="idx asc",
-			limit_page_length=related_limit + 1,
+	qc_checklist = qc_module.checklist_rows(sr.name, limit=related_limit + 1)
+	if len(qc_checklist) > related_limit:
+		frappe.throw(
+			_("Ticket {0} has more than the configured {1} QC checks.").format(
+				sr.name, related_limit
+			),
+			frappe.ValidationError,
 		)
-		if len(qc_rows) > related_limit:
-			frappe.throw(
-				_("Ticket {0} has more than the configured {1} QC checks.").format(
-					sr.name, related_limit
-				),
-				frappe.ValidationError,
-			)
-		qc_checklist = qc_rows
 
 	status_log = _build_status_timeline(sr)
 
@@ -1156,7 +1156,7 @@ def get_ticket_detail(sr_name) -> dict:
 		"assignment_count": len([a for a in assignments if a.assignment_status != "Cancelled"]),
 		"qc_status": qc_status,
 		"all_solutions_done": all_solutions_done,
-		"rework_count": rework_count if sr.service_order else 0,
+		"rework_count": rework_count,
 	}
 
 	return {
@@ -1261,14 +1261,14 @@ def get_ticket_detail(sr_name) -> dict:
 		"qc_checklist": qc_checklist,
 		"so_workflow_state": so_workflow_state,
 		"all_solutions_done": all_solutions_done,
-		"rework_count": rework_count if sr.service_order else 0,
+		"rework_count": rework_count,
 		"ops_stage": _derive_stage(sr_dict),
 	}
 
 
 # ── Step 1: Technical Analysis ────────────────────────────────────────────────
 
-def _invalidate_qc_checklist(service_order) -> int:
+def _invalidate_qc_checklist(parent) -> int:
 	"""Clear recorded QC results so the next QC starts from a blank checklist.
 
 	A pass recorded before a late issue was found certified a smaller scope.
@@ -1277,7 +1277,7 @@ def _invalidate_qc_checklist(service_order) -> int:
 	the checklist template does not need rebuilding, only re-answering.
 	"""
 	rows = frappe.get_all(
-		"GoFix QC Checklist", filters={"parent": service_order}, pluck="name"
+		"GoFix QC Checklist", filters={"parent": parent}, pluck="name"
 	)
 	for name in rows:
 		frappe.db.set_value(
@@ -1351,7 +1351,9 @@ def save_issue_lines(sr_name, issues_json) -> dict:
 			)
 		)
 		if not gaps["ready_for_qc"] and qc_reached:
-			_invalidate_qc_checklist(sr.service_order)
+			_invalidate_qc_checklist(sr.name)
+			if sr.service_order:
+				_invalidate_qc_checklist(sr.service_order)
 			frappe.db.set_value("Sales Order", sr.service_order, {
 				"qc_status": "Pending",
 				"workflow_state": "Work in Progress",
@@ -3906,16 +3908,15 @@ def get_issue_categories() -> list:
 
 @frappe.whitelist(methods=["POST"])
 def submit_for_qc(sr_name) -> dict:
-	"""Mark all solutions as completed and trigger QC on the Service Order.
+	"""Close out the work and open QC on the Service Request.
 
-	This calls the existing workflow: sets qc_status=Awaiting on the SO and
-	populates the QC checklist template.
+	Sets qc_status=Awaiting on the request and lays out the checklist its
+	solutions call for. A legacy Sales Order, where one still exists, is walked
+	through its own workflow afterwards so it cannot contradict the ticket.
 	"""
 	_assert_sr_permission(sr_name, "write")
 
 	sr = frappe.get_doc("Service Request", sr_name)
-	if not sr.service_order:
-		frappe.throw(_("No Service Order linked to {0}. Cannot submit for QC.").format(sr_name), title=_("Validation Error"))
 
 	# QC certifies the work that was selected. An issue nobody worked on is
 	# recorded on the ticket for the sign-off to see, but it does not block:
@@ -4002,50 +4003,67 @@ def submit_for_qc(sr_name) -> dict:
 			ja.flags.ignore_validate_update_after_submit = True
 			ja.save()
 
-	# Trigger QC on the Sales Order using the existing workflow helper
-	so = frappe.get_doc("Sales Order", sr.service_order)
+	from gofix.gofix_services import qc as qc_module
 
-	if not getattr(so, "is_service_order", False):
-		frappe.throw(_("{0} is not a Service Order.").format(sr.service_order), title=_("Validation Error"))
+	opened = qc_module.open_qc(sr)
+	if not opened["ok"]:
+		frappe.throw(
+			_("QC cannot open — this work is still open: {0}.").format(
+				", ".join(opened["open_solutions"]) or _("no solutions selected")),
+			title=_("Unfinished Work"),
+		)
 
-	from gofix.overrides.sales_order import move_service_order_to_qc_if_ready
+	if sr.service_order:
+		try:
+			so = frappe.get_doc("Sales Order", sr.service_order)
+			if getattr(so, "is_service_order", False):
+				from gofix.overrides.sales_order import move_service_order_to_qc_if_ready
 
-	move_service_order_to_qc_if_ready(so)
+				move_service_order_to_qc_if_ready(so)
+		except Exception:
+			frappe.log_error(frappe.get_traceback(),
+				f"submit_for_qc: could not mirror onto {sr.service_order}")
 
 	_log_ops_stage(sr_name, "repair", "qc")
 	return {
 		"ok": True,
-		"qc_status": frappe.db.get_value("Sales Order", sr.service_order, "qc_status") or "Awaiting",
+		"qc_status": frappe.db.get_value("Service Request", sr_name, "qc_status") or "Awaiting",
 		"stage": "qc",
+		"checks": opened.get("checks", 0),
 	}
 
 
 @frappe.whitelist(methods=["POST"])
 def save_qc_results(sr_name, checklist_json) -> dict:
-	"""Save QC checklist results on the linked Sales Order."""
+	"""Save the QC checklist answers on the Service Request."""
 	frappe.has_permission("Service Request", ptype="submit", throw=True)
 	_assert_sr_permission(sr_name, "write")
 
+	from gofix.gofix_services import qc as qc_module
+
 	sr = frappe.get_doc("Service Request", sr_name)
-	if not sr.service_order:
-		frappe.throw(_("No Service Order linked to {0}.").format(sr_name), title=_("Validation Error"))
-
 	checklist = json.loads(checklist_json) if isinstance(checklist_json, str) else checklist_json
+	saved = qc_module.save_results(sr, checklist)
 
-	so = frappe.get_doc("Sales Order", sr.service_order)
-	for row in so.get("qc_checklist", []):
-		for entry in checklist:
-			if row.name == entry.get("name") or row.check_name == entry.get("check_name"):
-				row.result = entry.get("result", row.result)
-				row.remarks = entry.get("remarks", row.remarks or "")
+	# Legacy tickets answered their checks on the order; keep writing there so
+	# a half-migrated repair does not lose the answers it already had.
+	if not saved and sr.service_order:
+		so = frappe.get_doc("Sales Order", sr.service_order)
+		for row in so.get("qc_checklist", []):
+			for entry in checklist:
+				if row.name == entry.get("name") or row.check_name == entry.get("check_name"):
+					row.result = entry.get("result", row.result)
+					row.remarks = entry.get("remarks", row.remarks or "")
+					saved += 1
+		so.flags.ignore_validate_update_after_submit = True
+		so.save()
 
-	so.save()
-	return {"ok": True}
+	return {"ok": True, "saved": saved}
 
 
 @frappe.whitelist(methods=["POST"])
 def complete_qc(sr_name, qc_result) -> dict:
-	"""Mark QC as Pass or Fail on the Service Order.
+	"""Record QC Pass or Fail on the Service Request.
 
 	Pass: triggers SR → Completed, sends to invoice.
 	Fail: sets qc_status=Fail, ops stage becomes 'rework'.
@@ -4053,12 +4071,12 @@ def complete_qc(sr_name, qc_result) -> dict:
 	frappe.has_permission("Service Request", ptype="submit", throw=True)
 	_assert_sr_permission(sr_name, "write")
 
+	from gofix.gofix_services import qc as qc_module
+
 	if qc_result not in ("Pass", "Fail"):
 		frappe.throw(_("QC result must be Pass or Fail."), title=_("Validation Error"))
 
 	sr = frappe.get_doc("Service Request", sr_name)
-	if not sr.service_order:
-		frappe.throw(_("No Service Order linked to {0}.").format(sr_name), title=_("Validation Error"))
 
 	# Only a PASS is gated. A pass certifies the repair, so unfinished work must
 	# block it. A FAIL is the rejection — it is how a device gets sent BACK to be
@@ -4086,65 +4104,31 @@ def complete_qc(sr_name, qc_result) -> dict:
 		# rejection. It is re-checked on the pass that eventually certifies it.
 		_assert_removed_part_details_complete(sr)
 
-	so = frappe.get_doc("Sales Order", sr.service_order)
-	# A pass is a sign-off. Where a checklist exists it must be answered — the hub
-	# offers Pass/Fail as soon as the QC step opens, which let a ticket be
+	# A pass is a sign-off. Where a checklist exists it must be answered -- the
+	# hub offers Pass/Fail as soon as the QC step opens, which let a ticket be
 	# certified with the checklist still reading "No QC checklist found".
-	# A Fail stays open — a technician must be able to reject a device without
+	# A Fail stays open: a technician must be able to reject a device without
 	# first ticking every box.
 	if qc_result == "Pass":
-		checks = frappe.get_all(
-			"GoFix QC Checklist",
-			filters={"parent": sr.service_order},
-			fields=["check_name", "result", "is_mandatory"],
-		)
-		# No checklist at all is not a failure to inspect — it means no QC
-		# template matched this ticket's solutions, so there is nothing to
-		# answer. Blocking the pass there strands the repair: the checklist can
-		# never appear, and the invoice can never be raised. The sign-off is
-		# recorded on the ticket either way.
-		#
-		# A checklist that DOES exist is a different matter, and the rules below
-		# still hold: every check answered, and no Fail among them.
-		if not checks:
-			frappe.msgprint(
-				_("No QC checklist applies to this ticket, so the pass is recorded "
-				  "on your sign-off alone."),
-				indicator="orange",
-				alert=True,
-			)
-		unanswered = [c.check_name for c in checks if not (c.result or "").strip()]
-		if unanswered:
-			frappe.throw(
-				_("QC cannot pass with unanswered checks: {0}.").format(", ".join(unanswered)),
-				title=_("QC Checklist Incomplete"),
-			)
-		failed = [c.check_name for c in checks if (c.result or "") == "Fail"]
-		if failed:
-			frappe.throw(
-				_("These checks are marked Fail, so QC cannot be passed: {0}. "
-				  "Record a QC Fail instead, or re-check them after rework.").format(
-					", ".join(failed)
-				),
-				title=_("Failed Checks Present"),
-			)
+		qc_module.assert_can_pass(sr)
 
-	so.db_set("qc_status", qc_result, update_modified=True)
-	so.db_set("qc_checked_by", frappe.session.user, update_modified=False)
-	so.db_set("qc_datetime", now_datetime(), update_modified=False)
+	# The verdict lands on the request and is mirrored onto a legacy order.
+	qc_module.record_verdict(sr, qc_result)
+
+	if sr.service_order:
+		frappe.db.set_value(
+			"Sales Order", sr.service_order,
+			{"workflow_state": "QC Pass" if qc_result == "Pass" else "QC Fail"},
+			update_modified=False)
 
 	if qc_result == "Pass":
-		so.db_set("workflow_state", "QC Pass", update_modified=False)
-		# The existing hook update_service_request_on_qc should fire,
-		# but set Completed explicitly as safety net:
 		if sr.decision != "Completed":
+			sr.flags.ignore_billing_lock = True
 			sr.db_set("decision", "Completed", update_modified=True)
 		if frappe.db.has_column("Service Request", "workflow_state"):
 			frappe.db.set_value("Service Request", sr_name, "workflow_state", "Completed", update_modified=False)
-	else:
-		so.db_set("workflow_state", "QC Fail", update_modified=False)
-		if frappe.db.has_column("Service Request", "workflow_state"):
-			frappe.db.set_value("Service Request", sr_name, "workflow_state", "In Service", update_modified=False)
+	elif frappe.db.has_column("Service Request", "workflow_state"):
+		frappe.db.set_value("Service Request", sr_name, "workflow_state", "In Service", update_modified=False)
 
 	stage = "invoice" if qc_result == "Pass" else "rework"
 	_log_ops_stage(sr_name, "qc", stage)
@@ -5503,9 +5487,14 @@ def create_ops_hub_invoice(sr_name, remote_otp=None) -> dict:
 			updates[optional_col] = "Invoiced"
 	sr.db_set(updates, update_modified=True)
 
-	from gofix.gofix_services.api import auto_close_service_order_after_billing
+	from gofix.gofix_services.billing_lock import register_invoice
 
-	auto_close_service_order_after_billing(service_request=sr_name)
+	register_invoice(sr, inv.name)
+
+	if sr.get("service_order"):
+		from gofix.gofix_services.api import auto_close_service_order_after_billing
+
+		auto_close_service_order_after_billing(service_request=sr_name)
 
 	return {"ok": True, "invoice": inv.name, "grand_total": inv.grand_total}
 
@@ -5518,36 +5507,43 @@ def reassign_after_qc_fail(sr_name, technician, job_type="Repair", manager_notes
 	"""
 	_assert_sr_permission(sr_name, "write")
 
+	from gofix.gofix_services import qc as qc_module
+
 	sr = frappe.get_doc("Service Request", sr_name)
-	if not sr.service_order:
-		frappe.throw(_("No Service Order linked to {0}.").format(sr_name), title=_("Validation Error"))
 
-	so = frappe.get_doc("Sales Order", sr.service_order)
+	# Which solutions the failed checks point at. Read through qc.checklist_rows
+	# so a legacy ticket whose answers are still on its order reworks correctly.
+	checks = qc_module.checklist_rows(sr_name)
+	failed_solutions = {c.linked_solution for c in checks
+		if c.result == "Fail" and c.get("linked_solution")}
 
-	# Identify which solutions are linked to failed QC checks
-	failed_solutions = set()
-	failed_check_names = set()
-	for check in (so.get("qc_checklist") or []):
-		if check.result == "Fail":
-			failed_check_names.add(check.check_name)
-			if check.get("linked_solution"):
-				failed_solutions.add(check.linked_solution)
-
-	# Update failed QC checklist rows — increment rework_iteration
-	# Use db_set per row to avoid triggering SO workflow validation
-	for check in (so.get("qc_checklist") or []):
+	for check in checks:
 		if check.result == "Fail":
 			frappe.db.set_value("GoFix QC Checklist", check.name, {
 				"rework_required": 1,
 				"rework_iteration": (check.rework_iteration or 0) + 1,
 			}, update_modified=False)
 
-	so.check_permission("write")
-	so.qc_status = "Pending"
-	so.workflow_state = "Work in Progress"
-	so.set("qc_checklist", [])
-	so.flags.ignore_validate_update_after_submit = True
-	so.save()
+	# The device goes back to the floor: the verdict resets and the checklist is
+	# cleared, so the next QC answers a fresh set rather than inheriting ticks.
+	sr.flags.ignore_billing_lock = True
+	sr.db_set("qc_status", "Pending", update_modified=True)
+	sr.set("qc_checklist", [])
+	sr.flags.ignore_validate_update_after_submit = True
+	sr.save()
+
+	if sr.service_order:
+		try:
+			so = frappe.get_doc("Sales Order", sr.service_order)
+			so.check_permission("write")
+			so.qc_status = "Pending"
+			so.workflow_state = "Work in Progress"
+			so.set("qc_checklist", [])
+			so.flags.ignore_validate_update_after_submit = True
+			so.save()
+		except Exception:
+			frappe.log_error(frappe.get_traceback(),
+				f"reassign_after_qc_fail: could not mirror onto {sr.service_order}")
 
 	# Reset ONLY the failed solution lines back to "In Progress" for rework
 	# Use db_set per row to avoid triggering validate_issue_solution_cascade

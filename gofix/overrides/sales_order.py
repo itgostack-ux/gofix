@@ -621,60 +621,21 @@ def move_service_order_to_qc_if_ready(doc):
 
 
 def _populate_qc_checklist(doc, force=False):
-	"""Auto-populate the QC checklist PER SOLUTION (OEM service-centre style).
+	"""Auto-populate the Sales Order's QC checklist (legacy two-document flow).
 
-	Each performed repair solution gets the checks of the QC template that
-	matches its issue category, stamped with linked_solution so a QC fail
-	routes rework to exactly that solution/technician. One generic outgoing-
-	inspection pack (the template without issue_category) is appended once,
-	unlinked — the final whole-device check. force=True clears the existing
-	checklist first (rework flow).
+	The rows come from ``gofix_services.qc.build_checklist_rows``, which is also
+	what the Service Request uses, so an order and a request can never end up
+	checking different things. force=True clears first (rework).
 	"""
 	if not hasattr(doc, "qc_checklist"):
 		return
-	# Skip if already populated (unless forced)
 	if doc.qc_checklist and not force:
 		return
-
 	if force:
 		doc.qc_checklist = []
 
-	filters = {"is_active": 1}
-	if doc.company:
-		filters["company"] = ["in", [doc.company, "", None]]
+	from gofix.gofix_services.qc import build_checklist_rows
 
-	all_templates = frappe.get_all(
-		"GoFix QC Template",
-		filters=filters,
-		fields=["name", "issue_category"])
-	by_category = {t.issue_category: t.name for t in all_templates if t.issue_category}
-	generic = next((t.name for t in all_templates if not t.issue_category), None)
-	template_cache = {}
-
-	def checks_of(template_name):
-		if template_name not in template_cache:
-			template_cache[template_name] = frappe.get_doc("GoFix QC Template", template_name).checks
-		return template_cache[template_name]
-
-	def append_checks(template_name, solution=None, category=None):
-		for check in checks_of(template_name):
-			key = (solution or "", check.check_name)
-			if key in seen:
-				continue
-			seen.add(key)
-			doc.append("qc_checklist", {
-				"check_name": check.check_name,
-				"is_mandatory": check.is_mandatory,
-				"is_critical": getattr(check, "is_critical", 0),
-				"check_type": check.get("check_type", "Pass-Fail"),
-				"linked_solution": solution or "",
-				"linked_issue_category": category or "",
-				"result": "",
-			})
-
-	seen = set()
-
-	# ── Per-solution packs ───────────────────────────────────────────────
 	solutions = []
 	if doc.service_request:
 		solutions = frappe.get_all(
@@ -682,14 +643,9 @@ def _populate_qc_checklist(doc, force=False):
 			filters={"parent": doc.service_request, "status": ["not in", ["Cancelled"]]},
 			fields=["repair_solution", "issue_category"],
 			order_by="idx")
-	for sol in solutions:
-		tmpl = by_category.get(sol.issue_category)
-		if tmpl:
-			append_checks(tmpl, solution=sol.repair_solution, category=sol.issue_category)
 
-	# ── Final outgoing inspection (whole device, unlinked) ───────────────
-	if generic:
-		append_checks(generic)
+	for row in build_checklist_rows(doc.company, solutions):
+		doc.append("qc_checklist", row)
 
 	if not doc.qc_checklist:
 		return

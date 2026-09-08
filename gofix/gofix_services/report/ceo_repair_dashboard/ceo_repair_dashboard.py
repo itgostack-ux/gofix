@@ -19,8 +19,8 @@ def execute(filters=None):
 
 def get_columns():
 	return [
-		{"label": _("Service Order"), "fieldname": "service_order", "fieldtype": "Link",
-		 "options": "Sales Order", "width": 140},
+		{"label": _("Repair"), "fieldname": "service_request", "fieldtype": "Link",
+		 "options": "Service Request", "width": 170},
 		{"label": _("Customer"), "fieldname": "customer", "fieldtype": "Link",
 		 "options": "Customer", "width": 140},
 		{"label": _("Device"), "fieldname": "device_model", "width": 120},
@@ -53,57 +53,69 @@ def get_columns():
 
 
 def get_data(filters):
-	conditions = "so.is_service_order = 1 AND so.docstatus != 2"
+	# Anchored on the Service Request, which is the repair. It used to be
+	# anchored on the Sales Order, so once repairs stopped raising one this
+	# dashboard would have quietly emptied out -- no error, just fewer and
+	# fewer rows. The order is still joined for the legacy repairs whose
+	# costing was recorded there.
+	conditions = "sr.docstatus != 2"
 	values = {}
 
 	if filters:
 		if filters.get("from_date"):
-			conditions += " AND so.transaction_date >= %(from_date)s"
+			conditions += " AND DATE(sr.creation) >= %(from_date)s"
 			values["from_date"] = filters["from_date"]
 		if filters.get("to_date"):
-			conditions += " AND so.transaction_date <= %(to_date)s"
+			conditions += " AND DATE(sr.creation) <= %(to_date)s"
 			values["to_date"] = filters["to_date"]
 		if filters.get("company"):
-			conditions += " AND so.company = %(company)s"
+			conditions += " AND sr.company = %(company)s"
 			values["company"] = filters["company"]
 
-	# Tier 4: fail-closed scope. The report joins Sales Order (so) to Service
-	# Request (sr) so a scoped user sees rows whose SO warehouse OR SR endpoint
-	# is in scope. LEFT JOIN means SOs without an SR remain visible only if
-	# so.set_warehouse itself resolves — sr.* columns are NULL and drop out of
-	# the IN check, which is the desired fail-closed audit behaviour.
+	# Tier 4: fail-closed scope. A scoped user sees rows whose repair endpoint
+	# OR legacy order warehouse is in scope.
 	scope = scope_where_clause(
-		warehouse_field="so.set_warehouse",
-		extra_warehouse_fields=("sr.source_warehouse", "sr.transferred_to_store"),
+		warehouse_field="sr.source_warehouse",
+		extra_warehouse_fields=("sr.transferred_to_store", "so.set_warehouse"),
 	)
 	if scope is not None:
 		conditions += f" AND {scope}"
 
 	data = frappe.db.sql("""
 		SELECT
-			so.name as service_order,
-			so.customer,
-			COALESCE(so.device_model, '') as device_model,
-			COALESCE(so.issue_category, '') as issue_category,
-			COALESCE(so.spare_parts_revenue, 0) as spare_parts_revenue,
-			COALESCE(so.suggested_labor_cost, 0) as suggested_labor_cost,
-			COALESCE(so.suggested_total_cost, 0) as suggested_total_cost,
-			COALESCE(so.grand_total, 0) as actual_billed,
-			COALESCE(so.price_override_amount, 0) as price_override_amount,
-			COALESCE(so.price_override_reason, '') as price_override_reason,
-			COALESCE(so.price_overridden_by, '') as price_overridden_by,
-			COALESCE(so.technician_damage_cost, 0) as technician_damage_cost,
-			COALESCE(so.rework_count, 0) as rework_count,
-			COALESCE(so.cost_bearer, '') as cost_bearer,
-			COALESCE(so.warranty_status, '') as warranty_status,
-			COALESCE(so.repair_outcome, '') as repair_outcome,
+			sr.name as service_request,
+			sr.customer,
+			COALESCE(sr.device_model, so.device_model, '') as device_model,
+			COALESCE(sr.issue_category, so.issue_category, '') as issue_category,
+			COALESCE(NULLIF(sr.spare_parts_revenue, 0), so.spare_parts_revenue, 0)
+				as spare_parts_revenue,
+			COALESCE(NULLIF(sr.suggested_labor_cost, 0), so.suggested_labor_cost, 0)
+				as suggested_labor_cost,
+			COALESCE(NULLIF(sr.suggested_total_cost, 0), so.suggested_total_cost, 0)
+				as suggested_total_cost,
+			COALESCE(NULLIF(sr.actual_billed, 0), so.grand_total, 0) as actual_billed,
+			COALESCE(NULLIF(sr.price_override_amount, 0), so.price_override_amount, 0)
+				as price_override_amount,
+			COALESCE(NULLIF(sr.price_override_reason, ''), so.price_override_reason, '')
+				as price_override_reason,
+			COALESCE(NULLIF(sr.price_overridden_by, ''), so.price_overridden_by, '')
+				as price_overridden_by,
+			COALESCE(NULLIF(sr.technician_damage_cost, 0), so.technician_damage_cost, 0)
+				as technician_damage_cost,
+			COALESCE(NULLIF(sr.rework_count, 0), so.rework_count, 0) as rework_count,
+			COALESCE(NULLIF(sr.cost_bearer, ''), so.cost_bearer, '') as cost_bearer,
+			COALESCE(NULLIF(sr.warranty_status, ''), so.warranty_status, '')
+				as warranty_status,
+			COALESCE(NULLIF(sr.repair_outcome, ''), so.repair_outcome, '')
+				as repair_outcome,
 			COALESCE(sr.transfer_status, '') as transfer_status,
-			so.qc_pass_datetime,
-			so.delivered_datetime
-		FROM `tabSales Order` so
-		LEFT JOIN `tabService Request` sr ON sr.name = so.service_request
+			COALESCE(sr.qc_pass_datetime, so.qc_pass_datetime) as qc_pass_datetime,
+			COALESCE(sr.delivered_datetime, so.delivered_datetime) as delivered_datetime
+		FROM `tabService Request` sr
+		LEFT JOIN `tabSales Order` so
+			ON so.name = sr.service_order AND so.is_service_order = 1
 		WHERE {conditions}
-		ORDER BY so.transaction_date DESC
+		ORDER BY sr.creation DESC
 	""".format(conditions=conditions), values, as_dict=1)  # noqa: UP032
 
 	# Calculate QC to delivery hours

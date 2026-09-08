@@ -85,6 +85,18 @@ SERVICE_REQUEST_DELIVERY_FIELDS = {
 		# The checklist itself. It was populated on the Sales Order from the
 		# request's own solution lines, so the rows described work recorded on
 		# one document and lived on another.
+		# Where this ticket came from. The visit already points forward to the
+		# ticket; without the reverse link the ticket cannot answer "how did
+		# this customer reach us", which is the first thing anyone asks of it.
+		{
+			"fieldname": "front_desk_visit",
+			"fieldtype": "Link",
+			"options": "POS Kiosk Token",
+			"label": "Front Desk Visit",
+			"insert_after": "walkin_source",
+			"read_only": 1,
+			"description": "The walk-in or written request this repair came from.",
+		},
 		{
 			"fieldname": "qc_checklist_section",
 			"fieldtype": "Section Break",

@@ -120,7 +120,31 @@ _WALKIN_SOURCES = [
 	{"source_name": "Google Search", "description": "Found us through Google search"},
 	{"source_name": "Advertisement", "description": "Saw our advertisement"},
 	{"source_name": "POS Counter", "description": "Walk-in logged from POS counter"},
+	# The channels a front-desk visit can arrive on. These mirror
+	# POS Kiosk Token.visit_source one for one, so the way a customer reached
+	# us survives onto the Service Request instead of every ticket claiming it
+	# was a counter walk-in. The older rows above are kept: several of them
+	# describe how somebody heard about us rather than how they contacted us,
+	# and existing tickets point at them.
+	{"source_name": "Kiosk", "description": "Checked in at the store kiosk tablet"},
+	{"source_name": "WhatsApp", "description": "Messaged us on WhatsApp"},
+	{"source_name": "Mobile App", "description": "Raised from our mobile app"},
+	{"source_name": "Email", "description": "Emailed us"},
+	{"source_name": "Appointment", "description": "Booked an appointment ahead"},
+	{"source_name": "Marketplace", "description": "Came through a marketplace listing"},
+	{"source_name": "Partner", "description": "Sent to us by a partner"},
+	{"source_name": "Other", "description": "Any other channel"},
 ]
+
+# A visit's channel and a Service Request's source are the same fact recorded
+# on two documents, so the mapping lives in one place. Only the two names that
+# genuinely differ are listed; everything else matches by name.
+VISIT_SOURCE_TO_WALKIN_SOURCE = {
+	"Counter": "POS Counter",
+	"Web": "Website",
+	# The master had this one first, under a fuller name.
+	"Social": "Social Media",
+}
 
 # ``applies_to`` decides which closing outcome offers the reason. Leaving them
 # all on "Any" would put "Parts Not Available" in front of a counter hand

@@ -1,0 +1,26 @@
+{
+ "content": null,
+ "creation": "2026-09-08 12:00:00.000000",
+ "docstatus": 0,
+ "doctype": "Page",
+ "icon": "inbox",
+ "idx": 0,
+ "modified": "2026-09-08 12:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "GoFix Services",
+ "name": "service-inbox",
+ "owner": "Administrator",
+ "page_name": "service-inbox",
+ "roles": [
+  {"role": "System Manager"},
+  {"role": "Service Manager"},
+  {"role": "Service Coordinator"},
+  {"role": "Service Engineer"},
+  {"role": "POS Executive"}
+ ],
+ "script": null,
+ "standard": "Yes",
+ "style": null,
+ "system_page": 0,
+ "title": "Service Inbox"
+}

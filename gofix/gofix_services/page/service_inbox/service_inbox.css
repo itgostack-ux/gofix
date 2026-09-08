@@ -1,0 +1,119 @@
+/* Service Inbox — a queue on the left, the whole request on the right. */
+
+#service-inbox-app { padding: 0 4px 24px; }
+
+/* ── Stat strip ─────────────────────────────────────────────────────── */
+.si-stats {
+	display: flex; gap: 10px; flex-wrap: wrap; margin: 4px 0 14px;
+}
+.si-stat {
+	min-width: 104px; padding: 10px 14px; border-radius: 8px;
+	background: var(--fg-color, #fff); border: 1px solid var(--border-color, #e2e2e2);
+	cursor: pointer; transition: border-color .12s, box-shadow .12s;
+}
+.si-stat:hover { border-color: var(--gray-400, #b8b8b8); }
+.si-stat.active { border-color: var(--blue-500, #2490ef); box-shadow: 0 0 0 2px rgba(36,144,239,.14); }
+.si-stat.hot .si-stat-n { color: var(--orange-600, #b35309); }
+.si-stat.good .si-stat-n { color: var(--green-600, #22684c); }
+.si-stat-n { font-size: 22px; font-weight: 600; line-height: 1.1; }
+.si-stat-l { font-size: 11px; color: var(--text-muted, #6b7280); margin-top: 2px; }
+
+/* ── Two-pane body ──────────────────────────────────────────────────── */
+.si-grid { display: grid; grid-template-columns: minmax(300px, 380px) 1fr; gap: 14px; }
+@media (max-width: 900px) { .si-grid { grid-template-columns: 1fr; } }
+
+.si-list { max-height: 74vh; overflow-y: auto; padding-right: 2px; }
+.si-detail {
+	background: var(--fg-color, #fff); border: 1px solid var(--border-color, #e2e2e2);
+	border-radius: 8px; padding: 16px 18px; max-height: 74vh; overflow-y: auto;
+}
+.si-empty { padding: 28px 16px; color: var(--text-muted, #6b7280); text-align: center; }
+
+/* ── A request in the queue ─────────────────────────────────────────── */
+.si-card {
+	background: var(--fg-color, #fff); border: 1px solid var(--border-color, #e2e2e2);
+	border-left: 3px solid transparent;
+	border-radius: 7px; padding: 10px 12px; margin-bottom: 8px; cursor: pointer;
+}
+.si-card:hover { border-color: var(--gray-400, #b8b8b8); }
+.si-card.sel { border-color: var(--blue-500, #2490ef); background: var(--blue-50, #f0f8ff); }
+/* Waiting too long with nobody having replied. */
+.si-card.stale { border-left-color: var(--orange-500, #f0a202); }
+
+.si-card-top { display: flex; justify-content: space-between; align-items: center; }
+.si-chan {
+	font-size: 10px; font-weight: 600; letter-spacing: .3px; text-transform: uppercase;
+	padding: 2px 7px; border-radius: 10px;
+	background: var(--gray-100, #f4f5f6); color: var(--text-muted, #6b7280);
+}
+.si-chan-WhatsApp { background: #e7f7ec; color: #1a7f43; }
+.si-chan-Website  { background: #eaf2fd; color: #1a5fb4; }
+.si-chan-MobileApp{ background: #f3ebfd; color: #6b31c9; }
+.si-chan-PhoneCall{ background: #fff3e0; color: #a1600a; }
+.si-age { font-size: 11px; color: var(--text-muted, #6b7280); }
+
+.si-who { font-weight: 600; margin-top: 5px; }
+.si-phone { font-weight: 400; color: var(--text-muted, #6b7280); margin-left: 6px; font-size: 12px; }
+.si-bits { font-size: 12px; color: var(--text-muted, #6b7280); margin-top: 2px; }
+.si-said {
+	font-size: 12px; font-style: italic; color: var(--text-color, #383838);
+	margin-top: 5px; line-height: 1.35;
+}
+.si-card-foot { display: flex; gap: 8px; align-items: center; margin-top: 7px; flex-wrap: wrap; }
+.si-own, .si-conv { font-size: 11px; color: var(--text-muted, #6b7280); }
+.si-conv { color: var(--green-600, #22684c); }
+
+/* ── Status pills ───────────────────────────────────────────────────── */
+.si-status {
+	font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 10px;
+	background: var(--gray-100, #f4f5f6); color: var(--text-muted, #6b7280);
+}
+.si-status-New       { background: #fff3e0; color: #a1600a; }
+.si-status-Contacted { background: #eaf2fd; color: #1a5fb4; }
+.si-status-Scheduled { background: #f3ebfd; color: #6b31c9; }
+.si-status-Converted { background: #e7f7ec; color: #1a7f43; }
+.si-status-Closed, .si-status-Spam, .si-status-Duplicate {
+	background: #f4f5f6; color: #6b7280;
+}
+
+/* ── Detail ─────────────────────────────────────────────────────────── */
+.si-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.si-head h4 { margin: 0 0 2px; font-size: 16px; }
+.si-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.si-detail h6 {
+	margin: 18px 0 7px; font-size: 11px; text-transform: uppercase;
+	letter-spacing: .4px; color: var(--text-muted, #6b7280);
+}
+.si-quote {
+	margin-top: 12px; padding: 10px 12px; border-left: 3px solid var(--blue-500, #2490ef);
+	background: var(--gray-50, #fafbfc); font-style: italic; border-radius: 0 5px 5px 0;
+}
+.si-others { margin-top: 8px; font-size: 12px; color: var(--text-muted, #6b7280); }
+
+.si-table { width: 100%; font-size: 13px; }
+.si-table th {
+	text-align: left; font-weight: 500; color: var(--text-muted, #6b7280);
+	padding: 3px 14px 3px 0; white-space: nowrap; vertical-align: top; width: 155px;
+}
+.si-table td { padding: 3px 0; }
+
+.si-notes { list-style: none; padding: 0; margin: 0; font-size: 13px; }
+.si-notes li {
+	padding: 7px 0; border-bottom: 1px solid var(--border-color, #ececec); line-height: 1.4;
+}
+.si-notes li:last-child { border-bottom: none; }
+.si-note-meta { display: block; font-size: 11px; color: var(--text-muted, #6b7280); }
+
+.si-hist { list-style: none; padding: 0; margin: 0; font-size: 13px; }
+.si-hist li { padding: 3px 0; }
+
+.si-converted {
+	margin-top: 16px; padding: 9px 12px; border-radius: 6px;
+	background: #e7f7ec; color: #1a7f43; font-size: 13px;
+}
+
+/* ── Filter bar ─────────────────────────────────────────────────────── */
+/* Rendered in the page body: page.add_field draws nothing on this bench. */
+.si-filters { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 8px 0 4px; }
+.si-filters select.si-f { width: auto; min-width: 140px; }
+.si-filters input.si-f { width: 190px; }

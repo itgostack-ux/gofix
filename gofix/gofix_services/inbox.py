@@ -27,7 +27,7 @@ This module is the API onto that queue for requests that arrive remotely.
 
 import frappe
 from frappe import _
-from frappe.utils import now_datetime
+from frappe.utils import add_days, get_datetime, now_datetime
 
 # Statuses that mean somebody still owes this customer something.
 OPEN_STATUSES = ("Waiting", "Hold", "Engaged", "In Progress")
@@ -49,6 +49,58 @@ def normalise_phone(number) -> str:
     """
     digits = "".join(c for c in str(number or "") if c.isdigit())
     return digits[-10:] if len(digits) >= 10 else digits
+
+
+@frappe.whitelist()
+def get_options() -> dict:
+    """Every list the front desk offers, read from where it is configured.
+
+    Channels, purposes and statuses are the Select options on POS Kiosk Token;
+    visit reasons and referral sources are their own masters. Nothing is
+    written into the screen, so adding a channel or retiring a purpose is a
+    configuration change rather than a release.
+    """
+    meta = frappe.get_meta("POS Kiosk Token")
+
+    def options(fieldname):
+        df = meta.get_field(fieldname)
+        return [o for o in (df.options or "").split("\n") if o.strip()] if df else []
+
+    def master(doctype, order="name"):
+        if not frappe.db.exists("DocType", doctype):
+            return []
+        fields = ["name"]
+        m = frappe.get_meta(doctype)
+        for extra in ("display_order", "disabled"):
+            if m.get_field(extra):
+                fields.append(extra)
+        rows = frappe.get_all(doctype, fields=fields,
+                              order_by="display_order asc" if "display_order" in fields else order,
+                              limit_page_length=0)
+        return [r["name"] for r in rows if not r.get("disabled")]
+
+    channels = options("visit_source")
+    return {
+        "channels": channels,
+        "in_person_channels": [c for c in channels if c in IN_PERSON_CHANNELS],
+        "remote_channels": [c for c in channels if c not in IN_PERSON_CHANNELS],
+        "purposes": options("visit_purpose"),
+        "statuses": options("status"),
+        "open_statuses": list(OPEN_STATUSES),
+        "visit_reasons": master("GoFix Visit Reason"),
+        "referral_sources": master("GoFix Referral Source"),
+        "followup_days": _followup_days(),
+    }
+
+
+def _followup_days() -> int:
+    """How long a written request waits before the desk must decide again."""
+    try:
+        from ch_pos.config import get_control_setting
+
+        return max(1, int(get_control_setting("remote_request_followup_days", 3) or 3))
+    except Exception:
+        return 3
 
 
 # ── In ───────────────────────────────────────────────────────────────────────
@@ -95,6 +147,16 @@ def push_request(channel, contact_number, company=None, customer_name=None,
         # the honest default and the counter narrows it when they respond.
         "visit_purpose": kwargs.get("visit_purpose") or "Enquiry",
     })
+
+    # A written request is waiting on the customer, not on us: it sits on Hold
+    # until an agreed date rather than in the live queue. This is the same shape
+    # a CRM gives a deal -- an expected close date that somebody has to act on
+    # when it arrives -- and it is what keeps the end-of-day sweep from
+    # cancelling a message that is still perfectly alive.
+    if channel not in IN_PERSON_CHANNELS:
+        doc.status = "Hold"
+        doc.expires_at = kwargs.get("follow_up_on") or add_days(
+            now_datetime(), _followup_days())
     for field in ("email", "alternate_number", "city", "pos_profile", "store",
                   "device_category", "device_brand", "device_model", "device_item",
                   "serial_no", "issue_category", "preferred_datetime",
@@ -106,6 +168,11 @@ def push_request(channel, contact_number, company=None, customer_name=None,
     doc.flags.ignore_permissions = True
     doc.flags.ignore_mandatory = True
     doc.insert()
+    # Submitted like a walk-in. A draft is invisible to the end-of-day sweep and
+    # to the settlement guard, so leaving it as one would quietly exempt written
+    # requests from both.
+    if frappe.get_meta("POS Kiosk Token").is_submittable and doc.docstatus == 0:
+        doc.submit()
     return {"ok": True, "name": doc.name, "duplicate": False,
             "message": _("Request logged as {0}").format(doc.name)}
 
@@ -332,6 +399,60 @@ def set_status(inbox, status, reason=None) -> dict:
     doc.flags.ignore_mandatory = True
     doc.save()
     return {"ok": True, "status": status}
+
+
+@frappe.whitelist(methods=["POST"])
+def extend_follow_up(inbox, follow_up_on, note=None) -> dict:
+    """Push the date this request has to be decided on.
+
+    An expected close date that quietly slips is worse than none at all, so
+    moving it is an action with a note against it rather than an edit.
+    """
+    doc = frappe.get_doc("POS Kiosk Token", inbox)
+    doc.check_permission("write")
+
+    when = get_datetime(follow_up_on)
+    if when <= now_datetime():
+        frappe.throw(_("Pick a date in the future — otherwise it is still overdue."),
+                     title=_("Date Has Passed"))
+
+    doc.flags.ignore_validate_update_after_submit = True
+    doc.expires_at = when
+    if doc.status not in OPEN_STATUSES:
+        doc.status = "Hold"
+    doc.append("notes", {
+        "note_datetime": now_datetime(), "channel": doc.visit_source,
+        "noted_by": frappe.session.user,
+        "note": _("Follow-up moved to {0}.{1}").format(
+            frappe.utils.format_datetime(when), f" {note}" if note else "")})
+    doc.flags.ignore_permissions = True
+    doc.flags.ignore_mandatory = True
+    doc.save()
+    return {"ok": True, "follow_up_on": str(when)}
+
+
+@frappe.whitelist()
+def overdue_requests(company=None, pos_profile=None) -> list:
+    """Written requests whose agreed date has passed and nobody has acted.
+
+    Deliberately its own call: these are the ones a desk must decide about --
+    chase again, or close as withdrawn -- and burying them in the queue is how
+    a request sits for a fortnight with nobody accountable.
+    """
+    filters = {
+        "visit_source": ("not in", IN_PERSON_CHANNELS),
+        "status": ("in", OPEN_STATUSES),
+        "expires_at": ("<", now_datetime()),
+    }
+    if company:
+        filters["company"] = company
+    if pos_profile:
+        filters["pos_profile"] = pos_profile
+    return frappe.get_list(
+        "POS Kiosk Token", filters=filters,
+        fields=["name", "visit_source", "customer_name", "customer_phone",
+                "expires_at", "issue_description", "status"],
+        order_by="expires_at asc", limit_page_length=100)
 
 
 @frappe.whitelist()

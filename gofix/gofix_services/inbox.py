@@ -80,6 +80,8 @@ def push_request(channel, contact_number, company=None, customer_name=None,
             return {"ok": True, "name": existing, "duplicate": True,
                     "message": _("This request was already received.")}
 
+    company = _assert_company(company)
+
     doc = frappe.new_doc("POS Kiosk Token")
     doc.update({
         "visit_source": channel,
@@ -88,7 +90,7 @@ def push_request(channel, contact_number, company=None, customer_name=None,
         "issue_description": issue_description,
         "external_ref": external_ref,
         "status": "Waiting",
-        "company": company or _default_company(),
+        "company": company,
         # A remote request has no purpose until someone reads it; Enquiry is
         # the honest default and the counter narrows it when they respond.
         "visit_purpose": kwargs.get("visit_purpose") or "Enquiry",
@@ -124,6 +126,31 @@ def _match_customer(doc) -> None:
 def _default_company():
     return (frappe.defaults.get_user_default("company")
             or frappe.db.get_single_value("Global Defaults", "default_company"))
+
+
+def _assert_company(company: str) -> str:
+    """Refuse to log a request into a company the caller cannot see.
+
+    The insert runs with ignore_permissions so a kiosk or a webhook can write,
+    which means the company has to be checked here rather than relied on from
+    the document's own permission check. Without this a Bestbuy user could post
+    a request straight into GoFix's queue by naming it in the payload.
+    """
+    company = company or _default_company()
+    if not company:
+        frappe.throw(_("A company is required to log a request."),
+                     title=_("Company Missing"))
+
+    from ch_item_master.security import get_user_mapped_companies
+
+    allowed = get_user_mapped_companies(frappe.session.user)
+    # None means an unrestricted caller -- Administrator, System Manager, and
+    # the integration users that legitimately serve every company.
+    if allowed is not None and company not in allowed:
+        frappe.throw(
+            _("You cannot log a request for {0}.").format(company),
+            frappe.PermissionError, title=_("Not Your Company"))
+    return company
 
 
 # ── Recognition ──────────────────────────────────────────────────────────────

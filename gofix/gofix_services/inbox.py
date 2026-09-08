@@ -208,6 +208,46 @@ def prefill_from_request(inbox) -> dict:
     }
 
 
+@frappe.whitelist()
+def get_visit(name) -> dict:
+    """One visit in full: what they told us, and everything said since.
+
+    A request that arrived from a website form, WhatsApp or a helpdesk is a
+    conversation, not a single line. The card can only ever show the opening
+    remark, so the desk needs somewhere to read the whole exchange and the
+    detail the customer supplied alongside it.
+    """
+    doc = frappe.get_doc("POS Kiosk Token", name)
+    doc.check_permission("read")
+
+    data = doc.as_dict()
+    data["notes"] = [{
+        "note": n.note, "channel": n.channel, "noted_by": n.noted_by,
+        "note_datetime": str(n.note_datetime or ""),
+    } for n in reversed(doc.get("notes") or [])]
+
+    # The same customer's other open visits, so a person who messaged twice and
+    # then walked in is read as one conversation rather than three strangers.
+    data["other_visits"] = frappe.get_list(
+        "POS Kiosk Token",
+        filters={"customer_phone": doc.customer_phone, "name": ("!=", doc.name),
+                 "status": ("in", OPEN_STATUSES)},
+        fields=["name", "visit_source", "status", "creation", "issue_description"],
+        order_by="creation desc", limit_page_length=5)
+
+    data["repairs"] = frappe.get_list(
+        "Service Request",
+        filters={"contact_number": doc.customer_phone, "docstatus": ("<", 2)},
+        fields=["name", "decision", "device_model", "qc_status",
+                "delivered_datetime", "creation"],
+        order_by="creation desc", limit_page_length=5)
+
+    symptoms = [r.symptom_name for r in (doc.get("symptoms") or [])
+                if r.get("symptom_name")]
+    data["symptom_labels"] = symptoms
+    return data
+
+
 @frappe.whitelist(methods=["POST"])
 def add_note(inbox, note, channel=None) -> dict:
     """Record what was said, and treat it as the first response.

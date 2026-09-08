@@ -355,6 +355,10 @@
 				<input id="in-phone" type="tel" inputmode="numeric" pattern="[0-9]*" placeholder="10-digit mobile" maxlength="14">
 				<div class="error-msg" id="err-phone" style="display:none"></div>
 			</div>
+			<div class="field" id="referral-block" style="display:none">
+				<label>How did you hear about us? <span style="opacity:.6;font-weight:400">(optional)</span></label>
+				<div class="tile-grid" id="referral-grid"></div>
+			</div>
 			<div class="actions">
 				<button class="btn btn-primary" id="btn-next-1">Continue</button>
 			</div>
@@ -468,6 +472,7 @@
 			other_device_hint: "",
 			selected_issues: [],
 			additional_notes: "",
+			referral_source: "",
 		},
 		result: null,
 	};
@@ -555,6 +560,7 @@
 				$("#store-pill").textContent = cfg.store.name || cfg.store.warehouse;
 				bindStep1();
 				renderVisitReasons();
+		renderReferralSources();
 				renderDeviceTypes();
 				showStep(1);
 			})
@@ -589,6 +595,35 @@
 	}
 
 	// ------ Step 2 ------------------------------------------------------
+
+	// Attribution tiles. Optional on purpose: tapping a second time clears the
+	// choice, and the whole block stays hidden when the site has no sources
+	// seeded, so a marketing question can never block a queue token.
+	function renderReferralSources() {
+		const sources = (state.config && state.config.referral_sources) || [];
+		const block = $("#referral-block");
+		const grid = $("#referral-grid");
+		if (!sources.length) { block.style.display = "none"; return; }
+		block.style.display = "";
+		grid.innerHTML = "";
+		sources.forEach((rs) => {
+			const tile = document.createElement("div");
+			tile.className = "tile";
+			tile.dataset.value = rs.name;
+			tile.innerHTML = `<div class="label">${escapeHtml(rs.name)}</div>`;
+			tile.addEventListener("click", () => {
+				const already = tile.classList.contains("selected");
+				$$("#referral-grid .tile").forEach((t) => t.classList.remove("selected"));
+				if (already) {
+					state.form.referral_source = "";
+				} else {
+					tile.classList.add("selected");
+					state.form.referral_source = rs.name;
+				}
+			});
+			grid.appendChild(tile);
+		});
+	}
 
 	function renderVisitReasons() {
 		const grid = $("#visit-grid");
@@ -775,6 +810,7 @@
 		rows.push(["Name", f.customer_name]);
 		rows.push(["Mobile", f.customer_phone]);
 		rows.push(["Visit reason", f.visit_reason]);
+		if (f.referral_source) rows.push(["Heard about us via", f.referral_source]);
 		if (f.is_repair_visit) {
 			rows.push(["Device", (f.device_label || f.device_type || "Other") + (f.other_device_hint ? ` — ${f.other_device_hint}` : "")]);
 			if (f.device_brand) rows.push(["Brand", f.device_brand]);
@@ -816,6 +852,7 @@
 			other_device_hint: f.is_repair_visit ? f.other_device_hint : "",
 			selected_issues: f.is_repair_visit ? f.selected_issues : [],
 			additional_notes: f.additional_notes,
+			referral_source: f.referral_source,
 		};
 
 		api("ch_pos.api.token_api.create_tablet_token", payload)
@@ -873,7 +910,7 @@
 		state.modelByLabel = {};
 		$("#in-other-device").value = "";
 		$("#in-notes").value = "";
-		$$("#visit-grid .tile, #device-grid .tile, #symptom-grid .tile").forEach((t) => t.classList.remove("selected"));
+		$$("#visit-grid .tile, #device-grid .tile, #symptom-grid .tile, #referral-grid .tile").forEach((t) => t.classList.remove("selected"));
 		$("#brand-block").style.display = "none";
 		$("#other-device-block").style.display = "none";
 		$("#other-notes-block").style.display = "none";

@@ -7,10 +7,12 @@
  "doctype": "DocType",
  "editable_grid": 1,
  "engine": "InnoDB",
- "description": "Reason the customer walked into the store — used at Step 2 of the tablet. Only reasons with is_repair=1 push the customer into the device/brand/symptom flow.",
+ "description": "Reason the customer walked into the store \u2014 used at Step 2 of the tablet. Only reasons with is_repair=1 push the customer into the device/brand/symptom flow.",
  "field_order": [
   "reason_name",
   "is_repair",
+  "counter_action",
+  "allow_create_request",
   "display_order",
   "disabled",
   "description"
@@ -33,6 +35,22 @@
    "description": "If enabled, the tablet asks for device type, brand, model and symptoms. If not, the token is created against the visit reason only."
   },
   {
+   "default": "None",
+   "fieldname": "counter_action",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Counter Action",
+   "options": "None\nCreate Request\nShow Repair Status\nCollect Device",
+   "description": "What the queue offers the executive for this reason. 'Create Request' opens the repair intake, 'Show Repair Status' resolves the customer's open jobs on load, 'Collect Device' surfaces the service invoice and amount due. 'None' leaves only Withdraw."
+  },
+  {
+   "default": "0",
+   "fieldname": "allow_create_request",
+   "fieldtype": "Check",
+   "label": "Also Allow Create Request",
+   "description": "For reasons that can go either way. A warranty visit is usually a status question but sometimes becomes a new job, so the counter needs both the status readout and the create action."
+  },
+  {
    "default": "0",
    "fieldname": "display_order",
    "fieldtype": "Int",
@@ -52,7 +70,7 @@
   }
  ],
  "links": [],
- "modified": "2026-07-03 09:00:00.000000",
+ "modified": "2026-09-08 09:00:00.000000",
  "modified_by": "Administrator",
  "module": "GoFix Services",
  "name": "GoFix Visit Reason",

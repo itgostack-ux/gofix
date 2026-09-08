@@ -221,13 +221,38 @@ _LEGACY_SYMPTOMS: dict[str, list[str]] = {
 	],
 }
 
+# counter_action decides what the queue offers the executive for this reason.
+# It lives on the master rather than in the queue JS so ops can add a reason and
+# say what it means at the counter without a code change -- the previous build
+# offered "Create GoFix Request" to every service token, including people who
+# had only come to collect a repaired phone.
 _VISIT_REASONS = [
-	{"reason_name": "Repair my device", "is_repair": 1, "display_order": 10},
-	{"reason_name": "Check existing repair status", "is_repair": 0, "display_order": 20},
-	{"reason_name": "Collect my device", "is_repair": 0, "display_order": 30},
-	{"reason_name": "Warranty / service issue", "is_repair": 0, "display_order": 40},
-	{"reason_name": "General enquiry", "is_repair": 0, "display_order": 50},
-	{"reason_name": "Other", "is_repair": 0, "display_order": 90},
+	{"reason_name": "Repair my device", "is_repair": 1, "display_order": 10,
+	 "counter_action": "Create Request", "allow_create_request": 1},
+	{"reason_name": "Check existing repair status", "is_repair": 0, "display_order": 20,
+	 "counter_action": "Show Repair Status", "allow_create_request": 0},
+	{"reason_name": "Collect my device", "is_repair": 0, "display_order": 30,
+	 "counter_action": "Collect Device", "allow_create_request": 0},
+	# Genuinely splits: usually a status question, sometimes a new job. Gets
+	# both the status readout and the create action.
+	{"reason_name": "Warranty / service issue", "is_repair": 0, "display_order": 40,
+	 "counter_action": "Show Repair Status", "allow_create_request": 1},
+	{"reason_name": "General enquiry", "is_repair": 0, "display_order": 50,
+	 "counter_action": "None", "allow_create_request": 0},
+	{"reason_name": "Other", "is_repair": 0, "display_order": 90,
+	 "counter_action": "None", "allow_create_request": 0},
+]
+
+# How the walk-in heard about the store. Attribution only -- never required, so
+# a marketing question can never be the reason a customer fails to get a token.
+# Ops maintains the live list in GoFix Referral Source; this is the starting set.
+_REFERRAL_SOURCES = [
+	{"source_name": "Passing by", "display_order": 10},
+	{"source_name": "Google Search / Maps", "display_order": 20},
+	{"source_name": "Instagram", "display_order": 30},
+	{"source_name": "Customer referral", "display_order": 40},
+	{"source_name": "Campaign", "display_order": 50},
+	{"source_name": "Other", "display_order": 90},
 ]
 
 _CANCELLATION_REASONS = [
@@ -370,6 +395,13 @@ def _seed_visit_reasons() -> None:
 		_upsert("GoFix Visit Reason", row["reason_name"], row)
 
 
+def _seed_referral_sources() -> None:
+	if not frappe.db.table_exists("GoFix Referral Source"):
+		return
+	for row in _REFERRAL_SOURCES:
+		_upsert("GoFix Referral Source", row["source_name"], row)
+
+
 def _seed_cancellation_reasons() -> None:
 	for row in _CANCELLATION_REASONS:
 		_upsert("GoFix Cancellation Reason", row["reason_name"], row)
@@ -423,6 +455,7 @@ def execute() -> None:
 	_seed_symptoms()
 	_retire_legacy_symptoms()
 	_seed_visit_reasons()
+	_seed_referral_sources()
 	_seed_cancellation_reasons()
 	_register_whatsapp_event()
 	frappe.db.commit()
@@ -432,5 +465,6 @@ def execute() -> None:
 		f"{len(_ISSUE_CATEGORIES)} issue categories, "
 		f"{sum(len(v) for v in _SYMPTOMS.values())} symptoms, "
 		f"{len(_VISIT_REASONS)} visit reasons, "
+		f"{len(_REFERRAL_SOURCES)} referral sources, "
 		f"{len(_CANCELLATION_REASONS)} cancellation reasons."
 	)

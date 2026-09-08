@@ -211,6 +211,17 @@ def complete_handover(service_request: str, remarks: str = None) -> dict:
         return {"ok": True, "already": True,
                 "message": _("This device was already handed over.")}
 
+    # A device going back by courier or rider leaves before it arrives. What
+    # proves that delivery is the carrier's, not a code read out at a counter
+    # nobody is standing at, so it goes through dispatch instead.
+    from gofix.gofix_services.logistics import is_in_person_return
+
+    if not is_in_person_return(sr):
+        frappe.throw(
+            _("This repair goes back by {0}, so it is dispatched rather than "
+              "collected. Use Dispatch Return.").format(sr.get("return_method")),
+            title=_("Not Collected In Person"))
+
     readiness = handover_readiness(service_request)
     if not readiness["ready"]:
         frappe.throw(

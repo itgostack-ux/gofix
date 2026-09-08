@@ -103,6 +103,9 @@ after_migrate = [
     # Costing followed for the same reason: every input was already the
     # request's, and two management reports read the results.
     "gofix.setup.service_request_costing_fields.create_service_request_costing_fields",
+    # How the device arrives and how it goes back, both pointing at the
+    # Device Logistics Method and Courier Partner masters.
+    "gofix.setup.service_request_logistics_fields.create_service_request_logistics_fields",
     "gofix.setup.sales_invoice_custom_fields.create_sales_invoice_custom_fields",
     "gofix.setup.competitive_ops_fields.create_competitive_ops_fields",
     "gofix.setup.material_request_custom_fields.create_material_request_custom_fields",
@@ -201,8 +204,14 @@ doc_events = {
 		# Service Request is submittable and every field the lock protects is
 		# allow_on_submit, so those edits run before_update_after_submit and
 		# never validate -- the guard has to sit on both or it only sees drafts.
-		"validate": "gofix.gofix_services.billing_lock.guard_service_request",
-		"before_update_after_submit": "gofix.gofix_services.billing_lock.guard_service_request",
+		"validate": [
+			"gofix.gofix_services.billing_lock.guard_service_request",
+			"gofix.gofix_services.logistics.validate_logistics",
+		],
+		"before_update_after_submit": [
+			"gofix.gofix_services.billing_lock.guard_service_request",
+			"gofix.gofix_services.logistics.validate_logistics",
+		],
 		"on_update": "gofix.gofix_services.whatsapp_notifications.on_service_request_update",
 		"on_update_after_submit": "gofix.spare_lifecycle.release_holds_on_dead_ticket",
 	},

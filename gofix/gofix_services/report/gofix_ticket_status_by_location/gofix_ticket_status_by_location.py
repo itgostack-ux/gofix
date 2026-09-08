@@ -38,6 +38,17 @@ def get_columns():
 		{"label": _("Transfer"), "fieldname": "transfer_status", "fieldtype": "Data", "width": 130},
 		{"label": _("Technician"), "fieldname": "technician", "fieldtype": "Data", "width": 130},
 		{"label": _("QC"), "fieldname": "qc_status", "fieldtype": "Data", "width": 70},
+		# Where a finished device is, and who is moving it. Without these the
+		# report could say a repair was done but not whether anyone was coming
+		# for it -- which is the question the shop floor actually asks.
+		{"label": _("Goes Back By"), "fieldname": "return_method", "fieldtype": "Link",
+		 "options": "Device Logistics Method", "width": 130},
+		{"label": _("Carrier"), "fieldname": "return_partner", "fieldtype": "Link",
+		 "options": "Courier Partner", "width": 110},
+		{"label": _("Tracking"), "fieldname": "return_tracking_number",
+		 "fieldtype": "Data", "width": 130},
+		{"label": _("Dispatched"), "fieldname": "return_dispatched_date",
+		 "fieldtype": "Date", "width": 100},
 		{"label": _("Estimate"), "fieldname": "estimated_cost", "fieldtype": "Currency", "width": 100},
 		{"label": _("Invoice"), "fieldname": "service_invoice", "fieldtype": "Link", "options": "Sales Invoice", "width": 140},
 		{"label": _("Billed"), "fieldname": "billed_amount", "fieldtype": "Currency", "width": 100},
@@ -83,6 +94,8 @@ def get_data(filters):
 			sr.issue_category, sr.priority, sr.decision AS status, sr.decision,
 			sr.transfer_status, sr.current_location, sr.transferred_to_store,
 			sr.estimated_cost, sr.service_invoice, sr.service_order,
+			sr.return_method, sr.return_partner, sr.return_tracking_number,
+			sr.return_dispatched_date, sr.intake_method,
 			sr.actual_completion_date,
 			-- The request is the QC document; the order is the legacy fallback.
 			COALESCE(NULLIF(sr.qc_status, ''), so.qc_status) AS qc_status,

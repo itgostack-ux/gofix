@@ -1471,6 +1471,12 @@ class ServiceRequest(Document):
 				title=_("Service Outcome Not Confirmed"),
 			)
 		
+		# The last moment the customer is still in the conversation, so it is
+		# the right one to settle who is collecting the device.
+		from gofix.gofix_services.logistics import assert_return_agreed
+
+		assert_return_agreed(self)
+
 		items = self.get_service_invoice_items()
 		if not items:
 			frappe.throw(_("No service items or spare parts to invoice"), title=_("Service Request Error"))

@@ -1,0 +1,61 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "creation": "2026-09-08 12:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "note_datetime",
+  "channel",
+  "noted_by",
+  "column_break_note",
+  "note"
+ ],
+ "fields": [
+  {
+   "fieldname": "note_datetime",
+   "fieldtype": "Datetime",
+   "label": "When",
+   "in_list_view": 1,
+   "columns": 2
+  },
+  {
+   "fieldname": "channel",
+   "fieldtype": "Data",
+   "label": "Via",
+   "in_list_view": 1,
+   "columns": 1
+  },
+  {
+   "fieldname": "noted_by",
+   "fieldtype": "Link",
+   "options": "User",
+   "label": "By",
+   "in_list_view": 1,
+   "columns": 2
+  },
+  {
+   "fieldname": "column_break_note",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "note",
+   "fieldtype": "Small Text",
+   "label": "Note",
+   "in_list_view": 1,
+   "columns": 5
+  }
+ ],
+ "istable": 1,
+ "links": [],
+ "modified": "2026-09-08 12:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "GoFix Services",
+ "name": "GoFix Inbox Note",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": []
+}

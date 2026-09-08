@@ -22,6 +22,17 @@ frappe.ui.form.on('Service Request', {
 		}
 		// Set status color indicator
 		set_status_indicator(frm);
+
+		// A billed repair is frozen. Say so before the user tries to type,
+		// rather than letting them fill a field and lose it to a save error.
+		show_billing_lock(frm);
+
+		// Releasing the device to the customer. There was no screen for this
+		// at all -- the gates existed and nothing called them.
+		if (frm.doc.docstatus === 1 && !frm.doc.delivered_datetime) {
+			frm.add_custom_button(__("Hand Over To Customer"), () => handover_dialog(frm),
+				__("Delivery")).addClass("btn-primary");
+		}
 		
 		// Show workflow status dashboard
 		show_workflow_status(frm);
@@ -1005,4 +1016,177 @@ function create_return_delivery(frm) {
 			});
 		}
 	);
+}
+
+
+// ── Billing lock ─────────────────────────────────────────────────────────────
+
+function show_billing_lock(frm) {
+	if (frm.is_new() || frm.doc.docstatus !== 1) return;
+
+	frappe.xcall("gofix.gofix_services.billing_lock.get_billing_state", {
+		service_request: frm.doc.name,
+	}).then((state) => {
+		if (!state || !state.invoices || !state.invoices.length) return;
+
+		const money = (v) => format_currency(v, frm.doc.currency);
+		const rows = state.invoices.map((inv) => `
+			<tr>
+				<td style="padding:2px 10px 2px 0">
+					<a href="/app/sales-invoice/${inv.invoice}">${inv.invoice}</a></td>
+				<td style="padding:2px 10px 2px 0">${inv.posting_date || ""}</td>
+				<td style="padding:2px 10px 2px 0">${__(inv.reason || "")}</td>
+				<td style="padding:2px 10px 2px 0;text-align:right">${money(inv.grand_total)}</td>
+				<td style="padding:2px 0;text-align:right;color:${inv.outstanding > 0 ? "#c0392b" : "#27ae60"}">
+					${inv.outstanding > 0 ? __("{0} due", [money(inv.outstanding)]) : __("paid")}</td>
+			</tr>`).join("");
+
+		const locked = state.locked;
+		const headline = locked
+			? __("This repair is billed and locked. Reopen it with a reason to make changes.")
+			: __("Reopened — changes are allowed. Billing it again will lock it.");
+
+		frm.dashboard.clear_headline();
+		frm.dashboard.set_headline(`
+			<div style="border-left:4px solid ${locked ? "#c0392b" : "#f0a202"};
+			            background:${locked ? "#fdeaea" : "#fff8e6"};
+			            padding:10px 12px;border-radius:4px">
+				<div style="font-weight:600;margin-bottom:6px">
+					${locked ? "🔒" : "🔓"} ${headline}
+				</div>
+				${state.reopen_count ? `<div style="margin-bottom:6px;color:#555">
+					${__("Reopened {0} time(s).", [state.reopen_count])}
+					${state.reopen_reason ? __("Last reason: {0}", [frappe.utils.escape_html(state.reopen_reason)]) : ""}
+				</div>` : ""}
+				<table style="font-size:12px">${rows}</table>
+				<div style="margin-top:6px;font-weight:600">
+					${__("Billed in total")}: ${money(state.billed_total)}
+				</div>
+			</div>`);
+
+		if (locked) {
+			frm.add_custom_button(__("Reopen Repair"), () => reopen_repair(frm),
+				__("Billing")).addClass("btn-warning");
+		}
+	});
+}
+
+function reopen_repair(frm) {
+	// The reason is the whole point: it is what makes a reopen an act with a
+	// record rather than an edit that leaves no trace.
+	const d = new frappe.ui.Dialog({
+		title: __("Reopen A Billed Repair"),
+		fields: [
+			{
+				fieldtype: "HTML",
+				options: `<p>${__("This repair has been billed. Reopening it allows changes again and is recorded against your name. Any further work can be billed on a second invoice.")}</p>`,
+			},
+			{
+				fieldname: "reason", fieldtype: "Small Text", reqd: 1,
+				label: __("Why is it being reopened?"),
+				description: __("The customer's words are the most useful thing here."),
+			},
+		],
+		primary_action_label: __("Reopen"),
+		primary_action: (values) => {
+			frappe.xcall("gofix.gofix_services.billing_lock.reopen_service_request", {
+				service_request: frm.doc.name,
+				reason: values.reason,
+			}).then((r) => {
+				d.hide();
+				frappe.show_alert({ message: r.message, indicator: "orange" });
+				frm.reload_doc();
+			});
+		},
+	});
+	d.show();
+}
+
+
+// ── Handing the device back ──────────────────────────────────────────────────
+
+function handover_dialog(frm) {
+	frappe.xcall("gofix.gofix_services.handover.handover_readiness", {
+		service_request: frm.doc.name,
+	}).then((state) => {
+		const gate = (ok, text) => `
+			<div style="padding:3px 0;color:${ok ? "#27ae60" : "#c0392b"}">
+				${ok ? "✓" : "✗"} ${text}
+			</div>`;
+
+		const checks = [
+			gate(state.qc_status === "Pass",
+				__("Quality check passed") + (state.qc_status ? ` (${state.qc_status})` : "")),
+			gate(!state.outstanding.length,
+				state.outstanding.length
+					? __("Payment outstanding on {0}", [state.outstanding.map((o) => o.invoice).join(", ")])
+					: __("Nothing outstanding")),
+			gate(state.otp_verified, __("Customer verified by OTP")),
+			state.accessories_received
+				? gate(state.accessories_returned, __("Accessories returned"))
+				: "",
+		].join("");
+
+		const d = new frappe.ui.Dialog({
+			title: __("Hand Over To Customer"),
+			fields: [
+				{ fieldname: "gates", fieldtype: "HTML",
+				  options: `<div style="margin-bottom:10px">${checks}</div>` },
+				{ fieldname: "otp_section", fieldtype: "Section Break",
+				  label: __("Verify the customer") },
+				{ fieldname: "otp_help", fieldtype: "HTML", options: `<p class="text-muted">
+					${__("Send the code to the number on the ticket and ask the customer to read it back. This proves the person collecting is the person who left the device.")}
+				  </p>` },
+				{ fieldname: "otp_input", fieldtype: "Data", label: __("OTP From Customer"),
+				  read_only: state.otp_verified ? 1 : 0,
+				  default: state.otp_verified ? __("Verified") : "" },
+				{ fieldname: "remarks_section", fieldtype: "Section Break" },
+				{ fieldname: "remarks", fieldtype: "Small Text", label: __("Handover Remarks") },
+			],
+			primary_action_label: __("Complete Handover"),
+			primary_action: (v) => {
+				frappe.xcall("gofix.gofix_services.handover.complete_handover", {
+					service_request: frm.doc.name, remarks: v.remarks,
+				}).then((r) => {
+					d.hide();
+					frappe.show_alert({ message: r.message, indicator: "green" });
+					frm.reload_doc();
+				});
+			},
+		});
+
+		if (!state.otp_verified) {
+			d.set_secondary_action_label(__("Send OTP"));
+			d.set_secondary_action(() => {
+				frappe.xcall("gofix.gofix_services.handover.generate_handover_otp", {
+					service_request: frm.doc.name,
+				}).then((r) => frappe.show_alert({ message: r.message, indicator: "blue" }));
+			});
+
+			// Verifying is its own step: the code has a life of its own, with
+			// attempt limits and a lockout, so it is checked before the
+			// handover rather than folded into it.
+			d.$wrapper.find(".modal-footer").prepend(
+				$(`<button class="btn btn-default btn-sm" style="margin-right:6px">${__("Check OTP")}</button>`)
+					.on("click", () => {
+						const code = d.get_value("otp_input");
+						if (!code) return;
+						frappe.xcall("gofix.gofix_services.handover.verify_handover_otp", {
+							service_request: frm.doc.name, otp_input: code,
+						}).then((r) => {
+							frappe.show_alert({
+								message: r.message,
+								indicator: r.verified ? "green" : "red",
+							});
+							if (r.verified) { d.hide(); handover_dialog(frm); }
+						});
+					}));
+		}
+
+		d.show();
+		if (!state.ready) {
+			d.get_primary_btn().prop("disabled", true).attr(
+				"title", __("Blocked: {0}", [state.blockers.join("; ")]));
+		}
+	});
 }

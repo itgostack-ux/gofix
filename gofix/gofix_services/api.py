@@ -158,10 +158,21 @@ def _otp_attempt_limits():
 
 @frappe.whitelist(methods=["POST"])
 def generate_delivery_otp(service_order) -> dict:
-	"""Generate and send OTP for device handover verification."""
+	"""Generate and send OTP for device handover verification.
+
+	Mints the code on the repair when there is one. Two OTP stores for the same
+	handover means the code the customer receives and the code the counter
+	checks can come from different rows, and whichever is checked last wins.
+	"""
 	_require_sales_operation_role()
 	so = _get_scoped_service_order(service_order, "write")
 	_enforce_otp_rate_limit("request", f"delivery::{so.name}")
+
+	if so.service_request:
+		from gofix.gofix_services.handover import generate_handover_otp
+
+		return generate_handover_otp(so.service_request)
+
 	frappe.db.sql("SELECT name FROM `tabSales Order` WHERE name = %s FOR UPDATE", (so.name,))
 	so.reload()
 	now_value = now_datetime()
@@ -186,10 +197,20 @@ def generate_delivery_otp(service_order) -> dict:
 
 @frappe.whitelist(methods=["POST"])
 def verify_delivery_otp(service_order, otp_input) -> dict:
-	"""Verify the delivery OTP entered by customer."""
+	"""Verify the delivery OTP entered by customer.
+
+	Checked against the repair's own code, for the same reason it is minted
+	there.
+	"""
 	_require_sales_operation_role()
 	so = _get_scoped_service_order(service_order, "write")
 	_enforce_otp_rate_limit("verify", f"delivery::{so.name}")
+
+	if so.service_request:
+		from gofix.gofix_services.handover import verify_handover_otp
+
+		return verify_handover_otp(so.service_request, otp_input)
+
 	frappe.db.sql("SELECT name FROM `tabSales Order` WHERE name = %s FOR UPDATE", (so.name,))
 	so.reload()
 	if so.get("delivery_otp_verified"):
@@ -248,8 +269,19 @@ def verify_delivery_otp(service_order, otp_input) -> dict:
 
 @frappe.whitelist()
 def validate_delivery_readiness(service_order) -> dict:
-	"""Check all delivery gates before allowing device handover."""
+	"""Check all delivery gates before allowing device handover.
+
+	Kept for callers that still hold a Sales Order. The verdict comes from
+	``handover.handover_readiness`` on the repair itself, so there is one set of
+	gates rather than two implementations that can disagree -- which they did:
+	this one read the OTP flag off the order, and nothing ever set it there.
+	"""
 	so = _get_scoped_service_order(service_order, "read")
+
+	if so.service_request:
+		from gofix.gofix_services.handover import handover_readiness
+
+		return handover_readiness(so.service_request)
 
 	blockers = []
 
@@ -304,9 +336,19 @@ def validate_delivery_readiness(service_order) -> dict:
 
 @frappe.whitelist(methods=["POST"])
 def complete_delivery(service_order, remarks=None) -> dict:
-	"""Mark device as delivered after all gates pass."""
+	"""Mark device as delivered after all gates pass.
+
+	Delegates to the repair when there is one, so an order-based caller and a
+	request-based caller cannot release the same device under different rules.
+	"""
 	_require_sales_operation_role()
 	so = _get_scoped_service_order(service_order, "write")
+
+	if so.service_request:
+		from gofix.gofix_services.handover import complete_handover
+
+		return complete_handover(so.service_request, remarks=remarks)
+
 	frappe.db.sql("SELECT name FROM `tabSales Order` WHERE name = %s FOR UPDATE", (so.name,))
 	so.reload()
 
@@ -1402,15 +1444,25 @@ def dispatch_return(service_request, courier_name=None, tracking_number=None) ->
 
 @frappe.whitelist(methods=["POST"])
 def confirm_return_delivery(service_request) -> dict:
-	"""Confirm customer received the returned device."""
+	"""Confirm the customer received the returned device.
+
+	This used to write the delivery date and mark the repair Delivered on its
+	own, checking nothing: not QC, not the bill, not who was collecting. It was
+	a second door into the same act as ``complete_handover``, with none of the
+	locks on it, so a device could be released unpaid and un-QC'd by calling
+	the softer endpoint. It now goes through the same gates as every other
+	handover; only the courier precondition is particular to a return.
+	"""
 	_require_sales_operation_role()
 	sr = assert_service_request_access(service_request, permission_type="write")
 
 	if sr.get("mode_of_service") == "Courier" and not sr.get("return_dispatched_date"):
 		frappe.throw(_("Return must be dispatched before delivery can be confirmed."), title=_("Dispatch Pending"))
 
-	sr.db_set("return_delivered_date", today(), update_modified=True)
-	sr.db_set("decision", "Delivered", update_modified=False)
+	from gofix.gofix_services.handover import complete_handover
+
+	result = complete_handover(sr.name, remarks=_("Return delivery confirmed"))
+
 	_audit_service_update(
 		sr,
 		"Return Delivered",
@@ -1420,7 +1472,7 @@ def confirm_return_delivery(service_request) -> dict:
 	)
 
 	frappe.msgprint(_("Return delivery confirmed"), indicator="green")
-	return {"message": "Delivered"}
+	return {"message": "Delivered", "handover": result}
 
 
 # ── Suggested Price Calculation ──────────────────────────────────────

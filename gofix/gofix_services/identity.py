@@ -32,10 +32,7 @@ import frappe
 from frappe import _
 from frappe.utils import get_datetime, now_datetime
 
-from gofix.gofix_services.doctype.gofix_service_inbox.gofix_service_inbox import (
-    normalise_phone)
-
-OPEN_INBOX = ("New", "Contacted", "Scheduled")
+from gofix.gofix_services.inbox import OPEN_STATUSES, normalise_phone
 
 
 # ── Resolution ───────────────────────────────────────────────────────────────
@@ -131,16 +128,22 @@ def resolve(phone: str, company: str = None) -> dict:
     if number not in numbers:
         numbers.append(number)
 
-    inbox_filters = {"contact_number": ("in", numbers), "status": ("in", OPEN_INBOX)}
+    visit_filters = {"customer_phone": ("in", numbers), "status": ("in", OPEN_STATUSES)}
     if company:
-        inbox_filters["company"] = company
+        visit_filters["company"] = company
     requests = frappe.get_list(
-        "GoFix Service Inbox", filters=inbox_filters,
-        fields=["name", "channel", "status", "received_at", "customer_name",
-                "contact_number", "device_category", "device_brand", "device_model",
-                "device_item", "serial_no", "issue_category", "issue_description",
-                "preferred_store", "preferred_datetime", "referral_source", "email"],
-        order_by="received_at desc", limit_page_length=20)
+        "POS Kiosk Token", filters=visit_filters,
+        fields=["name", "token_display", "visit_source", "visit_purpose", "status",
+                "creation", "customer_name", "customer_phone", "device_category",
+                "device_brand", "device_model", "device_item", "serial_no",
+                "issue_category", "issue_description", "visit_reason",
+                "pos_profile", "preferred_datetime", "referral_source", "email",
+                "linked_customer"],
+        order_by="creation desc", limit_page_length=20)
+    for row in requests:
+        # The screens read "channel"; the stored field is visit_source.
+        row["channel"] = row.get("visit_source")
+        row["received_at"] = row.get("creation")
 
     sr_filters = {"contact_number": ("in", numbers), "docstatus": ("<", 2)}
     if company:
@@ -151,7 +154,8 @@ def resolve(phone: str, company: str = None) -> dict:
                 "delivered_datetime", "service_invoice", "creation"],
         order_by="creation desc", limit_page_length=10)
 
-    token = _waiting_token(numbers)
+    token = next((r for r in requests
+                  if r.get("visit_source") in ("Kiosk", "Counter")), None)
 
     return {
         "phone": number,
@@ -168,42 +172,26 @@ def resolve(phone: str, company: str = None) -> dict:
     }
 
 
-def _waiting_token(numbers) -> dict:
-    """A walk-in token still waiting on any of these numbers."""
-    if not numbers:
-        return None
-    try:
-        rows = frappe.get_all(
-            "POS Kiosk Token",
-            filters={"customer_phone": ("in", numbers),
-                     "status": ("in", ["Waiting", "Hold", "Engaged"])},
-            fields=["name", "token_display", "customer_name", "customer_phone",
-                    "visit_reason", "issue_description", "creation", "status",
-                    "linked_customer"],
-            order_by="creation desc", limit_page_length=1)
-        return rows[0] if rows else None
-    except Exception:
-        # The queue is a convenience here; it must never fail a lookup.
-        return None
-
-
 def _latest_contact(requests, token) -> dict:
     """The most recent way this person reached us.
 
-    When both a written request and a walk-in exist, the request wins on equal
-    footing: it carries what the customer actually described, whereas a token
-    carries only why they came in. That is the record worth attaching the
-    ticket to.
+    Where both a written request and a walk-in are open, the written one wins
+    even if the walk-in is newer: it carries what the customer actually
+    described, whereas arriving at a counter only says that they came. That is
+    the record worth attaching the ticket to.
     """
-    newest_request = requests[0] if requests else None
-    if newest_request:
-        return {"kind": "inbox", "name": newest_request["name"],
-                "at": str(newest_request["received_at"]),
-                "channel": newest_request["channel"]}
-    if token:
-        return {"kind": "token", "name": token["name"],
-                "at": str(token["creation"]), "channel": "Walk-in"}
-    return None
+    from gofix.gofix_services.inbox import REMOTE_CHANNELS
+
+    written = [r for r in requests if r.get("visit_source") in REMOTE_CHANNELS]
+    newest = written[0] if written else (requests[0] if requests else None)
+    if not newest:
+        return None
+    return {
+        "kind": "token" if newest.get("visit_source") in ("Kiosk", "Counter") else "inbox",
+        "name": newest["name"],
+        "at": str(newest.get("creation") or ""),
+        "channel": newest.get("visit_source"),
+    }
 
 
 # ── Consolidation ────────────────────────────────────────────────────────────
@@ -239,13 +227,16 @@ def consolidate_into_request(service_request, phone=None, inbox=None, token=None
     # Anything else still open on this identity is the same conversation.
     others = [r["name"] for r in found["requests"] if r["name"] != primary]
     for name in others:
-        if frappe.db.get_value("GoFix Service Inbox", name, "status") in OPEN_INBOX:
-            frappe.db.set_value("GoFix Service Inbox", name, {
-                "status": "Duplicate", "duplicate_of": primary or None,
+        if frappe.db.get_value("POS Kiosk Token", name, "status") in OPEN_STATUSES:
+            frappe.db.set_value("POS Kiosk Token", name, {
+                "status": "Converted", "duplicate_of": primary or None,
+                "linked_service_request": sr.name,
                 "closed_reason": _("Booked in as {0}").format(sr.name),
             }, update_modified=False)
             superseded.append(name)
 
+    # A visit the customer is physically here for still goes through the queue's
+    # own close, so the display board and the conversion counters stay right.
     closed_token = _release_token(token or (found["token"] or {}).get("name"), sr)
 
     return {
@@ -254,8 +245,8 @@ def consolidate_into_request(service_request, phone=None, inbox=None, token=None
         "superseded": sorted(set(superseded)),
         "token_closed": closed_token,
         "numbers_searched": found["numbers"],
-        "message": _("{0} linked, {1} other request(s) closed").format(
-            linked or _("no request"), len(set(superseded))),
+        "message": _("{0} linked, {1} other visit(s) closed").format(
+            linked or _("no earlier visit"), len(set(superseded))),
     }
 
 

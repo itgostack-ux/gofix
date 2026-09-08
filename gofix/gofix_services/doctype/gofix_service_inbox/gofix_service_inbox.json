@@ -78,7 +78,8 @@
    "fieldtype": "Datetime",
    "label": "Received At",
    "reqd": 1,
-   "in_list_view": 1
+   "in_list_view": 1,
+   "default": "Now"
   },
   {
    "fieldname": "status",

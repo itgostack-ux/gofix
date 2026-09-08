@@ -116,7 +116,7 @@ frappe.ui.form.on('Service Request', {
 				},
 				callback: function(r) {
 					if (r.message && r.message > 0) {
-						frm.add_custom_button(__('🔧 View Job Sheets ({0})').format(r.message), function() {
+						frm.add_custom_button(__('🔧 View Job Sheets ({0})', [r.message]), function() {
 							frappe.set_route('List', 'Job Assignment', {
 								'service_order': frm.doc.service_order
 							});
@@ -176,12 +176,18 @@ frappe.ui.form.on('Service Request', {
 			return { query: 'ch_pos.api.item_search.search_ch_models', filters };
 		});
 
-		frm.set_query('accessories_list', 'accessories_list', function() {
+		// accessories_list is a Table MultiSelect, whose control has no .grid.
+		// The three-argument set_query assumes one and did
+		// fields_dict[parentfield].grid.get_field(...), so this threw on every
+		// refresh and abandoned the rest of it -- silently, because a form
+		// event handler swallows the trace into the console. Filtering a Table
+		// MultiSelect goes through the parent fieldname instead.
+		frm.set_query('accessories_list', function() {
 			return { filters: { is_active: 1 } };
 		});
 
 		// Service items: Service-nature items only (CH Sub Category.item_nature = 'Service').
-		frm.fields_dict.service_items && (
+		frm.fields_dict.service_items && frm.fields_dict.service_items.grid && (
 			frm.fields_dict.service_items.grid.get_field('service_item').get_query = function() {
 				return {
 					query: 'ch_item_master.ch_item_master.api.items_by_subcategory_nature',
@@ -724,7 +730,7 @@ function show_workflow_status(frm) {
 
 function setup_cascade_filters(frm) {
 	// Solution Lines: only allow solutions whose issue_category is in issue_lines
-	frm.fields_dict.solution_lines && (
+	frm.fields_dict.solution_lines && frm.fields_dict.solution_lines.grid && (
 		frm.fields_dict.solution_lines.grid.get_field('repair_solution').get_query = function(doc, cdt, cdn) {
 			let issue_cats = (doc.issue_lines || []).map(r => r.issue_category).filter(Boolean);
 			return {
@@ -737,7 +743,7 @@ function setup_cascade_filters(frm) {
 	);
 
 	// Spare Lines: only allow solutions that are already in solution_lines
-	frm.fields_dict.spare_lines && (
+	frm.fields_dict.spare_lines && frm.fields_dict.spare_lines.grid && (
 		frm.fields_dict.spare_lines.grid.get_field('repair_solution').get_query = function(doc) {
 			let sol_names = (doc.solution_lines || []).map(r => r.repair_solution).filter(Boolean);
 			return {
@@ -749,7 +755,7 @@ function setup_cascade_filters(frm) {
 	);
 
 	// Spare Lines: spare_item filtered by Solution Spare Mapping
-	frm.fields_dict.spare_lines && (
+	frm.fields_dict.spare_lines && frm.fields_dict.spare_lines.grid && (
 		frm.fields_dict.spare_lines.grid.get_field('spare_item').get_query = function(doc, cdt, cdn) {
 			let row = locals[cdt][cdn];
 			if (!row.repair_solution) {

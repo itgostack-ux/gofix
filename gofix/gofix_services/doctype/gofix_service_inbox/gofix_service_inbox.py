@@ -33,6 +33,11 @@ class GoFixServiceInbox(Document):
 		self.alternate_number = normalise_phone(self.alternate_number)
 		if not self.received_at:
 			self.received_at = now_datetime()
+		if not self.company:
+			# Company is required and is a fact about the session, not something
+			# the person taking a phone call should have to pick.
+			self.company = (frappe.defaults.get_user_default("Company")
+			                or frappe.db.get_single_value("Global Defaults", "default_company"))
 		self._match_customer()
 		self._guard_conversion()
 

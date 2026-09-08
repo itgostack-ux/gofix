@@ -157,6 +157,10 @@ def push_request(channel, contact_number, company=None, customer_name=None,
         doc.status = "Hold"
         doc.expires_at = kwargs.get("follow_up_on") or add_days(
             now_datetime(), _followup_days())
+    doc.pos_profile = _resolve_store(company, phone, kwargs.get("pos_profile"))
+    if doc.pos_profile and not kwargs.get("store"):
+        doc.store = frappe.db.get_value("POS Profile", doc.pos_profile, "warehouse")
+
     for field in ("email", "alternate_number", "city", "pos_profile", "store",
                   "device_category", "device_brand", "device_model", "device_item",
                   "serial_no", "issue_category", "preferred_datetime",
@@ -188,6 +192,47 @@ def _match_customer(doc) -> None:
         doc.linked_customer = found[0]["customer"]
         if not doc.customer_name:
             doc.customer_name = found[0]["customer_name"]
+
+
+def _resolve_store(company, phone, explicit=None) -> str:
+    """Which store owns this request.
+
+    A lead belongs somewhere. Left unassigned it appeared on every store's
+    desk in the company, so four people saw the same customer and any of them
+    might have rung. Routing, in order:
+
+      1. The store the customer asked for, when the channel captured one.
+      2. The store that served them last -- a returning customer's enquiry
+         belongs where they already go, which is also how a CRM assigns by
+         territory rather than round-robin.
+      3. The company's default front desk, from CH POS Control Settings.
+
+    Returning nothing is allowed and is not a leak: an unrouted request shows
+    only under the explicit "Unassigned" filter, where a manager routes it.
+    """
+    if explicit:
+        return explicit
+
+    number = normalise_phone(phone)
+    if number:
+        last = frappe.db.sql("""
+            SELECT pos_profile FROM `tabPOS Kiosk Token`
+            WHERE customer_phone = %(p)s AND COALESCE(pos_profile, '') != ''
+              AND company = %(c)s
+            ORDER BY creation DESC LIMIT 1
+        """, {"p": number, "c": company})
+        if last:
+            return last[0][0]
+
+    try:
+        from ch_pos.config import get_control_setting
+
+        default = get_control_setting("default_front_desk_profile", "")
+        if default and frappe.db.get_value("POS Profile", default, "company") == company:
+            return default
+    except Exception:
+        pass
+    return None
 
 
 def _default_company():
@@ -453,6 +498,54 @@ def overdue_requests(company=None, pos_profile=None) -> list:
         fields=["name", "visit_source", "customer_name", "customer_phone",
                 "expires_at", "issue_description", "status"],
         order_by="expires_at asc", limit_page_length=100)
+
+
+@frappe.whitelist(methods=["POST"])
+def assign_store(inbox, pos_profile, note=None) -> dict:
+    """Route an unassigned request to the store that will handle it."""
+    doc = frappe.get_doc("POS Kiosk Token", inbox)
+    doc.check_permission("write")
+
+    profile = frappe.db.get_value("POS Profile", pos_profile,
+                                  ["name", "company", "warehouse"], as_dict=True)
+    if not profile:
+        frappe.throw(_("{0} is not a store.").format(pos_profile))
+    if profile.company != doc.company:
+        frappe.throw(_("{0} belongs to another company.").format(pos_profile),
+                     frappe.PermissionError, title=_("Wrong Company"))
+
+    doc.flags.ignore_validate_update_after_submit = True
+    doc.pos_profile = profile.name
+    doc.store = profile.warehouse
+    doc.append("notes", {
+        "note_datetime": now_datetime(), "channel": doc.visit_source,
+        "noted_by": frappe.session.user,
+        "note": _("Routed to {0}.{1}").format(profile.name, f" {note}" if note else "")})
+    doc.flags.ignore_permissions = True
+    doc.flags.ignore_mandatory = True
+    doc.save()
+    return {"ok": True, "pos_profile": profile.name}
+
+
+@frappe.whitelist()
+def unassigned_requests(company=None) -> list:
+    """Requests that arrived without a store, waiting to be routed.
+
+    Their own list on purpose. Showing them at every store is what made the
+    same customer appear four times.
+    """
+    filters = {
+        "visit_source": ("not in", IN_PERSON_CHANNELS),
+        "status": ("in", OPEN_STATUSES),
+        "pos_profile": ("in", ["", None]),
+    }
+    if company:
+        filters["company"] = company
+    return frappe.get_list(
+        "POS Kiosk Token", filters=filters,
+        fields=["name", "visit_source", "customer_name", "customer_phone",
+                "city", "issue_description", "creation", "status", "company"],
+        order_by="creation desc", limit_page_length=100)
 
 
 @frappe.whitelist()

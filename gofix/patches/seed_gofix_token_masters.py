@@ -395,6 +395,24 @@ def _seed_visit_reasons() -> None:
 		_upsert("GoFix Visit Reason", row["reason_name"], row)
 
 
+def _seed_require_walkin_token() -> None:
+	"""Apply the shipped default for require_walkin_token, once.
+
+	A Single writes 0 for a Check the moment the doctype is saved after the
+	field is added, so the docfield default of 1 never reaches the stored
+	value and the guard would ship switched off. Written once, and only when
+	the Singles row is absent or zero at first sight of the field, so a later
+	deliberate untick by ops is never overwritten.
+	"""
+	if not frappe.db.exists("DocType", "GoFix Settings"):
+		return
+	marker = "gofix_require_walkin_token_seeded"
+	if frappe.db.get_default(marker):
+		return
+	frappe.db.set_single_value("GoFix Settings", "require_walkin_token", 1)
+	frappe.db.set_default(marker, "1")
+
+
 def _seed_referral_sources() -> None:
 	if not frappe.db.table_exists("GoFix Referral Source"):
 		return
@@ -456,6 +474,7 @@ def execute() -> None:
 	_retire_legacy_symptoms()
 	_seed_visit_reasons()
 	_seed_referral_sources()
+	_seed_require_walkin_token()
 	_seed_cancellation_reasons()
 	_register_whatsapp_event()
 	frappe.db.commit()

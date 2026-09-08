@@ -13,6 +13,7 @@
   "tax_template_source_company",
   "default_parts_warehouse",
   "token_section",
+  "require_walkin_token",
   "max_selected_issues",
   "guest_rate_limit",
   "guest_rate_window_seconds",
@@ -139,6 +140,13 @@
    "fieldname": "token_section",
    "fieldtype": "Section Break",
    "label": "Token Controls"
+  },
+  {
+   "default": "1",
+   "fieldname": "require_walkin_token",
+   "fieldtype": "Check",
+   "label": "Require a Walk-in Token before Service Request",
+   "description": "On: the counter cannot raise a Service Request until the customer has a walk-in token, so every device taken in is also counted as footfall. The Repair screen stays frozen until a token is logged or matched by phone. Turn off only if a store must be able to take a device in when the queue is unavailable."
   },
   {
    "default": "3",
@@ -706,7 +714,7 @@
  ],
  "index_web_pages_for_search": 0,
  "issingle": 1,
- "modified": "2026-09-04 12:00:00.000000",
+ "modified": "2026-09-08 12:00:00.000000",
  "module": "GoFix Services",
  "name": "GoFix Settings",
  "owner": "Administrator",

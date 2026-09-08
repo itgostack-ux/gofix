@@ -257,9 +257,15 @@ def validate_delivery_readiness(service_order) -> dict:
 	if getattr(so, "qc_status", None) != "Pass":
 		blockers.append(_("QC not passed (current: {0})").format(so.qc_status or "Pending"))
 
-	# Gate 2: Payment verified
-	# sales_order is a Sales Invoice Item field, not an invoice header field.
-	has_unpaid = frappe.get_all(
+	# Gate 2: Payment verified.
+	#
+	# Two ways an invoice reaches a repair, and this gate used to see only one.
+	# The Sales Invoice Item.sales_order path below is the ERPNext-native link,
+	# but a repair billed through the POS counter writes the invoice onto
+	# Service Request.service_invoice and leaves the item's sales_order empty --
+	# so on real data the query matched nothing and the gate never fired. A
+	# device with money outstanding passed the payment check. Check both.
+	unpaid = frappe.get_all(
 		"Sales Invoice",
 		filters=[
 			["Sales Invoice Item", "sales_order", "=", service_order],
@@ -269,8 +275,18 @@ def validate_delivery_readiness(service_order) -> dict:
 		pluck="name",
 		limit=1,
 	)
-	if has_unpaid:
-		blockers.append(_("Outstanding payment exists"))
+	if not unpaid and so.service_request:
+		service_invoice = frappe.db.get_value(
+			"Service Request", so.service_request, "service_invoice")
+		if service_invoice:
+			row = frappe.db.get_value(
+				"Sales Invoice", service_invoice,
+				["outstanding_amount", "docstatus"], as_dict=True) or {}
+			if cint(row.get("docstatus")) == 1 and flt(row.get("outstanding_amount")) > 0:
+				unpaid = [service_invoice]
+	if unpaid:
+		blockers.append(
+			_("Outstanding payment on {0}").format(unpaid[0]))
 
 	# Gate 3: OTP verified
 	if not getattr(so, "delivery_otp_verified", None):

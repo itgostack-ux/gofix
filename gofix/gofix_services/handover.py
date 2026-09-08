@@ -227,18 +227,6 @@ def complete_handover(service_request: str, remarks: str = None) -> dict:
     sr.flags.ignore_billing_lock = True
     sr.db_set(updates, update_modified=True)
 
-    # Keep a legacy Service Order in step so old reports do not contradict the
-    # ticket. Best effort: a missing or cancelled order must not block handover.
-    if sr.get("service_order"):
-        try:
-            frappe.db.set_value("Sales Order", sr.service_order, {
-                "delivery_otp_verified": 1,
-                "delivered_datetime": now,
-            }, update_modified=False)
-        except Exception:
-            frappe.log_error(frappe.get_traceback(),
-                             f"handover: could not mirror onto {sr.service_order}")
-
     sr.add_comment("Comment", _("Device handed over by {0}.{1}").format(
         frappe.session.user, f" {remarks}" if remarks else ""))
     return {"ok": True, "message": _("Device handed over"), "delivered_at": str(now)}

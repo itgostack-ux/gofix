@@ -280,33 +280,3 @@ def _stamp(sr, updates) -> None:
     sr = _as_doc(sr)
     sr.flags.ignore_billing_lock = True
     sr.db_set(updates, update_modified=True)
-    _mirror(sr, updates)
-
-
-def _mirror(sr, updates) -> None:
-    """Keep a legacy Sales Order in step. Never fails the QC step."""
-    order = sr.get("service_order")
-    if not order:
-        return
-    meta = frappe.get_meta("Sales Order")
-    payload = {k: v for k, v in updates.items() if meta.get_field(k)}
-    if not payload:
-        return
-    try:
-        frappe.db.set_value("Sales Order", order, payload, update_modified=False)
-    except Exception:
-        frappe.log_error(frappe.get_traceback(), f"qc: could not mirror onto {order}")
-
-
-def _warn_on_repeated_rework(sr, count) -> None:
-    """Tell the floor when a device keeps coming back."""
-    limit = 3
-    if sr.get("service_order"):
-        limit = cint(frappe.db.get_value(
-            "Sales Order", sr.service_order, "max_rework_limit")) or 3
-    if count < limit:
-        return
-    frappe.msgprint(
-        _("{0} has now failed QC {1} times (limit {2}). Escalate before "
-          "sending it back again.").format(sr.name, count, limit),
-        indicator="red", alert=True)

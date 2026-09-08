@@ -2462,12 +2462,10 @@ class GoFixOpsHub {
 			content.find("#goh-accept-create-so").on("click", (e) => {
 				const btn = $(e.currentTarget);
 				btn.prop("disabled", true).html(`<i class="fa fa-spinner fa-spin"></i> ${__("Accepting…")}`);
-				frappe.xcall(`${API}.accept_and_create_service_order`, { sr_name: d.name })
+				frappe.xcall(`${API}.accept_job`, { sr_name: d.name })
 					.then((r) => {
 						frappe.show_alert({
-							message: r.service_order
-								? __("Accepted — Service Order {0} created.", [r.service_order])
-								: __("Accepted — the repair is on the floor."),
+							message: __("Accepted — the repair is on the floor."),
 							indicator: "green",
 						});
 						self._refresh_all();

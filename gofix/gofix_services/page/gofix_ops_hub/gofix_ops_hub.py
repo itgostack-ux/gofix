@@ -16,7 +16,7 @@ import frappe
 from frappe import _
 from frappe.utils import add_days, cint, flt, get_datetime, getdate, now_datetime, nowdate, time_diff_in_hours
 
-from gofix.config import get_int_setting, get_setting, get_user_roles, has_role_setting, require_role_setting
+from gofix.config import get_int_setting, get_user_roles, has_role_setting, require_role_setting
 from gofix.gofix_services.store_context import (
 	active_company as _active_company,
 	get_store_options as _get_store_options,
@@ -749,15 +749,14 @@ def open_walkin_job(sr_name) -> dict:
 
 
 @frappe.whitelist(methods=["POST"])
-def accept_and_create_service_order(sr_name) -> dict:
+def accept_job(sr_name) -> dict:
 	"""Express acceptance from the hub's Draft stage.
 
 	Walks the sanctioned chain in one step — issue line (seeded from the
 	header category when diagnosis hasn't added any), analysis confirmed,
 	repairability Repairable, estimate v1 recorded as customer-approved —
 	which puts the job on the floor as an accepted, priced repair. Every step
-	lands in the ops stage log / estimate versions for audit. A Service Order
-	is raised too only if the legacy two-document flow is switched on.
+	lands in the ops stage log / estimate versions for audit.
 
 	This is the REMOTE path — a request raised by phone or web, where someone
 	has to decide whether to take the job at all. A counter walk-in uses
@@ -771,9 +770,6 @@ def accept_and_create_service_order(sr_name) -> dict:
 	sr = frappe.get_doc("Service Request", sr_name)
 	if sr.docstatus != 1:
 		frappe.throw(_("Submit the Service Request before accepting."), title=_("Validation Error"))
-	if sr.service_order:
-		frappe.throw(_("Service Order {0} already exists.").format(sr.service_order), title=_("Validation Error"))
-
 	sr.flags.ignore_validate_update_after_submit = True
 	sr.flags.ignore_mandatory = True
 
@@ -803,18 +799,13 @@ def accept_and_create_service_order(sr_name) -> dict:
 	orchestration.customer_approve_estimate(sr_name, remarks=_("Accepted at Ops Hub — express acceptance"))
 
 	sr.reload()
-	# Under the single-document model the Service Request IS the operational
-	# document, so there is no order to check for. Only demand one when the
-	# legacy two-document flow is switched back on.
-	if get_setting("create_service_order", 0) and not sr.service_order:
-		frappe.throw(_("Acceptance completed but Service Order was not created — check estimate gates."))
 
 	updates = {"decision": "Accepted", "walkin_status": "Accepted"}
 	if frappe.db.has_column("Service Request", "accepted_by"):
 		updates["accepted_by"] = frappe.session.user
 	sr.db_set(updates, update_modified=False)
 
-	return {"ok": True, "service_order": sr.get("service_order"), "estimate": estimate}
+	return {"ok": True, "estimate": estimate}
 
 
 @frappe.whitelist(methods=["POST"])

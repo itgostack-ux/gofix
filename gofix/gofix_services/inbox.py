@@ -87,57 +87,29 @@ def _default_company():
 
 @frappe.whitelist()
 def lookup_by_phone(phone, company=None) -> dict:
-    """Everything we already know about this number.
+    """Everything we already know about whoever is on this number.
 
-    Called the moment the counter types a number. Returns the open requests
-    waiting on it, any repair already in progress, and a waiting walk-in token
-    -- so a returning customer is recognised rather than re-interviewed.
+    Called the moment the counter types a number. Resolution goes through
+    ``identity.resolve``, so it answers for the *person* rather than the
+    string: once a customer is recognised, their open requests are gathered
+    across every number we hold for them. A number that resolves to more than
+    one customer says so instead of picking.
     """
-    number = normalise_phone(phone)
-    if not number or len(number) < 10:
-        return {"phone": number, "requests": [], "service_requests": [],
-                "token": None, "customer": None}
+    from gofix.gofix_services.identity import resolve
 
-    filters = {"contact_number": number, "status": ("in", OPEN_STATUSES)}
-    if company:
-        filters["company"] = company
-
-    requests = frappe.get_list(
-        "GoFix Service Inbox", filters=filters,
-        fields=["name", "channel", "status", "received_at", "customer_name",
-                "device_category", "device_brand", "device_model", "device_item",
-                "serial_no", "issue_category", "issue_description",
-                "preferred_store", "preferred_datetime", "referral_source", "email"],
-        order_by="received_at desc", limit_page_length=10)
-
-    sr_filters = {"contact_number": number, "docstatus": ("<", 2)}
-    if company:
-        sr_filters["company"] = company
-    repairs = frappe.get_list(
-        "Service Request", filters=sr_filters,
-        fields=["name", "decision", "device_model", "issue_category",
-                "qc_status", "delivered_datetime", "service_invoice", "creation"],
-        order_by="creation desc", limit_page_length=5)
-
-    customer = frappe.db.get_value("Customer", {"mobile_no": number},
-                                   ["name", "customer_name"], as_dict=True)
-
-    token = None
-    try:
-        from ch_pos.ch_pos.api.token_api import find_waiting_token_by_phone
-
-        token = find_waiting_token_by_phone(number)
-    except Exception:
-        # The queue is a convenience here, never a reason to fail the lookup.
-        pass
-
+    found = resolve(phone, company=company)
     return {
-        "phone": number,
-        "requests": requests,
-        "service_requests": repairs,
-        "token": token,
-        "customer": customer,
-        "known": bool(requests or repairs or customer),
+        "phone": found["phone"],
+        "requests": found["requests"],
+        "service_requests": found["repairs"],
+        "token": found["token"],
+        "customer": ({"name": found["customer"], "customer_name": found["customer_name"]}
+                     if found["customer"] else None),
+        "customers": found["customers"],
+        "ambiguous": found["ambiguous"],
+        "numbers": found["numbers"],
+        "latest_contact": found["latest_contact"],
+        "known": found["known"],
     }
 
 
@@ -205,7 +177,7 @@ def link_to_service_request(inbox, service_request) -> dict:
                             update_modified=False)
 
     return {"ok": True, "service_request": service_request,
-            "superseded": len(siblings),
+            "superseded": len(siblings), "superseded_names": siblings,
             "message": _("Linked to {0}").format(service_request)}
 
 

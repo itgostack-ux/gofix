@@ -181,11 +181,7 @@ def _apply_customer_estimate_action(sr, version_number, action, remarks=None, *,
 		sr.set("repair_paused", 0)
 		sr.set("repair_pause_reason", "")
 
-	if action == "approve" and not sr.service_order and sr.get("repairability_status") == "Repairable":
-		sr.save()
-		sr.create_service_order()
-	else:
-		sr.save()
+	sr.save()
 	sr.add_comment(
 		"Comment",
 		_("{0}: estimate version {1} {2}. {3}").format(
@@ -864,63 +860,6 @@ def qc_fail_with_issues(service_request, failed_checks_json, new_issues_json=Non
 # ═══════════════════════════════════════════════════════════════════════════════
 # 7. FLOW ENFORCEMENT: diagnosis before SO creation
 # ═══════════════════════════════════════════════════════════════════════════════
-
-def so_creation_blockers(sr) -> list:
-	"""Why this Service Request cannot become a Service Order yet.
-
-	Empty list means the chain diagnosis → repairability → estimate → approval
-	is complete. Returned rather than thrown so callers can ASK without a
-	try/except: catching a ``frappe.throw`` leaves the message in
-	``frappe.message_log`` and it surfaces later as a stray popup.
-	"""
-	blockers = []
-	if not sr.get("analysis_confirmed"):
-		blockers.append(_(
-			"Issue analysis has not been confirmed. Complete diagnosis in the Ops Hub first."
-		))
-
-	repairability = sr.get("repairability_status")
-	if repairability != "Repairable":
-		blockers.append(_(
-			"Device repairability not confirmed. Current status: {0}"
-		).format(repairability or _("Pending Analysis")))
-
-	if sr.get("estimate_approval_pending"):
-		blockers.append(_("Latest estimate is pending customer approval."))
-
-	latest_version = sr.get("latest_estimate_version") or 0
-	if latest_version > 0:
-		approved = any(
-			ev.version_number == latest_version and ev.status == "Customer Approved"
-			for ev in (sr.get("estimate_versions") or [])
-		)
-		if not approved:
-			blockers.append(_(
-				"Estimate version {0} is not approved by customer."
-			).format(latest_version))
-	# No estimate raised at all is deliberately NOT a blocker: the direct accept
-	# path (store queue, the SR form's Accept button) raises the order first and
-	# quotes afterwards. Tightening that here would break those flows.
-
-	return blockers
-
-
-def can_create_service_order(sr) -> bool:
-	"""Non-throwing readiness check — see :func:`so_creation_blockers`."""
-	return not so_creation_blockers(sr)
-
-
-def validate_so_creation_prerequisites(sr):
-	"""Called before creating a Service Order.
-	Enforces: diagnosis → repairability → estimate → approval → SO.
-	"""
-	blockers = so_creation_blockers(sr)
-	if blockers:
-		frappe.throw(
-			_("Cannot create Service Order:") + "<ul><li>" + "</li><li>".join(blockers) + "</li></ul>",
-			title=_("Service Order Prerequisites"),
-		)
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 8. SPARE RECOVERY ON NOT REPAIRABLE / BER

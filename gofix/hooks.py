@@ -204,10 +204,7 @@ doc_events = {
 		"validate": "gofix.gofix_services.billing_lock.guard_service_request",
 		"before_update_after_submit": "gofix.gofix_services.billing_lock.guard_service_request",
 		"on_update": "gofix.gofix_services.whatsapp_notifications.on_service_request_update",
-		"on_update_after_submit": [
-			"gofix.gofix_services.doctype.service_request.service_request.ensure_service_order_on_accept",
-			"gofix.spare_lifecycle.release_holds_on_dead_ticket",
-		],
+		"on_update_after_submit": "gofix.spare_lifecycle.release_holds_on_dead_ticket",
 	},
 }
 

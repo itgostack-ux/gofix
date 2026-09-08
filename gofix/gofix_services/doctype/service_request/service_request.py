@@ -1075,17 +1075,6 @@ class ServiceRequest(Document):
 		# Raise the Service Order once the job is actually sellable — diagnosed,
 		# repairable, and quoted at a price the customer approved.
 		#
-		# "Accepted" alone is NOT that moment. A device checked in at the counter
-		# is accepted the instant it is handed over, long before anyone knows
-		# what the repair costs, so keying off the decision alone made every save
-		# during Analysis fail on the prerequisite gate. Ask whether the chain is
-		# complete instead, and stay quiet while it isn't.
-		if self.decision == "Accepted" and not self.service_order:
-			from gofix.gofix_services.orchestration import can_create_service_order
-
-			if can_create_service_order(self):
-				self.create_service_order()
-
 		if self.is_completed_status() and not self.flags.get("skip_completion_artifacts"):
 			self.ensure_completion_artifacts()
 			# INT-1 fix: Sync completion back to linked Warranty Claim
@@ -1264,170 +1253,6 @@ class ServiceRequest(Document):
 			"Item", item_code, ["has_variants", "disabled"], as_dict=True
 		)
 		return bool(row) and not row.has_variants and not row.disabled
-
-	def create_service_order(self):
-		"""Create the Service Order (Sales Order) for this request, once.
-
-		OPTIONAL SINCE SEP-2026 and off by default. The repair is described by
-		ONE operational document now -- this Service Request -- and the invoice
-		is raised from it. The Sales Order had accreted 104 custom fields the
-		request did not have, duplicated 15 that it did, was never updated after
-		creation, and was never actually billed through: 14 of 15 submitted
-		service orders sat at 0% billed while a separate paid invoice hung off
-		the request. It described the same repair a second time and the two
-		drifted.
-
-		Existing orders are untouched and still readable. New repairs skip this
-		unless GoFix Settings.create_service_order is switched back on, for a
-		site that genuinely needs an ERPNext order book of committed-but-
-		unbilled work.
-		"""
-		from gofix.config import get_setting
-
-		if not get_setting("create_service_order", 0):
-			return None
-
-		# Idempotent by design: several paths legitimately try to raise the order
-		# for the same ticket — the post-submit handler, the accept hook, and
-		# estimate approval — and whichever gets there first wins. Re-reading from
-		# the database matters because the in-memory doc that calls this is often
-		# the STALE one: a hook fired during a nested save already wrote the link.
-		existing = self.service_order or frappe.db.get_value(
-			"Service Request", self.name, "service_order"
-		)
-		if existing:
-			self.service_order = existing
-			return existing
-
-		# Enforce: diagnosis → repairability → estimate approval → SO
-		try:
-			from gofix.gofix_services.orchestration import validate_so_creation_prerequisites
-			validate_so_creation_prerequisites(self)
-		except ImportError:
-			pass  # orchestration module not yet available
-		
-		# Create Sales Order as Service Order
-		so = frappe.new_doc("Sales Order")
-		so.customer = self.customer
-		so.company = self.company
-		so.transaction_date = frappe.utils.today()
-		# Use the expected completion date from Service Request, default to 7 days
-		default_delivery_days = get_int_setting("default_service_delivery_days", 7)
-		so.delivery_date = self.expected_completion_date or frappe.utils.add_days(
-			frappe.utils.today(), default_delivery_days
-		)
-		
-		# Set company address for GST compliance (required for India GST)
-		company_address = frappe.db.get_value("Dynamic Link",
-			{
-				"link_doctype": "Company",
-				"link_name": self.company,
-				"parenttype": "Address"
-			},
-			"parent")
-		
-		if company_address:
-			so.company_address = company_address
-		
-		# Set title
-		so.title = f"Service - {self.customer_name} - {self.serial_no or self.device_item_name}"
-		
-		# Mark as Service Order
-		so.is_service_order = 1
-		
-		# Link to Service Request
-		so.service_request = self.name
-		
-		# Copy Device Information
-		so.device_brand = self.brand
-		so.device_model = self.device_item_name
-		so.imei_serial_no = self.serial_no
-		so.device_condition = self.device_condition
-		so.device_condition_desc = self.product_condition_desc
-		so.accessories_received = self.accessories_received
-		
-		# Copy Issue Information
-		so.issue_category = self.issue_category
-		so.issue_description = self.issue_description
-		
-		# Copy customer-reported issues for comparison with technician findings
-		so.customer_reported_issues = self.issue_description
-		
-		# Copy Security Information
-		so.password_pattern = self.password if self.password else ""
-		if self.pattern:
-			so.password_pattern += f"\nPattern: {self.pattern}" if so.password_pattern else f"Pattern: {self.pattern}"
-		so.backup_status = self.backup_info
-		so.actual_imei = self.actual_imei
-		
-		# Copy Service Planning
-		so.service_priority = self.priority
-		so.warranty_status = normalize_warranty_status(self.warranty_status)
-		so.warranty_expiry_date = self.warranty_expiry_date
-		so.warranty_plan = self.warranty_plan
-		so.warranty_deductible = self.warranty_deductible
-		so.estimated_delivery_date = frappe.utils.add_days(
-			frappe.utils.today(), default_delivery_days
-		)
-		
-		# Copy Warehouse/Location — ensure warehouse belongs to the SO company
-		_wh = self.source_warehouse
-		if _wh and not frappe.db.exists("Warehouse", {"name": _wh, "company": self.company}):
-			# Warehouse belongs to a different company — use first matching warehouse
-			_wh = frappe.db.get_value("Warehouse",
-				{"company": self.company, "is_group": 0, "disabled": 0},
-				"name") or None
-		so.set_warehouse = _wh
-		so.current_location = self.current_location
-		so.state_name = self.state_name
-		so.state_code = self.state_code
-		
-		# Set QC Status to Pending
-		so.qc_status = "Pending"
-		
-		# Set Delivery Mode default
-		so.delivery_mode = "Pick-up"
-		
-		# Add service item
-		service_item = self._resolve_service_item()
-
-		so.append('items', {
-			'item_code': service_item,
-			'item_name': f'Service Repair - {self.device_item_name}',
-			'description': self.issue_description,
-			'qty': 1.0,
-			'rate': float(self.estimated_cost or 0),
-			'warehouse': _wh
-		})
-		
-		# Let ERPNext set missing values (company address, tax template, etc.)
-		so.set_missing_values()
-		
-		# Save and link
-		try:
-			frappe.has_permission("Sales Order", "create", throw=True)
-			so.insert()
-			
-			# Update Service Request with Service Order link using db_set (document is submitted)
-			self.db_set("service_order", so.name, update_modified=False)
-			
-			frappe.msgprint(_("Service Order {0} created successfully").format(so.name),
-				title=_("Success"),
-				indicator="green")
-			
-			return so.name
-		except Exception as exc:
-			frappe.log_error(frappe.get_traceback(), f"Error creating Service Order for {self.name}")
-			# Say WHY. "Review the server error log" sent a counter clerk to a
-			# place they cannot reach for a message that was usually a plain
-			# validation error they could have fixed themselves — a device
-			# condition the Sales Order did not accept, a missing address.
-			detail = frappe.utils.strip_html(str(exc)).strip()
-			frappe.throw(
-				_("The Service Order could not be created: {0}").format(
-					detail or _("no reason was reported; see the server error log.")),
-				title=_("Service Order Not Created"),
-			)
 
 	def calculate_costs(self):
 		"""Calculate total costs from service items and spare parts"""
@@ -2662,7 +2487,7 @@ def accept_service_request(service_request) -> str:
 	and no order to raise. The Service Order is raised later, at Customer
 	Confirmation, once analysis and solutions have produced a real figure.
 
-	This used to call ``create_service_order()`` unconditionally and therefore
+	This used to raise a Sales Order unconditionally and therefore
 	always failed — the SO gate requires confirmed analysis, which by definition
 	has not happened at acceptance — so the Accept button threw on every
 	un-diagnosed ticket. The ``draft → analysis`` timeline entry at the end was
@@ -2685,12 +2510,7 @@ def accept_service_request(service_request) -> str:
 	doc.db_set("walkin_status", "Accepted", update_modified=False)  # Customer left device
 	_safe_set_sr_workflow_state(doc, "Accepted")
 
-	# Raise the order only if this ticket is genuinely ready for one.
 	doc.reload()
-	from gofix.gofix_services.orchestration import can_create_service_order
-
-	if not doc.service_order and can_create_service_order(doc):
-		doc.create_service_order()
 
 	# Acceptance immediately enters the operational In Service state.
 	doc.db_set("decision", "In Service", update_modified=False)
@@ -3359,29 +3179,6 @@ def flag_unclaimed_devices(days_threshold=None):
 		)
 		frappe.logger("gofix").info(f"Flagged {len(unclaimed)} unclaimed devices")
 	return {"flagged": len(unclaimed), "has_more": len(rows) > batch_limit}
-
-
-def ensure_service_order_on_accept(doc, method=None):
-	"""Hook: guarantee the SO exists once the job is sellable.
-
-	Catches cases where decision is set via db_set / direct SQL and the class
-	method on_update_after_submit didn't fire.
-
-	Gated on the same readiness check as that method: "Accepted" means the
-	device has been taken in, not that it has been diagnosed and quoted, so
-	firing on the decision alone made every save during Analysis blow up on the
-	prerequisite gate.
-	"""
-	if doc.decision != "Accepted" or doc.service_order:
-		return
-
-	from gofix.gofix_services.orchestration import can_create_service_order
-
-	if can_create_service_order(doc):
-		doc.create_service_order()
-		frappe.logger("gofix").info(
-			f"Auto-created SO for {doc.name} via hook"
-		)
 
 
 def auto_expire_stale_requests(days_threshold=None):

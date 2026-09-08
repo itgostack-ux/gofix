@@ -129,21 +129,4 @@ def update_service_costing(sr) -> dict:
 
     sr.flags.ignore_billing_lock = True
     sr.db_set(updates, update_modified=False)
-    _mirror(sr, updates)
     return updates
-
-
-def _mirror(sr, updates) -> None:
-    """Keep a legacy Sales Order's costing in step. Never fails the caller."""
-    order = sr.get("service_order")
-    if not order:
-        return
-    meta = frappe.get_meta("Sales Order")
-    payload = {k: v for k, v in updates.items()
-               if meta.get_field(k) and k != "actual_billed"}
-    if not payload:
-        return
-    try:
-        frappe.db.set_value("Sales Order", order, payload, update_modified=False)
-    except Exception:
-        frappe.log_error(frappe.get_traceback(), f"costing: could not mirror onto {order}")

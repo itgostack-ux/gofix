@@ -124,11 +124,14 @@ def issue_rows(doc) -> list:
 	rows = []
 	for r in (doc.get("issue_lines") or []):
 		by_customer = (r.get("reported_by") or "") != "Technician"
+		# A technician is named from the Employee record, never from the login
+		# that saved the row: a shared desk session is not a person, and
+		# "Inspection · Administrator" tells a customer nothing. Where no
+		# technician is on the line, say so plainly instead.
 		who = _("Customer") if by_customer else (
 			r.get("reported_by_technician_name")
 			or frappe.db.get_value("Employee", r.get("reported_by_technician"), "employee_name")
-			or person_name(r.get("owner"))
-			or _("Technician"))
+			or _("our technician"))
 		rows.append({
 			"category": r.get("issue_category") or "",
 			"by_customer": by_customer,
@@ -150,6 +153,24 @@ def accessory_list(doc) -> str:
 	if listed:
 		return ", ".join(listed)
 	return (doc.get("accessories_received") or "").strip()
+
+
+def billed_by(doc) -> str:
+	"""The executive who served this customer, never the login.
+
+	A till is shared by several people across a shift, so ``owner`` names a
+	machine's session rather than a person -- every repair invoice printed
+	"Administrator". Billed By is the executive who took the phone in, and the
+	name any incentive is paid against, so it is the only honest answer here.
+
+	Returns "" rather than a fallback when nobody was recorded: a wrong name on
+	a document that drives commission is worse than no name.
+	"""
+	executive = doc.get("custom_sales_executive") if hasattr(doc, "get") else None
+	if not executive:
+		return ""
+	return (frappe.db.get_value("POS Executive", executive, "executive_name")
+	        or executive)
 
 
 def repair_breakup(sr_name) -> dict:
@@ -269,6 +290,10 @@ def job_sheet_context(sr_name) -> dict:
 		"device_label": device_label(doc),
 		"issues": issue_rows(doc),
 		"accessories": accessory_list(doc),
-		"taken_in_by": person_name(doc.get("intake_executive"))
-		               or person_name(doc.get("received_by") or doc.get("accepted_by") or doc.owner),
+		# Billed By is the executive who took the phone from the customer, and the
+		# name any incentive is paid against. Falling back to received_by/owner
+		# printed the LOGIN -- "Administrator" -- on a line that sits above a
+		# signature. An empty line the counter signs is honest; a wrong name on a
+		# document that drives commission is not.
+		"taken_in_by": person_name(doc.get("intake_executive")),
 	}

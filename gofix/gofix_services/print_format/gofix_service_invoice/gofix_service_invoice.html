@@ -309,7 +309,15 @@
 				<div><span class="label">Repair Hub:</span> <span class="value">{{ sr.transferred_to_store }}</span></div>
 			{% endif %}
 			{% if doc.owner %}
-				<div><span class="label">Billed By:</span> {{ frappe.db.get_value("User", doc.owner, "full_name") or doc.owner }}</div>
+				{%- set _by = billed_by(doc) -%}
+				{% if _by %}
+					<div><span class="label">Billed By:</span> {{ _by }}</div>
+				{% else %}
+					{# The login is not a person: one till is worked by several
+					   executives, so `owner` printed "Administrator" on every
+					   repair. Nothing is better than the wrong name. #}
+					<div><span class="label">Billed By:</span> <span class="muted">Not recorded</span></div>
+				{% endif %}
 			{% endif %}
 		</div>
 	</div>
@@ -542,7 +550,9 @@
 			<td>
 				<div class="gfx-sign-line"></div>
 				<div class="gfx-sign-label">Handed over by</div>
-				<div class="gfx-sign-sub">{{ frappe.db.get_value("User", doc.owner, "full_name") or doc.owner }}</div>
+				{# The same rule as Billed By above: a shared till's login is not
+				   a person, and this line sits under a signature. #}
+				<div class="gfx-sign-sub">{{ billed_by(doc) or "" }}</div>
 			</td>
 		</tr>
 	</table>

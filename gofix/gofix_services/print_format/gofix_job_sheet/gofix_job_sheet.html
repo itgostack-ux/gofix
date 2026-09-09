@@ -334,7 +334,10 @@
       <td>
         <div class="gfx-card-h">Received by</div>
         <div class="gfx-sig-line"></div>
-        <div class="gfx-desc">{{ val(ctx.taken_in_by) }}, for {{ doc.company }}</div>
+        <div class="gfx-desc">
+          {%- if ctx.taken_in_by %}{{ ctx.taken_in_by }}, {% endif -%}
+          for {{ doc.company }}
+        </div>
       </td>
     </tr>
   </table>

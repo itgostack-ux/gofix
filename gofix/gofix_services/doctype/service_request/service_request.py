@@ -1395,6 +1395,27 @@ class ServiceRequest(Document):
 		"""Get permission-filtered open requests for this customer."""
 		return _get_scoped_open_requests(self)
 
+	def _attribute_executive(self, invoice):
+		"""Copy Billed By onto the invoice, and the incentive with it.
+
+		Mirrors what ``ch_pos.api.pos_api.create_pos_invoice`` does for a retail
+		sale, so a repair and a phone sold over the same counter attribute the
+		same way. The Sales Team row is what commission runs off; it is only
+		added when the executive is actually mapped to a Sales Person, because
+		an unattributed row would credit nobody while looking like it credited
+		someone.
+		"""
+		executive = self.get("intake_executive")
+		if not executive or not invoice.meta.has_field("custom_sales_executive"):
+			return
+		invoice.custom_sales_executive = executive
+		sales_person = frappe.db.get_value("POS Executive", executive, "sales_person")
+		if sales_person:
+			invoice.append("sales_team", {
+				"sales_person": sales_person,
+				"allocated_percentage": 100,
+			})
+
 	def create_service_invoice(self):
 		"""Create a Sales Invoice for this repair.
 
@@ -1493,6 +1514,14 @@ class ServiceRequest(Document):
 			"items": items,
 			"remarks": f"Service Invoice for Service Request {self.name}"
 		})
+
+		# Who served this customer. A till is shared by several executives, so
+		# the login on the document identifies a machine, not a person -- the
+		# repair invoice carried `owner` and every one of them read
+		# "Administrator". Billed By is the executive who took the phone from the
+		# customer, and it is also the name any incentive is paid against, so it
+		# has to survive onto the bill rather than stopping at the job sheet.
+		self._attribute_executive(invoice)
 		
 		# Store-wise P&L: attribute service revenue and spare-part COGS to the
 		# servicing store's Cost Center. Without this the invoice inherits

@@ -5647,6 +5647,12 @@ def create_ops_hub_invoice(sr_name, remote_otp=None) -> dict:
 
 	apply_cost_center(inv, warehouse=sr.get("source_warehouse"))
 
+	# Billed By, for the same reason and by the same rule -- a repair billed
+	# from here must credit the same executive as one billed from the Service
+	# Request, or which screen the counter happened to use decides whose
+	# incentive it is.
+	sr._attribute_executive(inv)
+
 	frappe.has_permission("Sales Invoice", "create", throw=True)
 	inv.insert()
 

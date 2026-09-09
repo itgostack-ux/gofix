@@ -33,6 +33,8 @@ jinja = {
 		"gofix.print_helpers.job_sheet_context",
 		# The work behind the bill: the tax table says how much, this says for what.
 		"gofix.print_helpers.repair_breakup",
+		# The executive who served the customer, for any document that names one.
+		"gofix.print_helpers.billed_by",
 	]
 }
 

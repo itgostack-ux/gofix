@@ -96,10 +96,13 @@ def _custody_period_exists(existing_rows, started_at, ended_at):
 
 def _insert_custody_period(assignment, started_at, ended_at, note):
 	hours = max(flt(time_diff_in_hours(ended_at, started_at)), 0)
-	service_request = assignment.service_request or frappe.db.get_value(
-		"Sales Order",
-		assignment.service_order,
-		"service_request")
+	# The Service Request is the operational document and every Job Assignment
+	# carries it. Going via the Sales Order was the old route and now returns
+	# None on any ticket booked since Service Order creation was removed, which
+	# left custody logs with no ticket on them at all.
+	service_request = assignment.service_request or (
+		frappe.db.get_value("Sales Order", assignment.service_order, "service_request")
+		if assignment.service_order else None)
 	frappe.get_doc({
 		"doctype": "GoFix Custody Log",
 		"service_request": service_request,
@@ -354,13 +357,19 @@ class JobAssignment(Document):
 		"""Device custody rule: a ticket may be split across technicians
 		(L1/L2/L4 each taking their solutions), but the physical device is
 		with ONE technician at a time — only one Job Assignment per Service
-		Order may be In Progress. Others queue as Open until handoff."""
-		if self.assignment_status != "In Progress" or not self.service_order:
+		Order may be In Progress. Others queue as Open until handoff.
+
+		Keyed on the SERVICE REQUEST. It used to be keyed on the Sales Order and
+		to return early when there was none -- so on every ticket booked since
+		Service Order creation was removed, the rule protecting physical custody
+		was silently not enforced and two technicians could both hold one
+		device."""
+		if self.assignment_status != "In Progress" or not self.service_request:
 			return
 		active = frappe.db.get_value(
 			"Job Assignment",
 			{
-				"service_order": self.service_order,
+				"service_request": self.service_request,
 				"assignment_status": "In Progress",
 				"name": ("!=", self.name or ""),
 				"docstatus": ("<", 2),
@@ -427,6 +436,7 @@ class JobAssignment(Document):
 		"""Check if job sheet is completed and update Service Order"""
 		self.record_custody_event()
 		if self.assignment_status in ["Completed", "Closed"]:
+			self.warn_unrecovered_spares()
 			self.update_service_order_status()
 
 	def on_update_after_submit(self):
@@ -434,7 +444,33 @@ class JobAssignment(Document):
 		# flips (start/hold/handover/complete) all happen post-submit.
 		self.record_custody_event()
 		if self.assignment_status in ["Completed", "Closed"]:
+			self.warn_unrecovered_spares()
 			self.update_service_order_status()
+
+	def warn_unrecovered_spares(self):
+		"""Consumed spares still in the device when the job is called done.
+
+		This warning used to live inside update_service_order_status, which
+		returns early when there is no Sales Order -- so since the rewrite
+		stopped creating one, a technician could close a job with parts still
+		inside and hear nothing. It belongs to the ticket, not to the order.
+		"""
+		if not self.service_request:
+			return
+		pending = frappe.get_all(
+			"Spare Parts Usage",
+			filters={"service_request": self.service_request, "part_status": "Consumed",
+			         "deleted": 0, "status": "Active"},
+			fields=["spare_part_item", "item_name", "qty_used"])
+		if not pending:
+			return
+		items_str = ", ".join(
+			f"{p.item_name or p.spare_part_item} (x{p.qty_used})" for p in pending)
+		frappe.msgprint(
+			_("<b>⚠ Spare Recovery Required:</b> {0} consumed spare(s) must be "
+			  "removed and dispositioned before returning device to customer.<br>"
+			  "Pending: {1}").format(len(pending), items_str),
+			title=_("Spare Recovery"), indicator="red")
 	
 	def on_submit(self):
 		"""Update service request with assignment details"""
@@ -754,14 +790,16 @@ def create_job_sheet_from_service_order(service_order, service_engineer=None, jo
 		job_sheet.assignment_type = "User Assignment"
 		job_sheet.user = frappe.session.user
 	
+	# Keyed on the ticket, so a second assignment to the same technician is
+	# caught whether or not the ticket has a Sales Order behind it.
 	duplicate = frappe.db.exists(
 		"Job Assignment",
 		{
-			"service_order": service_order,
+			"service_request": service_request,
 			"service_engineer": service_engineer,
 			"assignment_status": ("in", ("Open", "In Progress")),
 			"docstatus": ("<", 2),
-		}) if service_engineer else None
+		}) if (service_engineer and service_request) else None
 	if duplicate:
 		frappe.throw(_("Active Job Assignment {0} already exists.").format(duplicate))
 

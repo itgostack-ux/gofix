@@ -1817,22 +1817,21 @@ def mark_customer_confirmed(sr_name) -> dict:
 		from gofix.gofix_services import orchestration
 
 		# Price the chosen solutions, then record the customer's acceptance of
-		# that figure. Approval is what creates the Service Order.
+		# that figure. This is the moment the job becomes an order.
 		orchestration.create_estimate_version(sr_name, reason=None, send_to_customer=False)
 		orchestration.customer_approve_estimate(
 			sr_name, remarks=_("Customer confirmed the estimate at the Ops Hub")
 		)
 		sr.reload()
 		service_order = sr.service_order
-		if not service_order:
-			frappe.throw(
-				_("Customer confirmation recorded but no Service Order was created — "
-				  "check that analysis is confirmed and the estimate is approved."),
-				title=_("Service Order Not Created"),
-			)
 
+	# A Service Order is no longer raised per repair -- the Service Request is
+	# the order. This used to throw when none appeared, AFTER writing
+	# customer_confirmed, so the confirmation was recorded and the operator was
+	# told it had failed. The approval above is what matters; the order, if a
+	# legacy path made one, is returned for callers that still look at it.
 	_log_ops_stage(sr_name, "confirm", "assign")
-	return {"ok": True, "stage": "assign", "service_order": service_order}
+	return {"ok": True, "stage": "assign", "service_order": service_order or ""}
 
 
 # ── Step 3: Solution Assignment ───────────────────────────────────────────────
@@ -2578,11 +2577,10 @@ def assign_technician(sr_name, technician, job_type="Repair", estimated_hours=No
 	frappe.has_permission("Job Assignment", "create", throw=True)
 
 	sr = frappe.get_doc("Service Request", sr_name)
-	if not sr.service_order:
-		frappe.throw(
-			_("No Service Order found for {0}. Please accept the Service Request first.").format(sr_name)
-		)
 
+	# The Service Request IS the job. Requiring a Sales Order here dated from
+	# before the single-document rewrite, and since that rewrite stopped
+	# creating one, this refused every repair booked from that day on.
 	_assert_technician_can_take_solutions(
 		technician,
 		[row.repair_solution for row in _solution_rows_for_assignment(sr)],
@@ -2615,9 +2613,10 @@ def assign_solutions_to_technician(sr_name, solution_rows_json, technician, esti
 		frappe.throw(_("Select at least one solution to assign."), title=_("Validation Error"))
 
 	sr = frappe.get_doc("Service Request", sr_name)
-	if not sr.service_order:
-		frappe.throw(_("No Service Order found for {0}.").format(sr_name), title=_("Validation Error"))
 
+	# The Service Request IS the job. Requiring a Sales Order here dated from
+	# before the single-document rewrite, and since that rewrite stopped
+	# creating one, this refused every repair booked from that day on.
 	selected_rows = _solution_rows_for_assignment(sr, solution_rows)
 	_assert_technician_can_take_solutions(
 		technician,
@@ -2931,13 +2930,14 @@ def handover_device(sr_name, to_technician, remarks="") -> dict:
 	In Progress — both transitions land in the GoFix Custody Log."""
 	_assert_sr_permission(sr_name, "write")
 	sr = frappe.get_doc("Service Request", sr_name)
-	if not sr.service_order:
-		frappe.throw(_("No Service Order linked to {0}.").format(sr_name), title=_("Validation Error"))
 
+	# The Service Request IS the job. Requiring a Sales Order here dated from
+	# before the single-document rewrite, and since that rewrite stopped
+	# creating one, this refused every repair booked from that day on.
 	to_name = frappe.db.get_value("Employee", to_technician, "employee_name") or to_technician
 	holder = frappe.db.get_value(
 		"Job Assignment",
-		{"service_order": sr.service_order, "assignment_status": "In Progress", "docstatus": ("<", 2)},
+		{"service_request": sr.name, "assignment_status": "In Progress", "docstatus": ("<", 2)},
 		["name", "service_engineer"],
 		as_dict=True,
 	)
@@ -2991,11 +2991,15 @@ def handover_device(sr_name, to_technician, remarks="") -> dict:
 
 def _get_or_create_job_assignment(sr, technician, assignment_type, estimated_hours=None,
 		job_type="Repair", comments=None):
-	"""Reuse the technician's active JA on this service order, else create one."""
+	"""Reuse the technician's active JA on this ticket, else create one.
+
+	Keyed on the Service Request: every Job Assignment carries one (134 of 134
+	on this site), where only the older ones carry a Sales Order.
+	"""
 	ja_name = frappe.db.get_value(
 		"Job Assignment",
 		{
-			"service_order": sr.service_order,
+			"service_request": sr.name,
 			"service_engineer": technician,
 			"docstatus": ("<", 2),
 			"assignment_status": ("not in", ("Completed", "Cancelled")),
@@ -4071,9 +4075,10 @@ def handoff_to_technician(sr_name, new_technician, job_type="Repair", reason="")
 	frappe.has_permission("Job Assignment", "create", throw=True)
 
 	sr = frappe.get_doc("Service Request", sr_name)
-	if not sr.service_order:
-		frappe.throw(_("No Service Order linked to {0}.").format(sr_name), title=_("Validation Error"))
 
+	# The Service Request IS the job. Requiring a Sales Order here dated from
+	# before the single-document rewrite, and since that rewrite stopped
+	# creating one, this refused every repair booked from that day on.
 	ja = _get_or_create_job_assignment(
 		sr, new_technician, "Technician Changed", job_type=job_type, comments=reason
 	)

@@ -12,7 +12,52 @@ from gofix.config import get_int_setting, require_role_setting
 from gofix.security import assert_service_request_access
 
 
+# Every endpoint below this line predates the single-document rewrite. They take
+# a Sales Order, and since that rewrite stopped creating one per repair there is
+# nothing for them to take. None is reachable from a screen -- the Ops Hub has
+# replacements that work off the Service Request -- but they remain whitelisted,
+# so a caller reaching them over REST deserves to be told which one to use rather
+# than an opaque "Sales Order SRGF... not found".
+_SUPERSEDED_BY = {
+	"generate_delivery_otp": "gofix_ops_hub.handover_device",
+	"verify_delivery_otp": "gofix_ops_hub.handover_device",
+	"validate_delivery_readiness": "orchestration.check_billing_readiness",
+	"complete_delivery": "gofix_ops_hub.handover_device",
+	"send_estimate_to_customer": "orchestration.send_estimate_for_approval",
+	"customer_approve_estimate": "orchestration.customer_approve_estimate",
+	"customer_reject_estimate": "orchestration.customer_reject_estimate",
+	"approve_decision": "gofix_ops_hub.mark_customer_confirmed",
+	"reject_decision": "orchestration.customer_reject_estimate",
+	"calculate_suggested_price": "gofix_ops_hub.get_estimate_breakdown",
+}
+
+
 def _get_scoped_service_order(service_order, permission_type="read"):
+	"""Resolve a legacy Sales Order argument, or say plainly why it cannot.
+
+	Accepts a Service Request name too: a caller who has the ticket and not the
+	order gets routed rather than rejected, when the ticket happens to carry one.
+	"""
+	import inspect
+
+	if service_order and frappe.db.exists("Service Request", service_order):
+		resolved = frappe.db.get_value("Service Request", service_order, "service_order")
+		if resolved:
+			service_order = resolved
+
+	if not service_order or not frappe.db.exists("Sales Order", service_order):
+		caller = ""
+		try:
+			caller = inspect.stack()[1].function
+		except Exception:
+			pass
+		replacement = _SUPERSEDED_BY.get(caller)
+		frappe.throw(
+			_("This endpoint needs a Service Order, and repairs no longer have one — "
+			  "the Service Request is the operational document now."
+			  ) + (_(" Use {0} instead.").format(replacement) if replacement else ""),
+			title=_("Superseded API"))
+
 	so = frappe.get_doc("Sales Order", service_order)
 	if not so.is_service_order or not so.service_request:
 		frappe.throw(_("Not a linked Service Order"), frappe.PermissionError, title=_("API Error"))

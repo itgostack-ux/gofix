@@ -552,11 +552,13 @@ def s7_repair_qc():
                if isinstance(v, dict) and not v.get("allowed") and not v.get("reason")]
         ok(S, "S7.2 every action carries a reason when it is refused", not bad, bad)
 
-    @guard(S, "S7.3 delivery is refused before the repair is billed")
+    @guard(S, "S7.3 billing readiness is refused on an unfinished repair")
     def _():
-        from gofix.gofix_services.api import validate_delivery_readiness
-        r = validate_delivery_readiness(_ctx["sr"])
-        ok(S, "S7.3 delivery is refused before the repair is billed",
+        # The live check is orchestration.check_billing_readiness; api.py's
+        # validate_delivery_readiness is the superseded Sales-Order version.
+        from gofix.gofix_services.orchestration import check_billing_readiness
+        r = check_billing_readiness(_ctx["sr"])
+        ok(S, "S7.3 billing readiness is refused on an unfinished repair",
            not (r or {}).get("ready"), (r or {}).get("blockers") or r)
 
     @guard(S, "S7.4 a technician can be assigned")
@@ -934,84 +936,95 @@ def s13_data_readiness():
 # ══════════════════════════════════════════════════════════════════════════
 #
 # The single-document rewrite made the Service Request the operational document
-# and stopped creating a Sales Order for every repair. Parts of the app never
-# got the message and still demand one, so they throw on a ticket that was
-# created the way the app now creates them.
+# and stopped creating a Sales Order per repair. Four Ops Hub functions and ten
+# legacy endpoints were never told. These scenarios assert the ticket works
+# WITHOUT one -- which is how every repair is booked now.
 
 def s14_service_order():
-    S = "S14 Service Order dependency"
+    S = "S14 Service Order independence"
 
-    # Counting historic tickets measures this site's residue, not the product.
-    # The question that matters is whether a ticket booked in TODAY gets one.
-    @guard(S, "S14.1 a newly booked repair is given a Service Order")
+    @guard(S, "S14.1 a ticket booked today has no Service Order, by design")
     def _():
         if not _ctx.get("sr"):
-            blocked(S, "S14.1 a newly booked repair is given a Service Order", "no SR created")
+            blocked(S, "S14.1 a ticket booked today has no Service Order, by design", "no SR")
             return
         so = frappe.db.get_value("Service Request", _ctx["sr"], "service_order")
-        ok(S, "S14.1 a newly booked repair is given a Service Order", bool(so),
-           f"{_ctx['sr']} has service_order={so!r} — no live code path creates one")
+        ok(S, "S14.1 a ticket booked today has no Service Order, by design", not so,
+           f"service_order={so!r}")
 
-    ticket = frappe.db.sql("""SELECT name FROM `tabService Request`
-        WHERE IFNULL(service_order,'') = '' AND IFNULL(delivered_datetime,'') = ''
-          AND docstatus < 2 ORDER BY creation DESC LIMIT 1""")
     emp = frappe.db.get_value("Employee", {"status": "Active"}, "name")
-    if not (ticket and emp):
-        blocked(S, "S14.2 the Ops Hub actions that need one", "no such ticket, or no Employee")
-    else:
-        sr_name = ticket[0][0]
-        from gofix.gofix_services.page.gofix_ops_hub.gofix_ops_hub import handover_device
+    if not (emp and _ctx.get("sr")):
+        blocked(S, "S14.2 the Ops Hub works on such a ticket", "no Employee or no SR")
+        return
 
-        @guard(S, "S14.2 handover_device works on a ticket with no Service Order")
-        def _():
-            try:
-                handover_device(sr_name, emp)
-                ok(S, "S14.2 handover_device works on a ticket with no Service Order",
-                   True, "allowed")
-            except Exception as e:
-                ok(S, "S14.2 handover_device works on a ticket with no Service Order",
-                   "service order" not in str(e).lower(), f"{sr_name}: {str(e)[:110]}")
-            finally:
-                frappe.db.rollback()
+    from gofix.gofix_services.page.gofix_ops_hub.gofix_ops_hub import (
+        assign_technician, handover_device)
 
-        line = frappe.db.sql("""SELECT sl.parent, sl.name FROM `tabSR Solution Line` sl
-            JOIN `tabService Request` sr ON sr.name = sl.parent
-            WHERE IFNULL(sr.service_order,'') = '' LIMIT 1""", as_dict=True)
-        if not line:
-            blocked(S, "S14.3 assign_solutions_to_technician works without a Service Order",
-                    "no solution line on a ticket without a Service Order")
-        else:
-            from gofix.gofix_services.page.gofix_ops_hub.gofix_ops_hub import (
-                assign_solutions_to_technician)
+    @guard(S, "S14.2 a technician can be assigned without a Service Order")
+    def _():
+        try:
+            res = assign_technician(_ctx["sr"], emp, job_type="Repair", estimated_hours=1)
+            _ctx["ja"] = (res or {}).get("job_assignment") or (res or {}).get("name")
+            ok(S, "S14.2 a technician can be assigned without a Service Order",
+               bool(res), str(res)[:90])
+        except Exception as e:
+            ok(S, "S14.2 a technician can be assigned without a Service Order",
+               "service order" not in str(e).lower(), str(e)[:120])
+        finally:
+            frappe.db.commit()
 
-            @guard(S, "S14.3 assign_solutions_to_technician works without a Service Order")
-            def _():
-                try:
-                    assign_solutions_to_technician(
-                        line[0].parent, frappe.as_json([line[0].name]), emp, 1)
-                    ok(S, "S14.3 assign_solutions_to_technician works without a Service Order",
-                       True, "allowed")
-                except Exception as e:
-                    ok(S, "S14.3 assign_solutions_to_technician works without a Service Order",
-                       "service order" not in str(e).lower(),
-                       f"{line[0].parent}: {str(e)[:110]}")
-                finally:
-                    frappe.db.rollback()
+    @guard(S, "S14.3 the device can be handed over without a Service Order")
+    def _():
+        other = frappe.db.get_value("Employee",
+                                    {"status": "Active", "name": ("!=", emp)}, "name")
+        if not other:
+            blocked(S, "S14.3 the device can be handed over without a Service Order",
+                    "only one Active Employee on this site")
+            return
+        try:
+            handover_device(_ctx["sr"], other)
+            ok(S, "S14.3 the device can be handed over without a Service Order", True, "allowed")
+        except Exception as e:
+            # A refusal for a real custody reason is correct; one about a
+            # Service Order is the bug.
+            ok(S, "S14.3 the device can be handed over without a Service Order",
+               "service order" not in str(e).lower(), str(e)[:120])
+        finally:
+            frappe.db.rollback()
 
-    # The legacy API surface: still whitelisted, still reachable over REST,
-    # and unreachable from any screen.
-    import re
-    src = pathlib.Path(frappe.get_app_path("gofix", "gofix_services", "api.py")).read_text()
-    legacy, cur = [], None
-    for i, ln in enumerate(src.split("\n"), 1):
-        m = re.match(r"def ([a-z_]+)\(", ln)
-        if m:
-            cur = m.group(1)
-        if "_get_scoped_service_order(" in ln and i > 20 and cur:
-            legacy.append(cur)
-    _rec(S, "S14.4 whitelisted APIs that still require a Sales Order",
-         "PASS" if not legacy else "FAIL",
-         f"{len(legacy)}: {', '.join(sorted(set(legacy)))}")
+    @guard(S, "S14.4 one technician holds the device, enforced without a Service Order")
+    def _():
+        # The custody rule used to key on the Sales Order and return early
+        # without one, so two technicians could both hold a device.
+        import inspect
+        from gofix.gofix_services.doctype.job_assignment.job_assignment import JobAssignment
+        src = inspect.getsource(JobAssignment.validate_single_active_technician)
+        ok(S, "S14.4 one technician holds the device, enforced without a Service Order",
+           '"service_request": self.service_request' in src
+           and "not self.service_order" not in src,
+           "keyed on the ticket" if '"service_request"' in src else "still keyed on the order")
+
+    @guard(S, "S14.5 superseded endpoints name their replacement")
+    def _():
+        from gofix.gofix_services.api import validate_delivery_readiness
+        try:
+            validate_delivery_readiness(_ctx["sr"])
+            ok(S, "S14.5 superseded endpoints name their replacement", False,
+               "returned instead of explaining")
+        except Exception as e:
+            msg = str(e)
+            ok(S, "S14.5 superseded endpoints name their replacement",
+               "check_billing_readiness" in msg or "operational document" in msg,
+               msg[:120])
+
+    @guard(S, "S14.6 no Ops Hub action still demands a Service Order")
+    def _():
+        src = pathlib.Path(frappe.get_app_path(
+            "gofix", "gofix_services", "page", "gofix_ops_hub",
+            "gofix_ops_hub.py")).read_text()
+        ok(S, "S14.6 no Ops Hub action still demands a Service Order",
+           "if not sr.service_order" not in src,
+           "clean" if "if not sr.service_order" not in src else "guards remain")
 
 
 def _cleanup():

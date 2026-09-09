@@ -28,6 +28,9 @@ jinja = {
 		# a print format cannot build the URL itself -- and the builder must not
 		# be whitelisted, or any logged-in user could mint a link for any repair.
 		"gofix.tracking.tracking_url_for_print",
+		# Branch address, GSTIN and the tracking QR -- none of which the Service
+		# Request holds, and all of which the customer's copy needs.
+		"gofix.print_helpers.job_sheet_context",
 	]
 }
 

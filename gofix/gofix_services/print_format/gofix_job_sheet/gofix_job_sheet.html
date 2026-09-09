@@ -1,218 +1,390 @@
 {#
   GoFix Job Sheet — what the customer takes away at drop-off.
 
-  The counterpart to the delivery receipt, and the more important of the two.
+  The counterpart to the Service Invoice, and the more important of the two.
   Every dispute about a repair is a dispute about the state the device arrived
   in, and this is the only document that records it while the customer is
-  standing there: condition, accessories, what they were told about their data,
-  and their signature under all of it.
+  standing there: condition, accessories, locks, what they were told about their
+  data, and their signature under all of it.
 
-  Deliberately printed BEFORE any price is known. Nothing here promises a cost;
-  it is a receipt for a device, not a quotation.
+  Deliberately printed BEFORE the repair is priced. Any figure here is an
+  estimate given at the counter, and it says so.
+
+  Branch address, company GSTIN and the tracking QR come from
+  gofix.print_helpers.job_sheet_context — the Service Request stores a warehouse
+  id, and "GF-ALWARTHIRUNAGAR-Sellable" is not an address a customer can use.
 #}
-<div class="gfx-intake">
+{%- set ctx = job_sheet_context(doc.name) -%}
+{%- set branch = ctx.branch or {} -%}
+{%- set co = ctx.company or {} -%}
+{%- macro val(v) -%}{{ v if v not in (None, "", 0) else "—" }}{%- endmacro -%}
 
-  <div class="gfx-head">
-    <div>
-      <div class="gfx-title">Job Sheet</div>
-      <div class="gfx-sub">{{ doc.name }}</div>
-    </div>
-    <div class="gfx-head-right">
-      {% if doc.company %}<div class="gfx-co">{{ doc.company }}</div>{% endif %}
-      <div class="gfx-muted">
-        {{ frappe.format(doc.service_date, {"fieldtype": "Date"}) }}
-        {%- if doc.received_datetime %} · {{ frappe.format(doc.received_datetime, {"fieldtype": "Datetime"}) }}{% endif %}
-      </div>
-      {% if doc.source_warehouse %}
-        <div class="gfx-muted">{{ doc.source_warehouse.split(" - ")[0] }}</div>
-      {% endif %}
-    </div>
-  </div>
+<div class="gfx-js">
 
-  <table class="gfx-grid">
+  {# ── Letterhead ─────────────────────────────────────────────── #}
+  <table class="gfx-lh">
     <tr>
-      <th>Customer</th><td>{{ doc.customer_name or doc.customer or "—" }}</td>
-      <th>Contact</th><td>{{ doc.contact_number or "—" }}</td>
-    </tr>
-    <tr>
-      <th>Device</th>
-      <td>
-        {%- set named = [doc.device_brand, doc.device_model] | select | join(" ") -%}
-        {{ doc.device_item_name or doc.device_item or named or "—" }}
-        {%- if doc.device_category %}<div class="gfx-note">{{ doc.device_category }}</div>{% endif %}
+      <td class="gfx-lh-left">
+        <div class="gfx-co">{{ doc.company }}</div>
+        {% if branch.store_name %}
+          <div class="gfx-branch">{{ branch.store_name }}{% if branch.store_code %} ({{ branch.store_code }}){% endif %}</div>
+        {% endif %}
+        {% if branch.address %}<div class="gfx-addr">{{ branch.address }}</div>{% endif %}
+        {% if branch.address_line_2 %}<div class="gfx-addr">{{ branch.address_line_2 }}</div>{% endif %}
+        <div class="gfx-addr">
+          {%- if branch.contact_phone %}Phone {{ branch.contact_phone }}{% endif -%}
+          {%- if co.gstin %}{% if branch.contact_phone %} · {% endif %}GSTIN {{ co.gstin }}{% endif -%}
+        </div>
       </td>
-      <th>IMEI / Serial</th><td>{{ doc.actual_imei or doc.serial_no or "—" }}</td>
-    </tr>
-    <tr>
-      <th>Reported fault</th><td>{{ doc.issue_category or "—" }}</td>
-      <th>Warranty</th><td>{{ doc.warranty_status or "—" }}</td>
-    </tr>
-    {# The one date the customer will hold us to. #}
-    <tr>
-      <th>Ready by</th>
-      <td>
-        {%- if doc.promised_completion_datetime -%}
-          <b>{{ frappe.format(doc.promised_completion_datetime, {"fieldtype": "Datetime"}) }}</b>
-        {%- else -%}—{%- endif -%}
-      </td>
-      <th>Taken in by</th>
-      <td>
-        {%- if doc.intake_executive -%}
-          {{ frappe.db.get_value("POS Executive", doc.intake_executive, "executive_name") or doc.intake_executive }}
-        {%- else -%}
-          {{ frappe.db.get_value("User", doc.accepted_by or doc.owner, "full_name") or "—" }}
-        {%- endif -%}
+      <td class="gfx-lh-right">
+        <div class="gfx-doctype">JOB SHEET</div>
+        <div class="gfx-jobno">{{ doc.name }}</div>
+        {% if ctx.job_qr %}<img class="gfx-qr" src="{{ ctx.job_qr }}" alt="{{ doc.name }}">{% endif %}
       </td>
     </tr>
   </table>
 
-  {# How the device travels. Printed only when it is not a plain counter
-     drop-off, because a customer who walked in does not need telling. #}
-  {% set mv = doc.intake_method or doc.return_method %}
-  {% if mv %}
-    <div class="gfx-two">
-      <div class="gfx-block">
-        <div class="gfx-label">How it reached us</div>
-        <div><b>{{ doc.intake_method or "—" }}</b></div>
-        {% if doc.intake_partner %}<div class="gfx-note">Carried by {{ doc.intake_partner }}</div>{% endif %}
-        {% if doc.intake_tracking_number %}<div class="gfx-note">Tracking {{ doc.intake_tracking_number }}</div>{% endif %}
-        {% if doc.intake_received_datetime %}
-          <div class="gfx-note">Received {{ frappe.format(doc.intake_received_datetime, {"fieldtype": "Datetime"}) }}</div>
-        {% endif %}
-      </div>
-      <div class="gfx-block">
-        <div class="gfx-label">How it goes back</div>
-        <div><b>{{ doc.return_method or "To be agreed before billing" }}</b></div>
-        {% if doc.return_partner %}<div class="gfx-note">Carried by {{ doc.return_partner }}</div>{% endif %}
-        {% if doc.return_scheduled_datetime %}
-          <div class="gfx-note">Slot {{ frappe.format(doc.return_scheduled_datetime, {"fieldtype": "Datetime"}) }}</div>
-        {% endif %}
-        {% if doc.return_address %}<div class="gfx-note">{{ doc.return_address }}</div>{% endif %}
-      </div>
-    </div>
-  {% endif %}
+  <table class="gfx-strip">
+    <tr>
+      <td><span>Received</span>{{ frappe.format(doc.received_datetime or doc.creation, {"fieldtype": "Datetime"}) }}</td>
+      {% if doc.mode_of_service %}<td><span>Service mode</span>{{ doc.mode_of_service }}</td>{% endif %}
+      <td><span>Priority</span>{{ val(doc.priority) }}</td>
+      <td><span>Customer type</span>{{ val(doc.customer_type) }}{% if doc.visit_type %} · {{ doc.visit_type }}{% endif %}</td>
+    </tr>
+  </table>
 
-  {% if doc.issue_description %}
-    <div class="gfx-block">
-      <div class="gfx-label">What the customer reported</div>
-      <div>{{ doc.issue_description }}</div>
-    </div>
-  {% endif %}
+  {# ── Who and what ───────────────────────────────────────────── #}
+  <table class="gfx-cols"><tr>
+    <td>
+      <div class="gfx-card">
+        <div class="gfx-card-h">Customer</div>
+        <div class="gfx-kvwrap"><table class="gfx-kv">
+          <tr><th>Name</th><td><b>{{ val(doc.customer_name or doc.customer) }}</b></td></tr>
+          <tr><th>Mobile</th><td><b>{{ val(doc.contact_number) }}</b></td></tr>
+          {% if doc.email %}<tr><th>Email</th><td>{{ doc.email }}</td></tr>{% endif %}
+          {%- set addr_lines = (doc.billing_address_display or "").split("\n") | map("trim") | select | list -%}
+          {%- if addr_lines and addr_lines[0] == (doc.customer_name or doc.customer) -%}
+            {%- set addr_lines = addr_lines[1:] -%}
+          {%- endif -%}
+          {% if addr_lines %}
+            <tr><th>Address</th><td>{{ addr_lines | join(", ") }}</td></tr>
+          {% endif %}
+          {% if doc.ch_membership_id %}
+            <tr><th>Member</th><td>{{ doc.ch_membership_id }}</td></tr>
+          {% endif %}
+        </table></div>
+      </div>
 
-  {# Condition and accessories are the whole point of the document. #}
-  <div class="gfx-two">
-    <div class="gfx-block">
-      <div class="gfx-label">Condition as received</div>
-      <div><b>{{ doc.device_condition or "—" }}</b></div>
-      {% if doc.product_condition_desc %}<div class="gfx-note">{{ doc.product_condition_desc }}</div>{% endif %}
-    </div>
-    <div class="gfx-block">
-      <div class="gfx-label">Accessories handed over</div>
-      <div><b>{{ doc.accessories_received or "None" }}</b></div>
+    </td>
+    <td>
+      <div class="gfx-card">
+        <div class="gfx-card-h">Device</div>
+        <div class="gfx-kvwrap"><table class="gfx-kv">
+          <tr>
+            <th>Model</th>
+            <td><b>{{ val(ctx.device_label) }}</b></td>
+          </tr>
+          <tr><th>IMEI / Serial</th><td class="gfx-mono"><b>{{ val(doc.actual_imei or doc.serial_no) }}</b></td></tr>
+          {% if doc.device_category %}<tr><th>Category</th><td>{{ doc.device_category }}</td></tr>{% endif %}
+          <tr>
+            <th>Screen lock</th>
+            <td>
+              {{ val(doc.device_unlock_type) }}
+              {%- if doc.device_unlock_code %} · <span class="gfx-ok">unlock details recorded</span>{% endif -%}
+            </td>
+          </tr>
+          <tr>
+            <th>Activation lock</th>
+            <td>
+              {{ val(doc.activation_lock_status) }}
+              {%- if doc.activation_lock_status == "Locked — Customer Cannot Unlock" %}
+                <div class="gfx-warn">Testing after repair will be limited until this is removed.</div>
+              {% endif -%}
+            </td>
+          </tr>
+          {% if doc.imei_validation_status %}
+            <tr><th>IMEI screening</th><td>{{ doc.imei_validation_status }}</td></tr>
+          {% endif %}
+        </table></div>
+      </div>
+    </td>
+  </tr></table>
+
+  {# ── The complaint, in the customer's words ─────────────────── #}
+  <div class="gfx-card">
+    <div class="gfx-card-h">Complaint as reported</div>
+    <div class="gfx-body">
+      {% if doc.issue_category %}<b>{{ doc.issue_category }}</b>{% endif %}
+      {% if doc.issue_description %}
+        <div class="gfx-desc">{{ doc.issue_description }}</div>
+      {% endif %}
+      {% if doc.is_repeat_complaint %}
+        <div class="gfx-warn">
+          Repeat complaint{% if doc.previous_service_request %} — previous job {{ doc.previous_service_request }}{% endif %}.
+        </div>
+      {% endif %}
     </div>
   </div>
 
-  <div class="gfx-block gfx-terms">
-    <div class="gfx-label">Data and consent</div>
-    <ul>
-      <li>
-        {% if doc.data_backup_disclaimer %}
-          The customer has been told that data on the device may be lost during repair and
-          accepts that risk.
-        {% else %}
-          <b>No data-loss acknowledgement was recorded at drop-off.</b>
-        {% endif %}
-      </li>
-      {% if doc.data_access_required %}
-        <li>
-          This repair requires access to the data on the device.
-          {% if doc.data_access_consent %}The customer has consented to that access.
-          {% else %}<b>Consent to access has not yet been given.</b>{% endif %}
-        </li>
-      {% endif %}
-      {% if doc.backup_info %}<li>Backup: {{ doc.backup_info }}</li>{% endif %}
-    </ul>
-    <div class="gfx-note">
-      No charge is authorised by this receipt. An estimate will be raised after the device
-      has been examined, and work begins only once the customer approves it.
-    </div>
-    {% if doc.advance_amount %}
-      {# An advance is the customer's money and the only figure that belongs on
-         a document that deliberately quotes no price. #}
-      <div class="gfx-advance">
-        Advance paid at drop-off:
-        <b>{{ frappe.format(doc.advance_amount, {"fieldtype": "Currency"}, doc=doc) }}</b>
-        — adjusted against the final invoice.
+  {# ── Condition. The whole point of the document. ────────────── #}
+  <table class="gfx-cols"><tr>
+    <td>
+      <div class="gfx-card">
+        <div class="gfx-card-h">Condition as received</div>
+        <div class="gfx-body">
+          <b>{{ val(doc.device_condition) }}</b>
+          {% if doc.product_condition_desc %}<div class="gfx-desc">{{ doc.product_condition_desc }}</div>{% endif %}
+        </div>
       </div>
+    </td>
+    <td>
+      <div class="gfx-card">
+        <div class="gfx-card-h">Accessories received with the device</div>
+        <div class="gfx-body">
+          <b>{{ doc.accessories_received or "None handed over" }}</b>
+          <div class="gfx-desc">Only what is listed here was received and only this will be returned.</div>
+        </div>
+      </div>
+    </td>
+  </tr></table>
+
+  {# ── What we have committed to ──────────────────────────────── #}
+  <div class="gfx-card">
+    <div class="gfx-card-h">What we have committed to</div>
+    <table class="gfx-kv gfx-kv-4">
+      <tr>
+        <th>Ready by</th>
+        <td><b>{{ frappe.format(doc.promised_completion_datetime, {"fieldtype": "Datetime"}) if doc.promised_completion_datetime else "—" }}</b></td>
+        <th>Coverage</th>
+        <td>{{ val(doc.coverage_category or doc.warranty_status) }}</td>
+      </tr>
+      <tr>
+        <th>Warranty on this repair</th>
+        <td>{% if doc.repair_warranty_days %}{{ doc.repair_warranty_days }} days from handover{% else %}—{% endif %}</td>
+        <th>Taken in by</th>
+        <td>{{ val(ctx.taken_in_by) }}</td>
+      </tr>
+    </table>
+
+    {% set est = doc.total_estimated_cost or doc.estimated_cost %}
+    {% if est or doc.advance_amount %}
+      <div class="gfx-money">
+        {% if est %}
+          <div>
+            Estimate given at the counter:
+            <b>{{ frappe.format(est, {"fieldtype": "Currency"}, doc=doc) }}</b>
+            <span class="gfx-desc">— approximate. The device has not been examined yet; a firm
+            estimate follows inspection and work starts only after you approve it.</span>
+          </div>
+        {% else %}
+          <div class="gfx-desc">No price has been quoted. An estimate follows inspection, and
+          work starts only after you approve it.</div>
+        {% endif %}
+        {% if doc.advance_amount %}
+          <div class="gfx-adv">
+            Advance paid today:
+            <b>{{ frappe.format(doc.advance_amount, {"fieldtype": "Currency"}, doc=doc) }}</b>
+            {%- if doc.advance_received_via %} ({{ doc.advance_received_via }}){% endif %}
+            — adjusted against the final invoice.
+          </div>
+        {% endif %}
+      </div>
+    {% else %}
+      <div class="gfx-desc gfx-body">No price has been quoted by this job sheet. An estimate
+      follows inspection, and work starts only after you approve it.</div>
     {% endif %}
   </div>
 
-  <div class="gfx-two gfx-sign">
-    <div>
-      <div class="gfx-label">Customer signature</div>
-      {%- set sig = doc.intake_signature or "" -%}
-      {%- set signed = sig and "signature-placeholder" not in sig -%}
-      {% if signed %}
-        <img src="{{ sig }}" class="gfx-sig-img" alt="Customer signature">
-        {% if doc.intake_signed_at %}
-          <div class="gfx-note">Signed {{ frappe.format(doc.intake_signed_at, {"fieldtype": "Datetime"}) }}</div>
-        {% endif %}
-      {% else %}
-        <div class="gfx-sig-line"></div>
-        <div class="gfx-note">I have read the above and agree the device was received as described.</div>
-      {% endif %}
-    </div>
-    <div>
-      <div class="gfx-label">Received by</div>
-      <div class="gfx-sig-line"></div>
-      <div class="gfx-note">
-        {%- if doc.intake_executive -%}
-          {{ frappe.db.get_value("POS Executive", doc.intake_executive, "executive_name") or doc.intake_executive }}
-        {%- else -%}
-          {{ frappe.db.get_value("User", doc.accepted_by or doc.owner, "full_name") or doc.accepted_by or doc.owner or "" }}
-        {%- endif -%}
+  {# ── Movement, only when the device did not simply arrive here ─ #}
+  {% if doc.intake_method or doc.return_method %}
+    <table class="gfx-cols"><tr>
+      <td>
+        <div class="gfx-card">
+          <div class="gfx-card-h">How it reached us</div>
+          <div class="gfx-body">
+            <b>{{ val(doc.intake_method) }}</b>
+            {% if doc.intake_partner %}<div class="gfx-desc">Carried by {{ doc.intake_partner }}</div>{% endif %}
+            {% if doc.intake_tracking_number %}<div class="gfx-desc">Tracking {{ doc.intake_tracking_number }}</div>{% endif %}
+          </div>
+        </div>
+      </td>
+      <td>
+        <div class="gfx-card">
+          <div class="gfx-card-h">How it goes back</div>
+          <div class="gfx-body">
+            <b>{{ doc.return_method or "To be agreed before billing" }}</b>
+            {% if doc.return_partner %}<div class="gfx-desc">Carried by {{ doc.return_partner }}</div>{% endif %}
+            {% if doc.return_scheduled_datetime %}
+              <div class="gfx-desc">Slot {{ frappe.format(doc.return_scheduled_datetime, {"fieldtype": "Datetime"}) }}</div>
+            {% endif %}
+            {% if doc.return_address %}<div class="gfx-desc">{{ doc.return_address }}</div>{% endif %}
+          </div>
+        </div>
+      </td>
+    </tr></table>
+  {% endif %}
+
+  {% if doc.loaner_status and doc.loaner_status != "Not Issued" %}
+    <div class="gfx-card gfx-loaner">
+      <div class="gfx-card-h">Loaner device issued</div>
+      <div class="gfx-body">
+        <b>{{ doc.loaner_status }}</b>
+        {%- if doc.loaner_serial_no %} · {{ doc.loaner_serial_no }}{% endif -%}
+        {%- if doc.loaner_issued_at %} · issued {{ frappe.format(doc.loaner_issued_at, {"fieldtype": "Datetime"}) }}{% endif %}
+        <div class="gfx-desc">To be returned in working condition when the repaired device is collected.</div>
       </div>
     </div>
+  {% endif %}
+
+  {# ── Declarations and terms ─────────────────────────────────── #}
+  <div class="gfx-card gfx-terms">
+    <div class="gfx-card-h">Declarations and terms</div>
+    <ol>
+      <li>
+        {% if doc.data_backup_disclaimer %}
+          I understand that data on the device may be lost during repair and I accept that risk.
+        {% else %}
+          <b>No data-loss acknowledgement was recorded at drop-off.</b>
+        {% endif %}
+        {%- if doc.backup_info %} <span class="gfx-desc">{{ doc.backup_info }}</span>{% endif %}
+      </li>
+      {% if doc.data_access_required %}
+        <li>
+          This repair needs access to the data on the device.
+          {% if doc.data_access_consent %}I consent to that access.
+          {% else %}<b>Consent to access has not yet been given.</b>{% endif %}
+        </li>
+      {% endif %}
+      <li>The device was received in the condition and with the accessories recorded above.
+        Anything not listed was not handed over.</li>
+      <li>No charge is authorised by this job sheet. Work begins only after I approve an
+        estimate.</li>
+      <li>If the device is found beyond economical repair, it will be returned unrepaired and
+        only inspection charges, if any were agreed, will apply.</li>
+      <li>Repairs carry {% if doc.repair_warranty_days %}{{ doc.repair_warranty_days }} days{% else %}the
+        stated warranty{% endif %} on the work and the parts replaced. It does not cover fresh
+        physical damage, liquid ingress, or tampering by anyone else.</li>
+      <li>Devices are to be collected within 30 days of being reported ready. Storage beyond
+        that is at the customer's risk.</li>
+      <li>This job sheet must be produced at collection. Collection by anyone else needs the
+        customer's written authorisation and photo identification.</li>
+    </ol>
   </div>
 
-  <div class="gfx-foot">
-    Quote <b>{{ doc.name }}</b> when asking after this repair.
-    {%- set track = tracking_url_for_print(doc.name) if doc.tracking_token else "" -%}
-    {%- if track %} Follow it online at <b>{{ track }}</b>.{% endif %}
-  </div>
+  {# ── Signatures ─────────────────────────────────────────────── #}
+  <table class="gfx-sign">
+    <tr>
+      <td>
+        <div class="gfx-card-h">Customer signature</div>
+        {%- set sig = doc.intake_signature or "" -%}
+        {%- set signed = sig and "signature-placeholder" not in sig -%}
+        {% if signed %}
+          <img src="{{ sig }}" class="gfx-sig-img" alt="Customer signature">
+          {% if doc.intake_signed_at %}
+            <div class="gfx-desc">Signed {{ frappe.format(doc.intake_signed_at, {"fieldtype": "Datetime"}) }}</div>
+          {% endif %}
+        {% else %}
+          <div class="gfx-sig-line"></div>
+        {% endif %}
+        <div class="gfx-desc">{{ val(doc.customer_name or doc.customer) }} — I have read and agree
+          to the declarations above.</div>
+      </td>
+      <td>
+        <div class="gfx-card-h">Received by</div>
+        <div class="gfx-sig-line"></div>
+        <div class="gfx-desc">{{ val(ctx.taken_in_by) }}, for {{ doc.company }}</div>
+      </td>
+    </tr>
+  </table>
+
+  {# ── Footer ─────────────────────────────────────────────────── #}
+  <table class="gfx-foot">
+    <tr>
+      <td>
+        <div><b>Quote {{ doc.name }}</b> when asking after this repair
+          {%- if branch.contact_phone %}, or call {{ branch.contact_phone }}{% endif -%}.</div>
+        {% if ctx.track_url %}
+          <div class="gfx-desc">Scan to follow the repair online, or visit {{ ctx.track_url.split("?")[0] }}</div>
+        {% endif %}
+        <div class="gfx-copy">Customer copy</div>
+      </td>
+      {% if ctx.track_qr %}
+        <td class="gfx-foot-qr"><img class="gfx-qr" src="{{ ctx.track_qr }}" alt="Track this repair"></td>
+      {% endif %}
+    </tr>
+  </table>
 </div>
 
 <style>
-  /* Printed on a counter printer, often thermal — so: no colour dependence, no
-     hairlines that vanish, and a layout that survives a narrow roll. */
-  .gfx-intake { font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; color: #111; font-size: 12px; line-height: 1.5; }
-  .gfx-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px;
-              border-bottom: 2px solid #111; padding-bottom: 8px; margin-bottom: 12px; }
-  .gfx-title { font-size: 19px; font-weight: 700; letter-spacing: -.2px; }
-  .gfx-sub { font-family: "Courier New", monospace; font-size: 13px; font-weight: 700; margin-top: 2px; }
-  .gfx-head-right { text-align: right; }
-  .gfx-co { font-weight: 700; }
-  .gfx-muted { color: #555; font-size: 11px; }
+  /* Printed at a counter, often on a cheap laser or a thermal roll: no colour
+     dependence, no hairlines that vanish, and nothing that needs more than the
+     page width. Tables rather than flexbox — wkhtmltopdf lays flex out badly. */
+  /* Frappe's print stylesheet ships `.print-format td, .print-format th
+     { padding: 10px !important }`. Every cell in this document was being padded
+     20px vertically -- five facts filling the space fifteen would -- and the
+     sheet ran to two pages with the signature alone on the second. !important
+     is the only thing that beats !important, so every cell rule here carries
+     it. */
+  .gfx-js { font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; color: #111;
+            font-size: 10.5px; line-height: 1.4; }
+  .gfx-js table { width: 100%; border-collapse: collapse; }
 
-  .gfx-grid { width: 100%; border-collapse: collapse; margin-bottom: 12px; }
-  .gfx-grid th { text-align: left; font-size: 9px; text-transform: uppercase; letter-spacing: .07em;
-                 color: #555; font-weight: 700; padding: 4px 8px 4px 0; width: 15%; vertical-align: top; }
-  .gfx-grid td { padding: 4px 14px 4px 0; vertical-align: top; width: 35%; }
+  .gfx-lh { border-bottom: 2.5px solid #111; padding-bottom: 6px; margin-bottom: 0; }
+  .gfx-lh td { vertical-align: top; padding: 0 0 5px !important; }
+  .gfx-lh-right { text-align: right; width: 33%; white-space: nowrap; }
+  .gfx-co { font-size: 14px; font-weight: 700; letter-spacing: -.2px; }
+  .gfx-branch { font-size: 12px; font-weight: 700; margin-top: 1px; }
+  .gfx-addr { color: #444; font-size: 10px; }
+  .gfx-doctype { font-size: 15px; font-weight: 700; letter-spacing: .16em; }
+  .gfx-jobno { font-family: "Courier New", monospace; font-size: 12px; font-weight: 700; }
+  .gfx-qr { width: 54px; height: 54px; margin-top: 2px; }
 
-  .gfx-block { border: 1px solid #bbb; border-radius: 3px; padding: 8px 10px; margin-bottom: 10px; }
-  .gfx-label { font-size: 9px; text-transform: uppercase; letter-spacing: .07em; color: #555;
-               font-weight: 700; margin-bottom: 3px; }
-  .gfx-note { color: #555; font-size: 10.5px; margin-top: 3px; }
-  .gfx-two { display: flex; gap: 10px; }
-  .gfx-two > * { flex: 1; }
+  .gfx-strip { border-bottom: 1px solid #111; margin-bottom: 7px; }
+  .gfx-strip td { padding: 4px 10px 4px 0 !important; font-size: 10px; font-weight: 700; }
+  .gfx-strip span { display: block; font-size: 8px; text-transform: uppercase;
+                    letter-spacing: .08em; color: #666; font-weight: 700; }
 
-  .gfx-terms ul { margin: 4px 0 0; padding-left: 16px; }
-  .gfx-terms li { margin-bottom: 3px; }
+  /* Child selectors, not descendant: .gfx-cols td would also hit every cell of
+     the key/value tables nested inside these columns. */
+  .gfx-cols { table-layout: fixed; margin-bottom: 0; }
+  .gfx-cols > tbody > tr > td { width: 50%; vertical-align: top; padding: 0 7px 0 0 !important; }
+  .gfx-cols > tbody > tr > td:last-child { padding: 0 !important; }
 
-  .gfx-sign { margin-top: 16px; }
-  .gfx-sig-img { max-height: 54px; max-width: 100%; display: block; margin: 4px 0; }
-  .gfx-sig-line { border-bottom: 1px solid #111; height: 40px; }
+  .gfx-card { border: 1px solid #999; margin-bottom: 7px; page-break-inside: avoid; }
+  .gfx-card-h { background: #eee; border-bottom: 1px solid #999; padding: 2px 7px;
+                font-size: 8.5px; text-transform: uppercase; letter-spacing: .08em;
+                font-weight: 700; color: #222; }
+  .gfx-body { padding: 6px 8px; }
+  .gfx-desc { color: #444; font-size: 9.5px; margin-top: 2px; }
+  .gfx-mono { font-family: "Courier New", monospace; }
+  .gfx-ok { font-size: 9.5px; }
+  .gfx-warn { font-size: 10px; font-weight: 700; margin-top: 2px; }
 
-  .gfx-advance { margin-top: 6px; padding: 5px 7px; border: 1px solid #111; border-radius: 3px; }
-  .gfx-foot { border-top: 1px solid #bbb; margin-top: 14px; padding-top: 7px; font-size: 11px; color: #333; }
+  .gfx-kvwrap { padding: 4px 0; }
+  .gfx-kv { padding: 0; }
+  .gfx-kv th { text-align: left; font-size: 8px; text-transform: uppercase;
+               letter-spacing: .05em; color: #555; font-weight: 700; width: 33%;
+               padding: 3.5px 6px 3.5px 8px !important; vertical-align: top; white-space: nowrap; }
+  .gfx-kv td { padding: 3.5px 8px 3.5px 0 !important; vertical-align: top; }
+  .gfx-kv-4 th { width: 17%; }
+  .gfx-kv-4 td { width: 33%; }
+
+  .gfx-money { border-top: 1px solid #ccc; padding: 6px 8px; }
+  .gfx-adv { margin-top: 4px; border: 1px solid #111; padding: 4px 6px; }
+  .gfx-loaner { border-width: 2px; }
+
+  .gfx-terms ol { margin: 5px 0 6px; padding-left: 19px; font-size: 10px; }
+  .gfx-terms li { margin-bottom: 2.5px; }
+
+  .gfx-sign { margin-top: 11px; page-break-inside: avoid; }
+  .gfx-sign td { width: 50%; vertical-align: top; padding: 0 22px 0 0 !important; }
+  .gfx-sig-img { max-height: 46px; max-width: 100%; display: block; margin: 4px 0; }
+  .gfx-sig-line { border-bottom: 1px solid #111; height: 42px; }
+
+  .gfx-foot { border-top: 1.5px solid #111; margin-top: 8px; padding-top: 5px;
+              page-break-inside: avoid; }
+  .gfx-foot td { vertical-align: top; padding: 6px 0 0 !important; }
+  .gfx-foot-qr { width: 70px; text-align: right; }
+  .gfx-copy { margin-top: 4px; font-size: 8.5px; text-transform: uppercase;
+              letter-spacing: .1em; color: #666; font-weight: 700; }
 </style>

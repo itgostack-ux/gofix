@@ -230,3 +230,32 @@ def tracking_url(partner, number) -> str:
     if not template:
         return ""
     return template.replace("{tracking_number}", str(number).strip())
+
+
+@frappe.whitelist()
+def movement_options(direction=None) -> dict:
+    """The ways a device can reach us and go home, with their own rules.
+
+    The counter form needs to know not just which methods exist but what each
+    one demands, so it can ask a courier for a waybill and a customer for
+    nothing. Sending the flags with the list keeps that decision in the master
+    where ops can change it, instead of in a switch statement in the browser.
+    """
+    filters = {"disabled": 0}
+    methods = frappe.get_all(
+        "Device Logistics Method", filters=filters,
+        fields=["name", "direction", "customer_present", "requires_partner",
+                "requires_tracking", "requires_address", "requires_schedule"],
+        order_by="customer_present desc, name")
+    if direction:
+        # "Both" serves either leg; a one-way method only shows on its own leg.
+        methods = [m for m in methods
+                   if not m.direction or m.direction in ("Both", direction)]
+    return {
+        "methods": methods,
+        # Courier Partner marks availability with is_active, not disabled.
+        "partners": frappe.get_all("Courier Partner", filters={"is_active": 1},
+                                   fields=["name", "partner_name", "partner_type",
+                                           "tracking_url_template"],
+                                   order_by="partner_name"),
+    }

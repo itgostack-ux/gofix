@@ -561,11 +561,21 @@ def unassigned_requests(company=None) -> list:
     }
     if company:
         filters["company"] = company
-    return frappe.get_list(
+    rows = frappe.get_list(
         "POS Kiosk Token", filters=filters,
-        fields=["name", "visit_source", "customer_name", "customer_phone",
-                "city", "issue_description", "creation", "status", "company"],
+        fields=["name", "token_display", "visit_source", "visit_purpose", "status",
+                "creation", "customer_name", "customer_phone", "linked_customer",
+                "city", "issue_description", "issue_category", "device_brand",
+                "device_model", "device_model_name", "other_device_hint",
+                "preferred_datetime", "expires_at", "first_response_at",
+                "assigned_to", "email", "referral_source", "company"],
         order_by="creation desc", limit_page_length=100)
+    for row in rows:
+        # The card reads these; without them the pool rows render bare and the
+        # purpose filter silently drops every one of them.
+        row["channel_group"] = "remote"
+        row["awaiting_response"] = not row.get("first_response_at")
+    return rows
 
 
 @frappe.whitelist()

@@ -210,16 +210,21 @@ def _resolve_store(company, phone, explicit=None) -> str:
     Returning nothing is allowed and is not a leak: an unrouted request shows
     only under the explicit "Unassigned" filter, where a manager routes it.
     """
+    if explicit and not _store_is_open(explicit, company):
+        explicit = None
     if explicit:
         return explicit
 
     number = normalise_phone(phone)
     if number:
+        # Their last store, but only if it is still trading. A branch that has
+        # since closed would take the request nobody can open the till to see.
         last = frappe.db.sql("""
-            SELECT pos_profile FROM `tabPOS Kiosk Token`
-            WHERE customer_phone = %(p)s AND COALESCE(pos_profile, '') != ''
-              AND company = %(c)s
-            ORDER BY creation DESC LIMIT 1
+            SELECT t.pos_profile
+            FROM `tabPOS Kiosk Token` t
+            JOIN `tabPOS Profile` p ON p.name = t.pos_profile AND p.disabled = 0
+            WHERE t.customer_phone = %(p)s AND t.company = %(c)s
+            ORDER BY t.creation DESC LIMIT 1
         """, {"p": number, "c": company})
         if last:
             return last[0][0]
@@ -228,11 +233,18 @@ def _resolve_store(company, phone, explicit=None) -> str:
         from ch_pos.config import get_control_setting
 
         default = get_control_setting("default_front_desk_profile", "")
-        if default and frappe.db.get_value("POS Profile", default, "company") == company:
+        if default and _store_is_open(default, company):
             return default
     except Exception:
         pass
     return None
+
+
+def _store_is_open(pos_profile: str, company: str) -> bool:
+    """A store that can actually take the work: right company, not disabled."""
+    row = frappe.db.get_value("POS Profile", pos_profile,
+                              ["company", "disabled"], as_dict=True)
+    return bool(row and row.company == company and not row.disabled)
 
 
 def _default_company():
@@ -507,12 +519,20 @@ def assign_store(inbox, pos_profile, note=None) -> dict:
     doc.check_permission("write")
 
     profile = frappe.db.get_value("POS Profile", pos_profile,
-                                  ["name", "company", "warehouse"], as_dict=True)
+                                  ["name", "company", "warehouse", "disabled"], as_dict=True)
     if not profile:
         frappe.throw(_("{0} is not a store.").format(pos_profile))
     if profile.company != doc.company:
         frappe.throw(_("{0} belongs to another company.").format(pos_profile),
                      frappe.PermissionError, title=_("Wrong Company"))
+    # A disabled store cannot be opened, so routing here would strand the
+    # request where no till can ever see it -- which is exactly what happened
+    # to two of them.
+    if profile.disabled:
+        frappe.throw(
+            _("{0} is disabled — nobody can open a till there, so the request "
+              "would be stranded. Pick a store that is trading.").format(pos_profile),
+            title=_("Store Is Closed"))
 
     doc.flags.ignore_validate_update_after_submit = True
     doc.pos_profile = profile.name

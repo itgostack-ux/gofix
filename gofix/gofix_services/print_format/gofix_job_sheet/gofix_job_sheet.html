@@ -39,7 +39,11 @@
       <td class="gfx-lh-right">
         <div class="gfx-doctype">JOB SHEET</div>
         <div class="gfx-jobno">{{ doc.name }}</div>
-        {% if ctx.job_qr %}<img class="gfx-qr" src="{{ ctx.job_qr }}" alt="{{ doc.name }}">{% endif %}
+        {%- set head_qr = ctx.track_qr or ctx.job_qr -%}
+        {% if head_qr %}
+          <img class="gfx-qr" src="{{ head_qr }}" alt="{{ doc.name }}">
+          <div class="gfx-qr-cap">{{ "Scan to track" if ctx.track_qr else doc.name }}</div>
+        {% endif %}
       </td>
     </tr>
   </table>
@@ -110,20 +114,52 @@
     </td>
   </tr></table>
 
-  {# ── The complaint, in the customer's words ─────────────────── #}
+  {# ── Every fault on the ticket, not just the headline one ───── #}
   <div class="gfx-card">
-    <div class="gfx-card-h">Complaint as reported</div>
-    <div class="gfx-body">
-      {% if doc.issue_category %}<b>{{ doc.issue_category }}</b>{% endif %}
-      {% if doc.issue_description %}
-        <div class="gfx-desc">{{ doc.issue_description }}</div>
-      {% endif %}
-      {% if doc.is_repeat_complaint %}
-        <div class="gfx-warn">
-          Repeat complaint{% if doc.previous_service_request %} — previous job {{ doc.previous_service_request }}{% endif %}.
-        </div>
-      {% endif %}
+    <div class="gfx-card-h">
+      Faults recorded{% if ctx.issues %} ({{ ctx.issues | length }}){% endif %}
     </div>
+    {% if ctx.issues %}
+      {# The details column earns its width only when a fault actually carries a
+         note; empty, it pushed the signature onto a second page. #}
+      {%- set any_detail = ctx.issues | selectattr("description") | list | length -%}
+      <table class="gfx-list">
+        <thead>
+          <tr>
+            <th style="width:22px">#</th>
+            <th style="width:{{ 26 if any_detail else 42 }}%">Fault</th>
+            <th style="width:{{ 24 if any_detail else 34 }}%">Reported by</th>
+            {% if any_detail %}<th>Details</th>{% endif %}
+            <th style="width:{{ 16 if any_detail else 22 }}%">Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for it in ctx.issues %}
+            <tr>
+              <td>{{ loop.index }}</td>
+              <td><b>{{ it.category }}</b></td>
+              <td>{% if it.by_customer %}Customer{% else %}Inspection · {{ it.who }}{% endif %}</td>
+              {% if any_detail %}<td>{{ it.description or "—" }}</td>{% endif %}
+              <td>{{ it.status or "—" }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+    {% if doc.issue_description or doc.is_repeat_complaint or not ctx.issues %}
+      <div class="gfx-body">
+        {% if not ctx.issues and doc.issue_category %}<b>{{ doc.issue_category }}</b>{% endif %}
+        {% if doc.issue_description %}
+          <span class="gfx-label">In the customer's words</span>
+          <div>{{ doc.issue_description }}</div>
+        {% endif %}
+        {% if doc.is_repeat_complaint %}
+          <div class="gfx-warn">
+            Repeat complaint{% if doc.previous_service_request %} — previous job {{ doc.previous_service_request }}{% endif %}.
+          </div>
+        {% endif %}
+      </div>
+    {% endif %}
   </div>
 
   {# ── Condition. The whole point of the document. ────────────── #}
@@ -141,8 +177,7 @@
       <div class="gfx-card">
         <div class="gfx-card-h">Accessories received with the device</div>
         <div class="gfx-body">
-          <b>{{ doc.accessories_received or "None handed over" }}</b>
-          <div class="gfx-desc">Only what is listed here was received and only this will be returned.</div>
+          <b>{{ ctx.accessories or "None handed over" }}</b>
         </div>
       </div>
     </td>
@@ -239,8 +274,10 @@
   {# ── Declarations and terms ─────────────────────────────────── #}
   <div class="gfx-card gfx-terms">
     <div class="gfx-card-h">Declarations and terms</div>
-    <ol>
-      <li>
+    <table class="gfx-termcols"><tr>
+      <td>
+      <ol>
+        <li>
         {% if doc.data_backup_disclaimer %}
           I understand that data on the device may be lost during repair and I accept that risk.
         {% else %}
@@ -248,30 +285,35 @@
         {% endif %}
         {%- if doc.backup_info %} <span class="gfx-desc">{{ doc.backup_info }}</span>{% endif %}
       </li>
-      {% if doc.data_access_required %}
         <li>
           This repair needs access to the data on the device.
           {% if doc.data_access_consent %}I consent to that access.
           {% else %}<b>Consent to access has not yet been given.</b>{% endif %}
         </li>
-      {% endif %}
-      <li>The device was received in the condition and with the accessories recorded above.
+        <li>The device was received in the condition and with the accessories recorded above.
         Anything not listed was not handed over.</li>
-      <li>No charge is authorised by this job sheet. Work begins only after I approve an
+        <li>No charge is authorised by this job sheet. Work begins only after I approve an
         estimate.</li>
-      <li>If the device is found beyond economical repair, it will be returned unrepaired and
+      </ol>
+      </td>
+      <td>
+      <ol start="5">
+        <li>If the device is found beyond economical repair, it will be returned unrepaired and
         only inspection charges, if any were agreed, will apply.</li>
-      <li>Repairs carry {% if doc.repair_warranty_days %}{{ doc.repair_warranty_days }} days{% else %}the
+        <li>Repairs carry {% if doc.repair_warranty_days %}{{ doc.repair_warranty_days }} days{% else %}the
         stated warranty{% endif %} on the work and the parts replaced. It does not cover fresh
         physical damage, liquid ingress, or tampering by anyone else.</li>
-      <li>Devices are to be collected within 30 days of being reported ready. Storage beyond
+        <li>Devices are to be collected within 30 days of being reported ready. Storage beyond
         that is at the customer's risk.</li>
-      <li>This job sheet must be produced at collection. Collection by anyone else needs the
+        <li>This job sheet must be produced at collection. Collection by anyone else needs the
         customer's written authorisation and photo identification.</li>
-    </ol>
+      </ol>
+      </td>
+    </tr></table>
   </div>
 
   {# ── Signatures ─────────────────────────────────────────────── #}
+  <div class="gfx-close">
   <table class="gfx-sign">
     <tr>
       <td>
@@ -298,21 +340,14 @@
   </table>
 
   {# ── Footer ─────────────────────────────────────────────────── #}
-  <table class="gfx-foot">
-    <tr>
-      <td>
-        <div><b>Quote {{ doc.name }}</b> when asking after this repair
-          {%- if branch.contact_phone %}, or call {{ branch.contact_phone }}{% endif -%}.</div>
-        {% if ctx.track_url %}
-          <div class="gfx-desc">Scan to follow the repair online, or visit {{ ctx.track_url.split("?")[0] }}</div>
-        {% endif %}
-        <div class="gfx-copy">Customer copy</div>
-      </td>
-      {% if ctx.track_qr %}
-        <td class="gfx-foot-qr"><img class="gfx-qr" src="{{ ctx.track_qr }}" alt="Track this repair"></td>
-      {% endif %}
-    </tr>
-  </table>
+  <div class="gfx-foot">
+    <b>Quote {{ doc.name }}</b> when asking after this repair
+    {%- if branch.contact_phone %}, or call {{ branch.contact_phone }}{% endif -%}.
+    {%- if ctx.track_url %} Scan the code above to follow it online, or visit
+      {{ ctx.track_url.split("?")[0] }}.{% endif %}
+    <span class="gfx-copy">Customer copy</span>
+  </div>
+  </div>
 </div>
 
 <style>
@@ -330,17 +365,28 @@
   .gfx-js table { width: 100%; border-collapse: collapse; }
 
   .gfx-lh { border-bottom: 2.5px solid #111; padding-bottom: 6px; margin-bottom: 0; }
-  .gfx-lh td { vertical-align: top; padding: 0 0 5px !important; }
+  .gfx-lh td { vertical-align: top; padding: 0 0 3px !important; }
   .gfx-lh-right { text-align: right; width: 33%; white-space: nowrap; }
   .gfx-co { font-size: 14px; font-weight: 700; letter-spacing: -.2px; }
   .gfx-branch { font-size: 12px; font-weight: 700; margin-top: 1px; }
   .gfx-addr { color: #444; font-size: 10px; }
   .gfx-doctype { font-size: 15px; font-weight: 700; letter-spacing: .16em; }
   .gfx-jobno { font-family: "Courier New", monospace; font-size: 12px; font-weight: 700; }
-  .gfx-qr { width: 54px; height: 54px; margin-top: 2px; }
+  /* Frappe's print stylesheet ships
+     `body:last-child .print-format td img { width: 100% !important }` -- a
+     Mozilla workaround. Both QR codes and the customer's signature sit in table
+     cells, so all three were stretched to the full cell width while keeping
+     their set height: a QR wider than it is tall cannot be scanned. */
+  /* Three classes deep on purpose. Frappe's rule is
+     `body:last-child .print-format td img { width: 100% !important }` --
+     specificity (0,2,3) -- so `.gfx-qr { width: … !important }` at (0,1,0)
+     loses even with !important, and the QR stayed stretched to the cell width.
+     A code wider than it is tall does not scan. */
+  .gfx-js .gfx-lh .gfx-qr { width: 54px !important; height: 54px !important;
+                            margin-top: 2px; }
 
   .gfx-strip { border-bottom: 1px solid #111; margin-bottom: 7px; }
-  .gfx-strip td { padding: 4px 10px 4px 0 !important; font-size: 10px; font-weight: 700; }
+  .gfx-strip td { padding: 3px 10px 3px 0 !important; font-size: 10px; font-weight: 700; }
   .gfx-strip span { display: block; font-size: 8px; text-transform: uppercase;
                     letter-spacing: .08em; color: #666; font-weight: 700; }
 
@@ -350,22 +396,35 @@
   .gfx-cols > tbody > tr > td { width: 50%; vertical-align: top; padding: 0 7px 0 0 !important; }
   .gfx-cols > tbody > tr > td:last-child { padding: 0 !important; }
 
-  .gfx-card { border: 1px solid #999; margin-bottom: 7px; page-break-inside: avoid; }
+  .gfx-card { border: 1px solid #999; margin-bottom: 5px; page-break-inside: avoid; }
   .gfx-card-h { background: #eee; border-bottom: 1px solid #999; padding: 2px 7px;
                 font-size: 8.5px; text-transform: uppercase; letter-spacing: .08em;
                 font-weight: 700; color: #222; }
-  .gfx-body { padding: 6px 8px; }
+  .gfx-body { padding: 5px 8px; }
   .gfx-desc { color: #444; font-size: 9.5px; margin-top: 2px; }
   .gfx-mono { font-family: "Courier New", monospace; }
   .gfx-ok { font-size: 9.5px; }
   .gfx-warn { font-size: 10px; font-weight: 700; margin-top: 2px; }
+  .gfx-thin { padding-top: 3px !important; padding-bottom: 3px !important;
+              border-top: 1px solid #e4e4e4; }
 
-  .gfx-kvwrap { padding: 4px 0; }
+  .gfx-kvwrap { padding: 3px 0; }
+
+  /* The faults table. Ruled rows rather than boxes: it can run to six or seven
+     lines and a grid of borders at that length reads as noise. */
+  .gfx-list th { text-align: left; font-size: 8px; text-transform: uppercase;
+                 letter-spacing: .05em; color: #555; font-weight: 700;
+                 border-bottom: 1px solid #bbb; padding: 2px 7px !important; }
+  .gfx-list td { padding: 2px 7px !important; vertical-align: top;
+                 border-bottom: 1px solid #e4e4e4; }
+  .gfx-list tr:last-child td { border-bottom: none; }
+  .gfx-label { display: block; font-size: 8px; text-transform: uppercase;
+               letter-spacing: .05em; color: #555; font-weight: 700; margin-top: 2px; }
   .gfx-kv { padding: 0; }
   .gfx-kv th { text-align: left; font-size: 8px; text-transform: uppercase;
                letter-spacing: .05em; color: #555; font-weight: 700; width: 33%;
-               padding: 3.5px 6px 3.5px 8px !important; vertical-align: top; white-space: nowrap; }
-  .gfx-kv td { padding: 3.5px 8px 3.5px 0 !important; vertical-align: top; }
+               padding: 3px 6px 3px 8px !important; vertical-align: top; white-space: nowrap; }
+  .gfx-kv td { padding: 3px 8px 3px 0 !important; vertical-align: top; }
   .gfx-kv-4 th { width: 17%; }
   .gfx-kv-4 td { width: 33%; }
 
@@ -373,18 +432,20 @@
   .gfx-adv { margin-top: 4px; border: 1px solid #111; padding: 4px 6px; }
   .gfx-loaner { border-width: 2px; }
 
-  .gfx-terms ol { margin: 5px 0 6px; padding-left: 19px; font-size: 10px; }
-  .gfx-terms li { margin-bottom: 2.5px; }
+  .gfx-terms ol { margin: 3px 0 4px; padding-left: 17px; font-size: 9px; }
+  .gfx-termcols > tbody > tr > td { width: 50%; vertical-align: top; padding: 0 10px 0 0 !important; }
+  .gfx-terms li { margin-bottom: 1px; }
 
-  .gfx-sign { margin-top: 11px; page-break-inside: avoid; }
+  .gfx-close { page-break-inside: avoid; }
+  .gfx-sign { margin-top: 9px; }
   .gfx-sign td { width: 50%; vertical-align: top; padding: 0 22px 0 0 !important; }
-  .gfx-sig-img { max-height: 46px; max-width: 100%; display: block; margin: 4px 0; }
-  .gfx-sig-line { border-bottom: 1px solid #111; height: 42px; }
+  .gfx-js .gfx-sign .gfx-sig-img { width: auto !important; max-height: 46px;
+                                   max-width: 60% !important; display: block; margin: 4px 0; }
+  .gfx-sig-line { border-bottom: 1px solid #111; height: 34px; }
 
-  .gfx-foot { border-top: 1.5px solid #111; margin-top: 8px; padding-top: 5px;
-              page-break-inside: avoid; }
-  .gfx-foot td { vertical-align: top; padding: 6px 0 0 !important; }
-  .gfx-foot-qr { width: 70px; text-align: right; }
-  .gfx-copy { margin-top: 4px; font-size: 8.5px; text-transform: uppercase;
+  .gfx-foot { border-top: 1.5px solid #111; margin-top: 6px; padding-top: 5px; }
+  .gfx-copy { float: right; font-size: 8.5px; text-transform: uppercase;
               letter-spacing: .1em; color: #666; font-weight: 700; }
+  .gfx-qr-cap { font-size: 7.5px; text-transform: uppercase; letter-spacing: .06em;
+                color: #666; font-weight: 700; }
 </style>

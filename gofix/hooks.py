@@ -31,6 +31,8 @@ jinja = {
 		# Branch address, GSTIN and the tracking QR -- none of which the Service
 		# Request holds, and all of which the customer's copy needs.
 		"gofix.print_helpers.job_sheet_context",
+		# The work behind the bill: the tax table says how much, this says for what.
+		"gofix.print_helpers.repair_breakup",
 	]
 }
 

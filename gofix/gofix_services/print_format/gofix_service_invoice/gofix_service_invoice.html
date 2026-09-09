@@ -195,6 +195,14 @@
 		padding: 9px 10px;
 	}
 	.gfix-inv .summary td { padding: 5px 7px !important; }
+	.gfix-inv .gfx-work th { background: #eef2f7; border: 1px solid #cbd5e1; color: #14365d; }
+	.gfix-inv .gfx-work tfoot td { background: #eef2f7; }
+	.gfix-inv .gfx-work-notes { border: 1px solid #cbd5e1; border-top: 0; padding: 6px 8px;
+	                            font-size: 9.5px; }
+	.gfix-inv .gfx-fault { display: inline-block; margin: 2px 10px 2px 0; }
+	.gfix-inv .gfx-work-charge { border: 1px solid #cbd5e1; border-top: 0; padding: 5px 8px;
+	                            font-size: 10px; }
+	.gfix-inv .gfx-work-diff { color: #7c2d12; }
 	.gfix-inv .summary .grand td {
 		background: #14365d;
 		color: #fff;
@@ -313,9 +321,107 @@
 		{% if sr.device_item_name or sr.device_item %}<b>Device:</b> {{ sr.device_item_name or sr.device_item }}{% endif %}
 		{% if sr.brand %} &nbsp; <b>Brand:</b> {{ sr.brand }}{% endif %}
 		{% if sr.serial_no or sr.actual_imei %} &nbsp; <b>Serial / IMEI:</b> {{ sr.serial_no or sr.actual_imei }}{% endif %}
-		{% if sr.issue_category %}<br><b>Issue:</b> {{ sr.issue_category }}{% if sr.issue_description %} - {{ sr.issue_description | striptags | truncate(150) }}{% endif %}{% endif %}
+		{% if sr.issue_description %}<br><b>Reported:</b> {{ sr.issue_description | striptags | truncate(150) }}{% endif %}
 		{% if sr.accessories_received %}<br><b>Accessories:</b> {{ sr.accessories_received }}{% endif %}
 	</div>
+
+	{#
+	  The complete break-up. The tax table below is the legal document and says
+	  how much; a customer collecting a phone asks what for, and the answer was
+	  only ever visible inside the Ops Hub. Labour comes from the same pricing
+	  engine that produced the estimate they approved, so the figures match what
+	  they were quoted.
+	#}
+	{%- set work = repair_breakup(sr.name) -%}
+	{% if work.lines or work.spares or sr.issue_lines %}
+		<div class="section-title">What was done</div>
+		<table class="gfx-work">
+			<thead>
+				<tr>
+					<th style="width:26px">#</th>
+					<th style="width:20%">Fault</th>
+					<th>Repair or part</th>
+					<th class="center" style="width:72px">Qty</th>
+					<th class="right" style="width:82px">Labour</th>
+					<th class="right" style="width:82px">Part</th>
+				</tr>
+			</thead>
+			<tbody>
+				{#
+				  One row per thing charged: a row for each repair, a row for each
+				  part. Pairing a part onto its repair's row looked tidier and
+				  silently dropped the second part fitted for the same fault --
+				  the money stayed in the total with no line to explain it, which
+				  is the one thing a break-up must never do.
+				#}
+				{% for l in work.lines %}
+					<tr>
+						<td class="center">{{ loop.index }}</td>
+						<td>{{ l.issue or "—" }}</td>
+						<td>
+							<b>{{ l.solution }}</b>
+							{% if l.technician %}<div class="muted">By {{ l.technician }}</div>{% endif %}
+							{% if l.status %}<div class="muted">{{ l.status }}</div>{% endif %}
+						</td>
+						<td class="center">—</td>
+						<td class="right nowrap">{{ money(l.labour) }}</td>
+						<td class="right">—</td>
+					</tr>
+				{% endfor %}
+				{% for sp in work.spares %}
+					<tr>
+						<td class="center">{{ (work.lines | length) + loop.index }}</td>
+						<td>{{ sp.issue or "—" }}</td>
+						<td>
+							<b>{{ sp.item }}</b>
+							<div class="muted">Part fitted{% if sp.serial %} · {{ sp.serial }}{% endif %}</div>
+						</td>
+						<td class="center">{{ "%g"|format(sp.qty) }}{% if sp.uom %} {{ sp.uom }}{% endif %}
+							<div class="muted nowrap">@ {{ money(sp.rate) }}</div></td>
+						<td class="right">—</td>
+						<td class="right nowrap">{{ money(sp.amount) }}</td>
+					</tr>
+				{% endfor %}
+			</tbody>
+			<tfoot>
+				<tr>
+					<td colspan="4" class="right"><b>Work total</b></td>
+					<td class="right nowrap"><b>{{ money(work.labour) }}</b></td>
+					<td class="right nowrap"><b>{{ money(work.parts) }}</b></td>
+				</tr>
+			</tfoot>
+		</table>
+
+		{#
+		  The break-up says what the work was worth; this document says what is
+		  being charged, and they are not always the same number -- labour can be
+		  waived, or billed separately, or covered by a plan. Printing the
+		  break-up beside a smaller invoice without saying so reads as a bill for
+		  the larger figure.
+		#}
+		{%- set billed = doc.net_total or doc.total or 0 -%}
+		<div class="gfx-work-charge">
+			<b>Charged on this invoice: {{ money(billed) }}</b>
+			(before tax — see the tax invoice below).
+			{%- if (work.total - billed) | abs > 1 %}
+				<span class="gfx-work-diff">The work above is valued at {{ money(work.total) }};
+				the difference of {{ money(work.total - billed) }} is not billed on this
+				document.</span>
+			{% endif %}
+		</div>
+
+		{# Faults with no chargeable work still belong on the customer's copy:
+		   "you reported six things, here is what happened to each". #}
+		{% if sr.issue_lines %}
+			<div class="gfx-work-notes">
+				<span class="label">Every fault on this job</span>
+				{% for it in sr.issue_lines %}
+					<span class="gfx-fault">{{ it.issue_category }} —
+						{{ it.status or "Recorded" }}{% if (it.reported_by or "") != "Technician" %} (reported by you){% else %} (found on inspection){% endif %}</span>
+				{% endfor %}
+			</div>
+		{% endif %}
+	{% endif %}
 	{% endif %}
 
 	<table>

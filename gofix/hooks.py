@@ -251,6 +251,11 @@ scheduler_events = {
 		"gofix.gofix_services.doctype.service_request.service_request.flag_unclaimed_devices",
 		"gofix.gofix_services.doctype.service_request.service_request.auto_expire_stale_requests",
 		"gofix.gofix_services.api.expire_pending_estimates",
+		# One digest per store per day of everything that has stopped moving.
+		# The SLA sweep already finds breaches but only ever raised a realtime
+		# toast and a delayed email, so 11 escalations produced zero durable
+		# records and 29 devices sat unassigned for a week with nobody told.
+		"gofix.gofix_services.standup.daily_store_standup",
 	],
 	"cron": {
 		"*/15 * * * *": [

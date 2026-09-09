@@ -547,8 +547,35 @@ def assign_store(inbox, pos_profile, note=None) -> dict:
     return {"ok": True, "pos_profile": profile.name}
 
 
+def _pool_company(company, pos_profile) -> str:
+    """Whose unrouted pile the caller is entitled to see.
+
+    A missing company must never widen to every company. Most of this bench's
+    users are unrestricted System Managers, for whom the permission query adds
+    no condition at all, so an unfiltered read hands a GoFix counter Bestbuy's
+    requests. The till is the one thing the browser cannot make up, so when the
+    desk names its store we take the company from the store itself.
+    """
+    if pos_profile:
+        from ch_pos.api.scope_guard import assert_pos_profile_scope
+
+        # A till left open on a past business date must not be able to bill,
+        # but it may still look at who is waiting.
+        assert_pos_profile_scope(pos_profile, allow_stale_session=True)
+        resolved = frappe.db.get_value("POS Profile", pos_profile, "company")
+        if not resolved:
+            frappe.throw(_("{0} is not a store we know.").format(pos_profile),
+                         title=_("Unknown Store"))
+        if company and company != resolved:
+            frappe.throw(
+                _("{0} does not belong to {1}.").format(pos_profile, company),
+                frappe.PermissionError, title=_("Not Your Company"))
+        return resolved
+    return _assert_company(company)
+
+
 @frappe.whitelist()
-def unassigned_requests(company=None) -> list:
+def unassigned_requests(company=None, pos_profile=None) -> list:
     """Requests that arrived without a store, waiting to be routed.
 
     Their own list on purpose. Showing them at every store is what made the
@@ -558,9 +585,8 @@ def unassigned_requests(company=None) -> list:
         "visit_source": ("not in", IN_PERSON_CHANNELS),
         "status": ("in", OPEN_STATUSES),
         "pos_profile": ("in", ["", None]),
+        "company": _pool_company(company, pos_profile),
     }
-    if company:
-        filters["company"] = company
     rows = frappe.get_list(
         "POS Kiosk Token", filters=filters,
         fields=["name", "token_display", "visit_source", "visit_purpose", "status",

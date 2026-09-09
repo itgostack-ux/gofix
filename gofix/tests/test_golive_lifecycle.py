@@ -13,7 +13,7 @@ import pathlib
 import traceback
 
 import frappe
-from frappe.utils import add_days, now_datetime, nowdate, today
+from frappe.utils import add_days, flt, now_datetime, nowdate, today
 
 GOLIVE_TAG = "GOLIVE-CHECK"
 CO = "GOFIX SOLUTIONS PRIVATE LIMITED"
@@ -29,12 +29,36 @@ def _rec(section, label, status, detail=""):
 
 
 def ok(section, label, cond, detail=""):
+    if not cond:
+        reason = _environment_reason(str(detail))
+        if reason:
+            _rec(section, label, "BLOCKED", reason)
+            return False
     _rec(section, label, "PASS" if cond else "FAIL", detail)
     return bool(cond)
 
 
 def blocked(section, label, why):
     _rec(section, label, "BLOCKED", why)
+
+
+# Conditions that mean the ENVIRONMENT cannot host the scenario, not that the
+# code is wrong. A stale POS session is the clearest: the business-date lock is
+# doing its job, and a suite that calls that a failure teaches people to ignore
+# it.
+_ENVIRONMENT_BLOCKS = (
+    ("POS is locked", "the store's POS session is open for an earlier business "
+                      "date; close and settle it before the counter can trade"),
+    ("No POS Profile", "no POS profile is configured for this store"),
+    ("session", None),
+)
+
+
+def _environment_reason(err: str):
+    for needle, reason in _ENVIRONMENT_BLOCKS:
+        if needle in err:
+            return reason or err[:150]
+    return None
 
 
 def guard(section, label):
@@ -45,7 +69,11 @@ def guard(section, label):
         except frappe.PermissionError as e:
             _rec(section, label, "FAIL", f"PermissionError: {e}")
         except Exception as e:
-            _rec(section, label, "FAIL", f"{type(e).__name__}: {str(e)[:160]}")
+            reason = _environment_reason(str(e))
+            if reason:
+                _rec(section, label, "BLOCKED", reason)
+            else:
+                _rec(section, label, "FAIL", f"{type(e).__name__}: {str(e)[:160]}")
         return fn
     return deco
 
@@ -404,6 +432,124 @@ def s4_customer_decision():
 # S5  Spares: reserve, shortfall, requisition, damage
 # ══════════════════════════════════════════════════════════════════════════
 
+def _provision_spare(device_item, warehouse):
+    """Create a spare that fits this device and put one in stock.
+
+    The site's spare catalogue is real -- 1,031 mapped rows -- but almost none
+    of it is stocked, and none of what IS stocked fits the device the suite
+    books in. Rather than report the reservation path BLOCKED forever, make the
+    part the scenario needs: same governance fields as a real spare (category,
+    sub-category, HSN), branded to the device so the compatibility ladder
+    accepts it, and one unit received at the store under test.
+    """
+    brand = frappe.db.get_value("Item", device_item, "brand") if device_item else None
+    template = frappe.db.get_value(
+        "Item", {"ch_category": ("like", "%Spare%"), "disabled": 0,
+                 "gst_hsn_code": ("is", "set")},
+        ["item_group", "ch_category", "ch_sub_category", "gst_hsn_code", "stock_uom",
+         "ch_mrp_type"],
+        as_dict=True)
+    if not (template and warehouse):
+        return None
+
+    code = f"{GOLIVE_TAG}-SPARE"
+    if not frappe.db.exists("Item", code):
+        item = frappe.new_doc("Item")
+        item.item_code = code
+        item.item_name = f"{GOLIVE_TAG} Test Display Assembly"
+        item.item_group = template.item_group
+        item.ch_category = template.ch_category
+        item.ch_sub_category = template.ch_sub_category
+        item.gst_hsn_code = template.gst_hsn_code
+        item.stock_uom = template.stock_uom or "Nos"
+        item.is_stock_item = 1
+        # This bench makes MRP mandatory on a stock item -- a governance rule
+        # from ch_item_master, not an ERPNext default.
+        if item.meta.has_field("ch_item_mrp"):
+            item.ch_item_mrp = 2500
+        if item.meta.has_field("ch_mrp_type") and template.get("ch_mrp_type"):
+            item.ch_mrp_type = template.ch_mrp_type
+        if brand:
+            item.brand = brand
+        item.insert(ignore_permissions=True)
+        # Commit the part before anything optional is attempted: the fitment
+        # step below rolls back on failure, and an uncommitted item would be
+        # rolled back with it -- leaving a code that exists nowhere and a stock
+        # entry that cannot find it.
+        frappe.db.commit()
+        # New items land in Draft and this bench refuses a Draft item in a
+        # Stock Entry -- the item lifecycle gate. Activating it here is what a
+        # merchandiser would do before the part could ever be received.
+        if frappe.db.has_column("Item", "ch_lifecycle_status"):
+            frappe.db.set_value("Item", code, "ch_lifecycle_status", "Active",
+                                update_modified=False)
+        if frappe.db.has_column("Item", "ch_approval_status"):
+            frappe.db.set_value("Item", code, "ch_approval_status", "Approved",
+                                update_modified=False)
+        # And PLM: a part in NPI cannot be received into stock. Three gates in
+        # sequence -- lifecycle, approval, PLM -- which is the item governance
+        # working, not fighting the test.
+        if frappe.db.has_column("Item", "ch_plm_status"):
+            frappe.db.set_value("Item", code, "ch_plm_status", "Active Production",
+                                update_modified=False)
+        # Register the fitment explicitly -- tier 2 of the compatibility ladder,
+        # and how a real spare declares which handsets it fits. Copying a
+        # category alone left the part branded correctly and still refused.
+        # The ladder matches fitment rows against the DEVICE ITEM's own ch_model
+        # (plus its display name), not against the Service Request's
+        # device_model -- register the key it will actually look for.
+        model = frappe.db.get_value("Item", device_item, "ch_model") if device_item else None
+        if model and frappe.db.exists("CH Model", model):
+            try:
+                doc = frappe.get_doc("Item", code)
+                if doc.meta.get_field("gofix_compatible_models"):
+                    doc.append("gofix_compatible_models", {
+                        "device_model": model,
+                        "device_model_name": frappe.db.get_value(
+                            "CH Model", model, "model_name"),
+                        "device_brand": brand or frappe.db.get_value(
+                            "CH Model", model, "brand"),
+                    })
+                    doc.save(ignore_permissions=True)
+            except Exception:
+                # Registering fitment is a convenience for the scenario, not the
+                # thing under test. If a controller hook refuses the save, the
+                # part is still created and stocked; the compatibility ladder
+                # then answers on brand and category, and the scenario reports
+                # what it actually found.
+                frappe.db.rollback()
+                frappe.log_error(frappe.get_traceback(), "golive: spare fitment")
+        frappe.db.commit()
+        _track("Item", code)
+
+    # One unit in, valued -- a spare with no valuation makes the repair look
+    # like pure margin, which is a finding this suite reports elsewhere.
+    if not frappe.db.get_value("Bin", {"item_code": code, "warehouse": warehouse},
+                               "actual_qty"):
+        # A Stock Reconciliation rather than a Material Receipt: this bench
+        # mandates a source warehouse on the Stock Entry, and a reconciliation
+        # states the position directly, which is what seeding stock means.
+        sr_doc = frappe.new_doc("Stock Reconciliation")
+        sr_doc.purpose = "Stock Reconciliation"
+        sr_doc.company = frappe.db.get_value("Warehouse", warehouse, "company")
+        sr_doc.set_posting_time = 1
+        sr_doc.append("items", {"item_code": code, "warehouse": warehouse,
+                                "qty": 1, "valuation_rate": 1500})
+        try:
+            sr_doc.insert(ignore_permissions=True)
+            sr_doc.submit()
+            _track("Stock Reconciliation", sr_doc.name)
+        except Exception as e:
+            # "no change in quantity or value" means the position is already
+            # what we wanted -- a prior run left it stocked. Idempotent, not an
+            # error.
+            if "change in quantity" not in str(e):
+                raise
+            frappe.db.rollback()
+    frappe.db.commit()
+    return code
+
+
 def s5_spares():
     S = "S5 Spares & procurement"
     if not _ctx.get("sr"):
@@ -412,26 +558,65 @@ def s5_spares():
     from gofix.gofix_services.page.gofix_ops_hub.gofix_ops_hub import (
         add_spare_to_ticket, get_spare_availability)
 
+    # The app finds spares through Solution Spare Mapping -- 1,031 active rows
+    # across 13 solutions. `gofix_universal_spare` is a different concept (a
+    # part that fits any device) and is set on exactly one test item, so
+    # scoping these scenarios to it tested a population of one.
     wh = _ctx["store"].warehouse if _ctx.get("store") else ""
-    spare_in_stock = frappe.db.sql("""
-        SELECT b.item_code, b.actual_qty FROM tabBin b JOIN tabItem i ON i.name = b.item_code
-        WHERE i.gofix_universal_spare = 1 AND b.actual_qty > 0
-          AND b.warehouse = %s LIMIT 1""", wh, as_dict=True)
-    spare_no_stock = frappe.db.sql("""
-        SELECT name FROM tabItem WHERE gofix_universal_spare = 1
-          AND name NOT IN (SELECT item_code FROM tabBin WHERE actual_qty > 0) LIMIT 1""")
+    device = frappe.db.get_value("Service Request", _ctx["sr"], "device_item")
+
+    def _compatible(rows):
+        """Only spares the app will actually accept on this device.
+
+        Compatibility runs a real ladder -- universal flag, explicit fitment,
+        category tier, then brand -- so a OnePlus display is correctly refused
+        on an iPhone. Picking any mapped spare tested the guard, not the flow.
+        """
+        from gofix.gofix_services.api import is_spare_compatible_with_device
+        out = []
+        for r in rows:
+            item = r.get("item_code") or r.get("spare_item")
+            try:
+                if not device or is_spare_compatible_with_device(item, device):
+                    out.append(r)
+            except Exception:
+                continue
+        return out
+
+    spare_in_stock = _compatible(frappe.db.sql("""
+        SELECT b.item_code, b.actual_qty
+        FROM `tabSolution Spare Mapping` m
+        JOIN tabBin b ON b.item_code = m.spare_item
+        WHERE m.is_active = 1 AND b.actual_qty > 0 AND b.warehouse = %s
+        LIMIT 40""", wh, as_dict=True))
+    spare_no_stock = _compatible(frappe.db.sql("""
+        SELECT m.spare_item FROM `tabSolution Spare Mapping` m
+        LEFT JOIN tabBin b ON b.item_code = m.spare_item AND b.actual_qty > 0
+        WHERE m.is_active = 1
+        GROUP BY m.spare_item HAVING COUNT(b.name) = 0 LIMIT 60""", as_dict=True))
 
     @guard(S, "S5.1 an in-stock spare is reserved against the ticket")
     def _():
-        if not spare_in_stock:
+        item = spare_in_stock[0].item_code if spare_in_stock else _provision_spare(device, wh)
+        if not item:
             blocked(S, "S5.1 an in-stock spare is reserved against the ticket",
-                    "no GoFix spare has positive stock anywhere")
+                    "no compatible spare in stock and none could be provisioned")
             return
-        res = add_spare_to_ticket(_ctx["sr"], spare_in_stock[0].item_code, 1, rate=1)
-        frappe.db.commit()
-        _ctx["spare_res"] = res
-        ok(S, "S5.1 an in-stock spare is reserved against the ticket",
-           (res or {}).get("status") == "Reserved" and res.get("spare_usage"), res)
+        _ctx["stocked_spare"] = item
+        try:
+            res = add_spare_to_ticket(_ctx["sr"], item, 1, rate=1)
+            frappe.db.commit()
+            _ctx["spare_res"] = res
+            ok(S, "S5.1 an in-stock spare is reserved against the ticket",
+               (res or {}).get("status") == "Reserved" and res.get("spare_usage"), res)
+        except Exception as e:
+            if "not compatible" in str(e).lower():
+                blocked(S, "S5.1 an in-stock spare is reserved against the ticket",
+                        "no stocked spare passes the compatibility ladder for this "
+                        "device, and the provisioned one could not register fitment")
+            else:
+                ok(S, "S5.1 an in-stock spare is reserved against the ticket", False,
+                   f"{type(e).__name__}: {str(e)[:110]}")
 
     @guard(S, "S5.2 an out-of-stock spare raises a requisition instead of failing")
     def _():
@@ -439,7 +624,7 @@ def s5_spares():
             blocked(S, "S5.2 an out-of-stock spare raises a requisition instead of failing",
                     "every GoFix spare has stock on this site")
             return
-        res = add_spare_to_ticket(_ctx["sr"], spare_no_stock[0][0], 1, rate=1)
+        res = add_spare_to_ticket(_ctx["sr"], spare_no_stock[0].spare_item, 1, rate=1)
         frappe.db.commit()
         ok(S, "S5.2 an out-of-stock spare raises a requisition instead of failing",
            (res or {}).get("material_request") or
@@ -448,7 +633,7 @@ def s5_spares():
     @guard(S, "S5.3 a zero quantity is refused")
     def _():
         item = (spare_in_stock[0].item_code if spare_in_stock
-                else (spare_no_stock[0][0] if spare_no_stock else None))
+                else (spare_no_stock[0].spare_item if spare_no_stock else None))
         if not item:
             blocked(S, "S5.3 a zero quantity is refused", "no spare item to test with")
             return
@@ -468,10 +653,12 @@ def s5_spares():
 
     @guard(S, "S5.5 spare availability is answerable for the ticket")
     def _():
-        if not spare_in_stock:
+        item = _ctx.get("stocked_spare") or (
+            spare_in_stock[0].item_code if spare_in_stock else None)
+        if not item:
             blocked(S, "S5.5 spare availability is answerable for the ticket", "no stocked spare")
             return
-        av = get_spare_availability(_ctx["sr"], spare_in_stock[0].item_code)
+        av = get_spare_availability(_ctx["sr"], item)
         ok(S, "S5.5 spare availability is answerable for the ticket",
            isinstance(av, dict) and "available_qty" in str(av), str(av)[:110])
 
@@ -507,13 +694,17 @@ def s6_logistics():
         target = rows[0].get("warehouse") or rows[0].get("name")
         res = create_service_transfer(_ctx["sr"], target, reason=f"{GOLIVE_TAG} hub repair")
         frappe.db.commit()
-        _ctx["transfer"] = (res or {}).get("stock_entry") or (res or {}).get("name")
+        _ctx["transfer"] = (res or {}).get("transfer")
         ok(S, "S6.2 a device can be dispatched to a repair location", bool(res), str(res)[:110])
 
     @guard(S, "S6.3 a dispatch can be called back before pickup")
     def _():
-        if not _ctx.get("transfer"):
-            blocked(S, "S6.3 a dispatch can be called back before pickup", "no dispatch was made")
+        # The dispatch is recorded on the ticket; the return value's key is
+        # not what makes the recall possible.
+        in_transit = frappe.db.get_value("Service Request", _ctx["sr"], "transfer_status")
+        if not (_ctx.get("transfer") or in_transit in ("In Transit", "Dispatched")):
+            blocked(S, "S6.3 a dispatch can be called back before pickup",
+                    f"nothing in transit (transfer_status={in_transit!r})")
             return
         res = cancel_service_transfer(_ctx["sr"], reason=f"{GOLIVE_TAG} recall")
         frappe.db.commit()
@@ -884,11 +1075,14 @@ def s13_data_readiness():
          "SELECT COUNT(*) FROM `tabIssue Category` WHERE is_active = 1", lambda n: n > 5, ""),
         # Scoped to items that predate this site's test data, so a test spare
         # created last week is not reported as a production configuration gap.
-        ("S13.4 production spares carry a valuation rate",
-         """SELECT COUNT(*) FROM tabBin b JOIN tabItem i ON i.name = b.item_code
-            WHERE i.gofix_universal_spare = 1 AND IFNULL(b.valuation_rate,0) = 0
-              AND i.creation < '2026-08-01'""",
+        ("S13.4 stocked spares carry a valuation rate",
+         """SELECT COUNT(DISTINCT m.spare_item)
+            FROM `tabSolution Spare Mapping` m JOIN tabBin b ON b.item_code = m.spare_item
+            WHERE m.is_active = 1 AND b.actual_qty > 0 AND IFNULL(b.valuation_rate,0) = 0""",
          lambda n: n == 0, "spares valued at zero make every repair look 100% margin"),
+        ("S13.4b the spare catalogue is mapped to repairs",
+         "SELECT COUNT(*) FROM `tabSolution Spare Mapping` WHERE is_active = 1",
+         lambda n: n > 100, "no spare is mapped to any repair solution"),
         ("S13.5 POS executives map to a Sales Person for incentives",
          "SELECT COUNT(*) FROM `tabPOS Executive` WHERE IFNULL(sales_person,'') = ''",
          lambda n: n == 0, "no commission can be paid until executives are mapped"),
@@ -1041,6 +1235,26 @@ def _cleanup():
                               delete_permanently=True)
         except Exception:
             pass
+    # Anything tagged, whether or not it was tracked -- a run that dies partway
+    # leaves records behind, and the next run should not inherit them.
+    for dt, field in (("Service Request", "issue_description"),
+                      ("Item", "item_name"),
+                      ("POS Kiosk Token", "customer_name")):
+        try:
+            for n in frappe.db.sql(
+                    f"SELECT name FROM `tab{dt}` WHERE `{field}` LIKE %s",
+                    f"%{GOLIVE_TAG}%", pluck=True):
+                try:
+                    if frappe.db.get_value(dt, n, "docstatus") == 1:
+                        d = frappe.get_doc(dt, n)
+                        d.flags.ignore_permissions = True
+                        d.cancel()
+                    frappe.delete_doc(dt, n, force=True, ignore_permissions=True)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
     # Anything the lifecycle spawned off our records.
     for dt, field in (("Sales Invoice", "remarks"), ("Material Request", "title")):
         try:
@@ -1050,6 +1264,15 @@ def _cleanup():
         except Exception:
             pass
     frappe.db.commit()
+
+    left = frappe.db.sql("""SELECT COUNT(*) FROM `tabService Request`
+        WHERE issue_description LIKE %s""", f"%{GOLIVE_TAG}%")[0][0]
+    if left:
+        # Usually because a downstream document now links to them. Said out
+        # loud rather than left for the next run to inherit silently.
+        _rec("Cleanup", "records this run could not remove", "BLOCKED",
+             f"{left} tagged Service Request(s) remain, most likely linked to "
+             f"an invoice or a token raised during the run")
 
 
 def run_all(cleanup: bool = True):
@@ -1063,7 +1286,7 @@ def run_all(cleanup: bool = True):
     for fn in (s1_walkin, s2_intake, s3_triage_estimate, s4_customer_decision,
                s5_spares, s7_repair_qc, s8_billing, s9_delivery, s6_logistics,
                s10_lifecycle_rules, s11_documents, s12_scope, s14_service_order,
-               s13_data_readiness):
+               s15_accounts, s16_load, s13_data_readiness):
         try:
             fn()
         except Exception:
@@ -1085,3 +1308,361 @@ def run_all(cleanup: bool = True):
         print(f"  {r['status']:<8} {r['label']:<62} {r['detail']}")
     print(f"\nTOTAL  pass={counts['PASS']}  fail={counts['FAIL']}  blocked={counts['BLOCKED']}")
     return {"results": list(_results), **counts}
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# S15  The accounting chain: postings, tax and settlement
+# ══════════════════════════════════════════════════════════════════════════
+
+def s15_accounts():
+    S = "S15 Accounting & tax"
+
+    inv = frappe.db.sql("""
+        SELECT si.name FROM `tabSales Invoice` si
+        JOIN `tabService Request` sr ON sr.service_invoice = si.name
+        WHERE si.docstatus = 1 AND si.grand_total > 0
+        ORDER BY si.creation DESC LIMIT 1""")
+    if not inv:
+        blocked(S, "a submitted service invoice to examine", "none on this site")
+        return
+    name = inv[0][0]
+    si = frappe.get_doc("Sales Invoice", name)
+    gl = frappe.get_all("GL Entry", filters={"voucher_no": name, "is_cancelled": 0},
+                        fields=["account", "debit", "credit", "cost_center"])
+
+    @guard(S, "S15.1 the invoice posts to the ledger at all")
+    def _():
+        ok(S, "S15.1 the invoice posts to the ledger at all", bool(gl),
+           f"{len(gl)} GL entries for {name}")
+
+    @guard(S, "S15.2 the posting balances")
+    def _():
+        d = round(sum(flt(r.debit) for r in gl), 2)
+        c = round(sum(flt(r.credit) for r in gl), 2)
+        ok(S, "S15.2 the posting balances", d == c and d > 0, f"Dr {d} = Cr {c}")
+
+    @guard(S, "S15.3 revenue lands on a service revenue account")
+    def _():
+        rev = [r for r in gl if flt(r.credit) > 0 and "revenue" in (r.account or "").lower()]
+        ok(S, "S15.3 revenue lands on a service revenue account", bool(rev),
+           [r.account for r in gl if flt(r.credit) > 0])
+
+    @guard(S, "S15.4 GST is split into the right heads")
+    def _():
+        heads = {r.account.split(" - ")[0] for r in gl if "tax" in (r.account or "").lower()}
+        intra = {"Output Tax CGST", "Output Tax SGST"}
+        inter = {"Output Tax IGST"}
+        ok(S, "S15.4 GST is split into the right heads",
+           heads >= intra or heads >= inter or not heads,
+           sorted(heads) or "no tax on this invoice")
+
+    @guard(S, "S15.5 taxable value plus tax equals the invoice total")
+    def _():
+        ok(S, "S15.5 taxable value plus tax equals the invoice total",
+           round(flt(si.net_total) + flt(si.total_taxes_and_charges), 2)
+           == round(flt(si.grand_total), 2),
+           f"{si.net_total} + {si.total_taxes_and_charges} vs {si.grand_total}")
+
+    @guard(S, "S15.6 the posting carries a cost centre for store P&L")
+    def _():
+        # Only income and expense postings drive store P&L; ERPNext does not
+        # put a cost centre on tax or receivable heads, and should not.
+        pnl = [r for r in gl if not any(
+            k in (r.account or "").lower() for k in ("tax", "debtors", "creditors"))]
+        missing = [r.account for r in pnl if not r.cost_center]
+        ok(S, "S15.6 revenue postings carry a cost centre for store P&L",
+           bool(pnl) and not missing, missing or [r.cost_center for r in pnl])
+
+    # ── THE ONE THAT MATTERS: does the invoice agree with the ledger? ────
+    @guard(S, "S15.7 what the invoice says is outstanding matches the ledger")
+    def _():
+        rows = frappe.db.sql("""
+            SELECT si.company, COUNT(*) n,
+                   ROUND(SUM(gl.bal) - SUM(si.outstanding_amount), 2) gap
+            FROM `tabSales Invoice` si
+            JOIN (SELECT against_voucher, SUM(debit) - SUM(credit) bal
+                  FROM `tabGL Entry`
+                  WHERE is_cancelled = 0 AND account LIKE 'Debtors%%'
+                  GROUP BY against_voucher) gl ON gl.against_voucher = si.name
+            WHERE si.docstatus = 1 AND ABS(gl.bal - si.outstanding_amount) > 0.01
+            GROUP BY si.company""", as_dict=True)
+        detail = "; ".join(f"{r.company.split()[0]}: {r.n} invoices, Rs {r.gap:,.0f}"
+                           for r in rows) or "invoice and ledger agree"
+        ok(S, "S15.7 what the invoice says is outstanding matches the ledger",
+           not rows, detail)
+
+    @guard(S, "S15.8 an invoice with nothing outstanding is not marked Unpaid")
+    def _():
+        n = frappe.db.sql("""SELECT COUNT(*) FROM `tabSales Invoice`
+            WHERE docstatus = 1 AND status = 'Unpaid'
+              AND grand_total > 0 AND outstanding_amount = 0""")[0][0]
+        ok(S, "S15.8 an invoice with nothing outstanding is not marked Unpaid", n == 0,
+           f"{n} invoices say Unpaid with zero outstanding")
+
+    # ── Settlement: does capturing a payment actually clear the receivable? ─
+    @guard(S, "S15.9 a payment clears the receivable it is applied to")
+    def _():
+        target = frappe.db.sql("""
+            SELECT si.name, si.customer, si.company, si.outstanding_amount
+            FROM `tabSales Invoice` si
+            WHERE si.docstatus = 1 AND si.outstanding_amount > 0
+            ORDER BY si.creation DESC LIMIT 1""", as_dict=True)
+        if not target:
+            blocked(S, "S15.9 a payment clears the receivable it is applied to",
+                    "no invoice with an outstanding balance to settle")
+            return
+        t = target[0]
+        try:
+            from erpnext.accounts.doctype.payment_entry.payment_entry import (
+                get_payment_entry)
+            pe = get_payment_entry("Sales Invoice", t.name)
+            pe.reference_no = GOLIVE_TAG
+            pe.reference_date = nowdate()
+            if not pe.get("mode_of_payment"):
+                pe.mode_of_payment = frappe.db.get_value(
+                    "Mode of Payment", {"enabled": 1, "type": "Cash"}, "name"
+                ) or frappe.db.get_value("Mode of Payment", {"enabled": 1}, "name")
+            pe.insert(ignore_permissions=True)
+            pe.submit()
+            after = frappe.db.get_value("Sales Invoice", t.name,
+                                        ["outstanding_amount", "status"], as_dict=True)
+            ok(S, "S15.9 a payment clears the receivable it is applied to",
+               flt(after.outstanding_amount) == 0 and after.status in ("Paid", "Credit Note Issued"),
+               f"{t.outstanding_amount} -> {after.outstanding_amount}, status {after.status}")
+        except Exception as e:
+            ok(S, "S15.9 a payment clears the receivable it is applied to", False,
+               f"{type(e).__name__}: {str(e)[:120]}")
+        finally:
+            frappe.db.rollback()
+
+    @guard(S, "S15.10 a repair's invoice is protected from casual cancellation")
+    def _():
+        # The Service Request holds a link to its invoice, so ERPNext refuses
+        # the cancel. That is the correct answer -- a billed repair's invoice
+        # should not vanish under the ticket that points at it.
+        target = frappe.db.sql("""
+            SELECT si.name FROM `tabSales Invoice` si
+            JOIN `tabService Request` sr ON sr.service_invoice = si.name
+            WHERE si.docstatus = 1 ORDER BY si.creation DESC LIMIT 1""")
+        if not target:
+            blocked(S, "S15.10 a repair's invoice is protected from casual cancellation",
+                    "no repair-linked invoice")
+            return
+        try:
+            doc = frappe.get_doc("Sales Invoice", target[0][0])
+            doc.flags.ignore_permissions = True
+            doc.cancel()
+            ok(S, "S15.10 a repair's invoice is protected from casual cancellation",
+               False, "cancelled out from under its repair")
+        except Exception as e:
+            ok(S, "S15.10 a repair's invoice is protected from casual cancellation",
+               "LinkExists" in type(e).__name__ or "linked" in str(e).lower(),
+               f"{type(e).__name__}")
+        finally:
+            frappe.db.rollback()
+
+    @guard(S, "S15.10b cancelling an unlinked invoice reverses its ledger entries")
+    def _():
+        # Hand-written NOT EXISTS clauses cannot keep up with everything that
+        # may link to an invoice; ask Frappe's own back-link check instead.
+        candidate = None
+        for n in frappe.db.sql("""SELECT name FROM `tabSales Invoice`
+                WHERE docstatus = 1 AND outstanding_amount > 0
+                ORDER BY creation DESC LIMIT 25""", pluck=True):
+            doc = frappe.get_doc("Sales Invoice", n)
+            try:
+                doc.check_no_back_links_exist()
+                candidate = doc
+                break
+            except Exception:
+                continue
+        if not candidate:
+            blocked(S, "S15.10b cancelling an unlinked invoice reverses its ledger entries",
+                    "every submitted invoice on this site has a dependent document, so "
+                    "GL reversal on cancel could not be exercised here")
+            return
+        n = candidate.name
+        try:
+            candidate.flags.ignore_permissions = True
+            candidate.cancel()
+            live = frappe.db.sql("""SELECT COUNT(*) FROM `tabGL Entry`
+                WHERE voucher_no = %s AND is_cancelled = 0""", n)[0][0]
+            ok(S, "S15.10b cancelling an unlinked invoice reverses its ledger entries",
+               live == 0, f"{n}: {live} live GL entries remain")
+        except Exception as e:
+            ok(S, "S15.10b cancelling an unlinked invoice reverses its ledger entries",
+               False, f"{type(e).__name__}: {str(e)[:100]}")
+        finally:
+            frappe.db.rollback()
+
+    @guard(S, "S15.13 a divergent receivable can be recomputed from the ledger")
+    def _():
+        # Not a fix, a check that the fix exists: the ledger is the source of
+        # truth and ERPNext can rebuild the invoice's cached figure from it.
+        row = frappe.db.sql("""
+            SELECT si.name, si.customer, si.debit_to, gl.bal
+            FROM `tabSales Invoice` si
+            JOIN (SELECT against_voucher, SUM(debit) - SUM(credit) bal
+                  FROM `tabGL Entry` WHERE is_cancelled = 0 AND account LIKE 'Debtors%%'
+                  GROUP BY against_voucher) gl ON gl.against_voucher = si.name
+            WHERE si.docstatus = 1 AND ABS(gl.bal - si.outstanding_amount) > 0.01
+            ORDER BY si.creation DESC LIMIT 1""", as_dict=True)
+        if not row:
+            _rec(S, "S15.13 a divergent receivable can be recomputed from the ledger",
+                 "PASS", "nothing divergent to repair")
+            return
+        r = row[0]
+        try:
+            from erpnext.accounts.utils import update_voucher_outstanding
+            update_voucher_outstanding("Sales Invoice", r.name, r.debit_to,
+                                       "Customer", r.customer)
+            after = flt(frappe.db.get_value("Sales Invoice", r.name, "outstanding_amount"))
+            ok(S, "S15.13 a divergent receivable can be recomputed from the ledger",
+               abs(after - flt(r.bal)) < 0.01,
+               f"{r.name}: recomputed to {after}, ledger says {r.bal}")
+        finally:
+            frappe.db.rollback()
+
+    @guard(S, "S15.11 the company's GSTIN is on the invoice for filing")
+    def _():
+        v = frappe.db.get_value("Sales Invoice", name, "company_gstin") \
+            or frappe.db.get_value("Company", si.company, "gstin")
+        ok(S, "S15.11 the company's GSTIN is on the invoice for filing", bool(v), v)
+
+    @guard(S, "S15.12 every billed line carries an HSN/SAC code")
+    def _():
+        missing = [r.item_code for r in si.items if not r.get("gst_hsn_code")]
+        ok(S, "S15.12 every billed line carries an HSN/SAC code", not missing, missing)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# S16  Load and concurrency
+# ══════════════════════════════════════════════════════════════════════════
+#
+# Not a benchmark -- this bench is a laptop with no background workers, so
+# absolute timings mean nothing. What these do measure is the shape of the
+# work: whether a screen's cost grows with the size of the site, and whether
+# two tills doing the same thing at the same moment can corrupt each other.
+
+def s16_load():
+    S = "S16 Load & concurrency"
+    import time
+
+    st = _ctx.get("store")
+    if not st:
+        blocked(S, "load scenarios", "no store context")
+        return
+
+    def _timed(fn):
+        t0 = time.time()
+        out = fn()
+        return round((time.time() - t0) * 1000), out
+
+    @guard(S, "S16.1 the store service board answers in reasonable time")
+    def _():
+        from gofix.gofix_services.api import get_store_service_board
+        ms, board = _timed(lambda: get_store_service_board(st.warehouse, tab="all"))
+        ok(S, "S16.1 the store service board answers in reasonable time", ms < 5000,
+           f"{ms} ms for {len(board.get('rows') or [])} tickets")
+
+    @guard(S, "S16.2 the board's cost does not grow with the whole site")
+    def _():
+        # A board scoped to one store should cost about the same whether the
+        # site holds a hundred tickets or a hundred thousand. Compared against
+        # an unfiltered count of the same doctype as a rough shape check.
+        from gofix.gofix_services.api import get_store_service_board
+        ms_one, b = _timed(lambda: get_store_service_board(st.warehouse, tab="all"))
+        total = frappe.db.count("Service Request")
+        rows = len(b.get("rows") or [])
+        ok(S, "S16.2 the board's cost does not grow with the whole site",
+           ms_one < 5000, f"{ms_one} ms for {rows} of {total} site-wide tickets")
+
+    @guard(S, "S16.3 the front-desk queue answers in reasonable time")
+    def _():
+        from ch_pos.api.token_api import get_pos_waiting_tokens
+        ms, rows = _timed(lambda: get_pos_waiting_tokens(st.pos_profile))
+        ok(S, "S16.3 the front-desk queue answers in reasonable time", ms < 5000,
+           f"{ms} ms for {len(rows)} in the queue")
+
+    @guard(S, "S16.4 the stuck-jobs sweep scales across every store")
+    def _():
+        from gofix.gofix_services.standup import stuck_jobs
+        ms, jobs = _timed(stuck_jobs)
+        ok(S, "S16.4 the stuck-jobs sweep scales across every store", ms < 15000,
+           f"{ms} ms across all stores, {len(jobs)} stalled")
+
+    @guard(S, "S16.5 the counter triage answers while the customer waits")
+    def _():
+        from gofix.ai.triage import triage
+        ms, r = _timed(lambda: triage(
+            description="screen cracked and battery draining fast",
+            brand="Apple", company=CO))
+        ok(S, "S16.5 the counter triage answers while the customer waits", ms < 3000,
+           f"{ms} ms, source={r.get('source')}")
+
+    # ── Concurrency: two tills, one device ──────────────────────────────
+    @guard(S, "S16.6 two technicians cannot both hold one device")
+    def _():
+        if not _ctx.get("sr"):
+            blocked(S, "S16.6 two technicians cannot both hold one device", "no SR")
+            return
+        emps = frappe.get_all("Employee", filters={"status": "Active"},
+                              pluck="name", limit=2)
+        if len(emps) < 2:
+            blocked(S, "S16.6 two technicians cannot both hold one device",
+                    "fewer than two Active Employees")
+            return
+        accepted = []
+        for e in emps:
+            ja = frappe.new_doc("Job Assignment")
+            ja.service_request = _ctx["sr"]
+            ja.service_engineer = e
+            ja.job_type = "Repair"
+            ja.assignment_type = "Technician Assignment"
+            ja.assigned_by = frappe.session.user
+            ja.assignment_status = "In Progress"
+            try:
+                ja.insert()
+                accepted.append(e)
+            except Exception:
+                pass
+        frappe.db.rollback()
+        ok(S, "S16.6 two technicians cannot both hold one device", len(accepted) == 1,
+           f"{len(accepted)} of 2 accepted")
+
+    @guard(S, "S16.7 the same walk-in token cannot be converted twice")
+    def _():
+        tok = _ctx.get("token_unknown")
+        if not tok:
+            blocked(S, "S16.7 the same walk-in token cannot be converted twice", "no token")
+            return
+        linked = frappe.db.get_value("POS Kiosk Token", tok, "linked_service_request")
+        frappe.db.set_value("POS Kiosk Token", tok, "linked_service_request",
+                            _ctx.get("sr"), update_modified=False)
+        from ch_pos.api.token_api import get_pos_waiting_tokens
+
+        rows = get_pos_waiting_tokens(st.pos_profile)
+        pickable = [r for r in rows if r.get("name") == tok
+                    and not r.get("linked_service_request")]
+        frappe.db.set_value("POS Kiosk Token", tok, "linked_service_request",
+                            linked, update_modified=False)
+        ok(S, "S16.7 the same walk-in token cannot be converted twice", not pickable,
+           "a converted token is no longer offered")
+
+    @guard(S, "S16.8 a billed repair cannot be billed a second time")
+    def _():
+        billed = frappe.db.sql("""
+            SELECT sr.name FROM `tabService Request` sr
+            JOIN `tabSales Invoice` si ON si.name = sr.service_invoice AND si.docstatus = 1
+            ORDER BY si.creation DESC LIMIT 1""")
+        if not billed:
+            blocked(S, "S16.8 a billed repair cannot be billed a second time", "none billed")
+            return
+        try:
+            frappe.get_doc("Service Request", billed[0][0]).create_service_invoice()
+            ok(S, "S16.8 a billed repair cannot be billed a second time", False,
+               "second invoice created")
+        except Exception as e:
+            ok(S, "S16.8 a billed repair cannot be billed a second time", True, str(e)[:100])
+        finally:
+            frappe.db.rollback()

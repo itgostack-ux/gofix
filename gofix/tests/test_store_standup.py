@@ -71,6 +71,12 @@ def run_all():
 
 	# ── 4. Durable, not a toast ──────────────────────────────────────────
 	_clear_keys()
+	# Today's digests may already exist from an earlier run, and the dedupe is
+	# durable by design -- so a second run correctly sends nothing. Clear the
+	# day first, or this asserts against the dedupe instead of the delivery.
+	frappe.db.sql("""DELETE FROM `tabNotification Log`
+		WHERE document_type = 'Service Request' AND DATE(creation) = CURDATE()""")
+	frappe.db.commit()
 	before = frappe.db.count("Notification Log", {"document_type": "Service Request"})
 	first = daily_store_standup()
 	after = frappe.db.count("Notification Log", {"document_type": "Service Request"})

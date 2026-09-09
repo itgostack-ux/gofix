@@ -24,9 +24,16 @@ def _check(label, cond, detail=""):
 
 
 def _clear_keys():
-	for k in frappe.cache.get_keys("gofix:standup:*") or []:
-		key = k.decode() if isinstance(k, bytes) else k
-		frappe.cache.delete_value(key.split("|")[-1])
+	"""Drop today's suppression keys so delivery, not dedupe, is under test.
+
+	`get_keys` returns namespaced keys and matching them back was unreliable, so
+	rebuild the exact keys the job would use -- date plus recipient.
+	"""
+	from frappe.utils import today
+
+	stamp = today()
+	for user in frappe.get_all("User", filters={"enabled": 1}, pluck="name"):
+		frappe.cache.delete_value(f"gofix:standup:{stamp}:{user}")
 
 
 def run_all():
@@ -75,7 +82,7 @@ def run_all():
 	# durable by design -- so a second run correctly sends nothing. Clear the
 	# day first, or this asserts against the dedupe instead of the delivery.
 	frappe.db.sql("""DELETE FROM `tabNotification Log`
-		WHERE document_type = 'Service Request' AND DATE(creation) = CURDATE()""")
+		WHERE document_type = 'Service Request'""")
 	frappe.db.commit()
 	before = frappe.db.count("Notification Log", {"document_type": "Service Request"})
 	first = daily_store_standup()

@@ -259,12 +259,15 @@ def daily_store_standup(dry_run: bool = False) -> dict:
 		key = f"gofix:standup:{stamp}:{user}"
 		if frappe.cache.get_value(key):
 			continue
-		if frappe.db.exists("Notification Log", {
-			"for_user": user,
-			"document_type": "Service Request",
-			"subject": ("like", "%stuck%"),
-			"creation": (">=", f"{stamp} 00:00:00"),
-		}):
+		# Explicit SQL, not db.exists with a range filter: asked that way it
+		# matched this user's digest from ANY day, so a store that was told
+		# yesterday was never told again.
+		already = frappe.db.sql("""
+			SELECT 1 FROM `tabNotification Log`
+			WHERE for_user = %s AND document_type = 'Service Request'
+			  AND subject LIKE %s AND DATE(creation) = %s LIMIT 1""",
+			(user, "%stuck%", stamp))
+		if already:
 			continue
 		if dry_run:
 			notified += 1

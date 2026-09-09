@@ -706,9 +706,18 @@ def s6_logistics():
             blocked(S, "S6.3 a dispatch can be called back before pickup",
                     f"nothing in transit (transfer_status={in_transit!r})")
             return
+        source = _ctx["store"].warehouse
         res = cancel_service_transfer(_ctx["sr"], reason=f"{GOLIVE_TAG} recall")
         frappe.db.commit()
-        ok(S, "S6.3 a dispatch can be called back before pickup", bool(res), str(res)[:110])
+        # A recall has to actually bring the device back, not just return ok:
+        # the ticket's transfer status clears and custody returns to the store
+        # that dispatched it.
+        after = frappe.db.get_value("Service Request", _ctx["sr"],
+                                    ["transfer_status", "current_location"], as_dict=True)
+        ok(S, "S6.3 a dispatch can be called back before pickup",
+           bool(res) and (after.transfer_status or "") not in ("In Transit", "Dispatched")
+           and after.current_location == source,
+           f"transfer_status={after.transfer_status!r}, back at {after.current_location}")
 
     @guard(S, "S6.4 the device movement options are published to the counter")
     def _():
@@ -898,6 +907,14 @@ def s10_lifecycle_rules():
         SELECT sr.name FROM `tabService Request` sr
         JOIN `tabSales Invoice` si ON si.name = sr.service_invoice AND si.docstatus = 1
         ORDER BY si.creation DESC LIMIT 1""")
+    # SETTLED, not merely billed. invoice_is_complete means billed AND paid,
+    # and this used to pass against an invoice whose outstanding had been
+    # wrongly zeroed -- the check was right and the data was lying to it.
+    settled = frappe.db.sql("""
+        SELECT sr.name FROM `tabService Request` sr
+        JOIN `tabSales Invoice` si ON si.name = sr.service_invoice AND si.docstatus = 1
+        WHERE si.outstanding_amount = 0 AND si.grand_total > 0
+        ORDER BY si.creation DESC LIMIT 1""")
     qc_only = frappe.db.sql("""
         SELECT sr.name FROM `tabService Request` sr
         LEFT JOIN `tabSales Invoice` si ON si.name = sr.service_invoice AND si.docstatus = 1
@@ -922,15 +939,30 @@ def s10_lifecycle_rules():
         ok(S, "S10.2 a QC-closed, unbilled repair may be reopened with approval",
            (r or {}).get("can_reopen") or "approval" in str(r).lower(), r)
 
-    @guard(S, "S10.3 an invoiced repair reports invoice_is_complete")
+    @guard(S, "S10.3 a SETTLED repair reports invoice_is_complete")
     def _():
-        if not billed:
-            blocked(S, "S10.3 an invoiced repair reports invoice_is_complete", "no billed repair")
+        if not settled:
+            blocked(S, "S10.3 a SETTLED repair reports invoice_is_complete",
+                    "no repair on this site is both billed and fully paid")
             return
-        doc = frappe.get_doc("Service Request", billed[0][0])
+        doc = frappe.get_doc("Service Request", settled[0][0])
         r = invoice_is_complete(doc)
-        ok(S, "S10.3 an invoiced repair reports invoice_is_complete",
+        ok(S, "S10.3 a SETTLED repair reports invoice_is_complete",
            isinstance(r, dict) and r.get("complete") is True, r)
+
+    @guard(S, "S10.3b an unpaid repair is NOT reported complete")
+    def _():
+        unpaid = frappe.db.sql("""
+            SELECT sr.name FROM `tabService Request` sr
+            JOIN `tabSales Invoice` si ON si.name = sr.service_invoice AND si.docstatus = 1
+            WHERE si.outstanding_amount > 0 ORDER BY si.creation DESC LIMIT 1""")
+        if not unpaid:
+            blocked(S, "S10.3b an unpaid repair is NOT reported complete",
+                    "every billed repair here is settled")
+            return
+        r = invoice_is_complete(frappe.get_doc("Service Request", unpaid[0][0]))
+        ok(S, "S10.3b an unpaid repair is NOT reported complete",
+           r.get("complete") is False and r.get("reason"), r.get("reason"))
 
     @guard(S, "S10.4 close-without-repair is only offered while work is open")
     def _():
@@ -1286,7 +1318,7 @@ def run_all(cleanup: bool = True):
     for fn in (s1_walkin, s2_intake, s3_triage_estimate, s4_customer_decision,
                s5_spares, s7_repair_qc, s8_billing, s9_delivery, s6_logistics,
                s10_lifecycle_rules, s11_documents, s12_scope, s14_service_order,
-               s15_accounts, s16_load, s13_data_readiness):
+               s15_accounts, s17_cash_to_close, s16_load, s13_data_readiness):
         try:
             fn()
         except Exception:
@@ -1666,3 +1698,205 @@ def s16_load():
             ok(S, "S16.8 a billed repair cannot be billed a second time", True, str(e)[:100])
         finally:
             frappe.db.rollback()
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# S17  A repair, billed and settled, from nothing
+# ══════════════════════════════════════════════════════════════════════════
+#
+# The other sections examine records that already exist. This one creates a
+# repair, bills it, takes the money, and then checks that all three places a
+# receivable is recorded -- the invoice, the general ledger and the payment
+# ledger -- close on the same figure. That is the check the 61 divergent
+# invoices would have failed.
+
+def s17_cash_to_close():
+    S = "S17 Billed and settled end to end"
+    if not (_ctx.get("store") and _ctx.get("device") and _ctx.get("customer")):
+        blocked(S, "a full billing cycle", "store / device / customer missing")
+        return
+
+    sr_name = inv_name = None
+
+    @guard(S, "S17.1 a fresh repair is booked in")
+    def _():
+        nonlocal_sr = _new_sr(issue_description=f"{GOLIVE_TAG} cash-to-close cycle")
+        nonlocal_sr.insert(ignore_permissions=True)
+        frappe.db.commit()
+        _track("Service Request", nonlocal_sr.name)
+        _ctx["cash_sr"] = nonlocal_sr.name
+        ok(S, "S17.1 a fresh repair is booked in", bool(nonlocal_sr.name), nonlocal_sr.name)
+
+    if not _ctx.get("cash_sr"):
+        return
+    sr_name = _ctx["cash_sr"]
+
+    @guard(S, "S17.2 the repair is priced and completed")
+    def _():
+        from gofix.gofix_services.page.gofix_ops_hub.gofix_ops_hub import (
+            get_solutions_for_issue, save_issue_lines, save_solution_assignment)
+        # A billable solution, or there is nothing for the invoice to carry:
+        # a diagnosis-only line has no service item behind it and billing then
+        # refuses with "No service items or spare parts to invoice", which is
+        # correct and not what this scenario is testing.
+        billable = frappe.db.sql("""
+            SELECT name, issue_category FROM `tabRepair Solution`
+            WHERE is_active = 1 AND is_billable = 1
+              AND IFNULL(service_item, '') <> '' LIMIT 1""", as_dict=True)
+        if not billable:
+            blocked(S, "S17.2 the repair is priced and completed",
+                    "no active Repair Solution is billable with a service item")
+            return
+        chosen = billable[0]
+        save_issue_lines(sr_name, frappe.as_json([
+            {"issue_category": chosen.issue_category, "reported_by": "Customer",
+             "description": f"{GOLIVE_TAG}", "status": "Open"}]))
+        sols = get_solutions_for_issue(chosen.issue_category) or []
+        save_solution_assignment(sr_name, frappe.as_json([
+            {"issue_category": chosen.issue_category,
+             "repair_solution": chosen.name, "status": "Completed"}]))
+        # Billing refuses while any selected solution is still open, which is
+        # correct -- so finish them, the way a technician would.
+        frappe.db.sql("""UPDATE `tabSR Solution Line` SET status = 'Completed'
+            WHERE parent = %s AND status NOT IN ('Cancelled', 'Skipped')""", sr_name)
+        frappe.db.sql("""UPDATE `tabSR Issue Line` SET status = 'Resolved'
+            WHERE parent = %s""", sr_name)
+
+        # The invoice is built from `service_items`, not from the solution lines
+        # -- a separate child table that carries the billable line and its rate.
+        # Populated here the way the Ops Hub billing step does.
+        svc_item = frappe.db.get_value("Repair Solution", chosen.name, "service_item")
+        doc = frappe.get_doc("Service Request", sr_name)
+        if svc_item and not doc.get("service_items"):
+            rate = flt(frappe.db.get_value("Item Price",
+                                           {"item_code": svc_item, "selling": 1}, "price_list_rate")) or 500
+            doc.append("service_items", {
+                "service_item": svc_item,
+                "item_name": frappe.db.get_value("Item", svc_item, "item_name") or svc_item,
+                "description": f"{GOLIVE_TAG} {chosen.name}",
+                "estimated_hours": 1,
+                "estimated_cost": rate,
+                "actual_cost": rate,
+            })
+            doc.save(ignore_permissions=True)
+            frappe.db.commit()
+
+        # Everything billing insists on before it will raise an invoice.
+        frappe.db.set_value("Service Request", sr_name, {
+            "decision": "Completed", "qc_status": "Pass",
+            "service_outcome": "Successful",
+            "return_method": "Customer In Person",
+            "return_confirmed_by": frappe.session.user,
+            "return_confirmed_at": now_datetime(),
+        }, update_modified=False)
+        frappe.db.commit()
+        ok(S, "S17.2 the repair is priced and completed",
+           frappe.db.get_value("Service Request", sr_name, "qc_status") == "Pass",
+           f"{chosen.name} ({chosen.issue_category}), {len(sols)} available")
+
+    @guard(S, "S17.3 billing raises an invoice")
+    def _():
+        nonlocal_doc = frappe.get_doc("Service Request", sr_name)
+        nonlocal_doc.create_service_invoice()
+        frappe.db.commit()
+        inv = frappe.db.get_value("Service Request", sr_name, "service_invoice")
+        _ctx["cash_inv"] = inv
+        if inv:
+            _track("Sales Invoice", inv)
+        ok(S, "S17.3 billing raises an invoice", bool(inv), inv)
+
+    inv_name = _ctx.get("cash_inv")
+    if not inv_name:
+        blocked(S, "S17.4 the invoice is submitted and posts to the ledger",
+                "no invoice was raised")
+        return
+
+    @guard(S, "S17.4 the invoice is submitted and posts to the ledger")
+    def _():
+        si = frappe.get_doc("Sales Invoice", inv_name)
+        if si.docstatus == 0:
+            si.flags.ignore_permissions = True
+            si.submit()
+            frappe.db.commit()
+        gl = frappe.get_all("GL Entry",
+                            filters={"voucher_no": inv_name, "is_cancelled": 0},
+                            fields=["debit", "credit"])
+        d = round(sum(flt(r.debit) for r in gl), 2)
+        c = round(sum(flt(r.credit) for r in gl), 2)
+        ok(S, "S17.4 the invoice is submitted and posts to the ledger",
+           gl and d == c and d > 0, f"Dr {d} = Cr {c} across {len(gl)} entries")
+
+    @guard(S, "S17.5 the new invoice agrees with its own ledger")
+    def _():
+        si = frappe.db.get_value("Sales Invoice", inv_name,
+                                 ["outstanding_amount", "grand_total"], as_dict=True)
+        bal = frappe.db.sql("""SELECT SUM(debit) - SUM(credit) FROM `tabGL Entry`
+            WHERE against_voucher = %s AND is_cancelled = 0
+              AND account LIKE 'Debtors%%'""", inv_name)[0][0]
+        ok(S, "S17.5 the new invoice agrees with its own ledger",
+           abs(flt(si.outstanding_amount) - flt(bal)) < 0.01,
+           f"invoice says {si.outstanding_amount}, ledger says {bal}")
+
+    @guard(S, "S17.6 the payment ledger agrees too")
+    def _():
+        ple = frappe.db.sql("""SELECT SUM(amount) FROM `tabPayment Ledger Entry`
+            WHERE against_voucher_no = %s AND delinked = 0""", inv_name)[0][0]
+        si = flt(frappe.db.get_value("Sales Invoice", inv_name, "outstanding_amount"))
+        ok(S, "S17.6 the payment ledger agrees too", abs(flt(ple) - si) < 0.01,
+           f"payment ledger {ple}, invoice {si}")
+
+    @guard(S, "S17.7 taking the money closes the invoice")
+    def _():
+        from erpnext.accounts.doctype.payment_entry.payment_entry import get_payment_entry
+        pe = get_payment_entry("Sales Invoice", inv_name)
+        pe.reference_no = GOLIVE_TAG
+        pe.reference_date = nowdate()
+        if not pe.get("mode_of_payment"):
+            pe.mode_of_payment = frappe.db.get_value(
+                "Mode of Payment", {"enabled": 1, "type": "Cash"}, "name"
+            ) or frappe.db.get_value("Mode of Payment", {"enabled": 1}, "name")
+        pe.insert(ignore_permissions=True)
+        pe.submit()
+        frappe.db.commit()
+        _track("Payment Entry", pe.name)
+        after = frappe.db.get_value("Sales Invoice", inv_name,
+                                    ["outstanding_amount", "status"], as_dict=True)
+        ok(S, "S17.7 taking the money closes the invoice",
+           flt(after.outstanding_amount) == 0 and after.status == "Paid",
+           f"outstanding {after.outstanding_amount}, status {after.status}")
+
+    @guard(S, "S17.8 the customer's ledger nets to zero after settlement")
+    def _():
+        bal = frappe.db.sql("""SELECT SUM(debit) - SUM(credit) FROM `tabGL Entry`
+            WHERE against_voucher = %s AND is_cancelled = 0
+              AND account LIKE 'Debtors%%'""", inv_name)[0][0]
+        ok(S, "S17.8 the customer's ledger nets to zero after settlement",
+           abs(flt(bal)) < 0.01, f"Debtors balance {bal}")
+
+    @guard(S, "S17.9 all three sources close on the same figure")
+    def _():
+        si = flt(frappe.db.get_value("Sales Invoice", inv_name, "outstanding_amount"))
+        gl = flt(frappe.db.sql("""SELECT SUM(debit) - SUM(credit) FROM `tabGL Entry`
+            WHERE against_voucher = %s AND is_cancelled = 0
+              AND account LIKE 'Debtors%%'""", inv_name)[0][0])
+        ple = flt(frappe.db.sql("""SELECT SUM(amount) FROM `tabPayment Ledger Entry`
+            WHERE against_voucher_no = %s AND delinked = 0""", inv_name)[0][0])
+        ok(S, "S17.9 all three sources close on the same figure",
+           abs(si) < 0.01 and abs(gl) < 0.01 and abs(ple) < 0.01,
+           f"invoice {si}, ledger {gl}, payment ledger {ple}")
+
+    @guard(S, "S17.10 the settled repair prints its invoice")
+    def _():
+        from gofix.report_filters import printable_documents
+        d = printable_documents(sr_name)
+        ok(S, "S17.10 the settled repair prints its invoice",
+           d["invoice"]["available"] is True
+           and d["invoice"]["format"] == "GoFix Service Invoice",
+           d["invoice"].get("name"))
+
+    @guard(S, "S17.11 no divergence was created anywhere by this cycle")
+    def _():
+        from gofix.patches.repair_divergent_receivables import divergent_invoices
+        rows = divergent_invoices()
+        ok(S, "S17.11 no divergence was created anywhere by this cycle",
+           not rows, f"{len(rows)} divergent invoice(s) site-wide")

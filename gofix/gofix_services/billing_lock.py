@@ -146,30 +146,17 @@ def reopen_service_request(service_request: str, reason: str) -> dict:
     sr = assert_service_request_access(service_request, permission_type="write")
     reason = (reason or "").strip()
     if not reason:
-        frappe.throw(_("A reason is required to reopen a billed repair."),
+        frappe.throw(_("A reason is required to reopen a repair."),
                      title=_("Reason Required"))
-    if not sr.get("is_billing_locked"):
-        frappe.throw(_("This repair is not locked — it has not been billed."),
-                     title=_("Nothing to Reopen"))
-    if sr.get("reopen_active"):
-        frappe.throw(_("This repair is already open. Bill it again to close it."),
-                     title=_("Already Reopened"))
+    # This used to require the repair to be BILLED, and asked nobody. That is
+    # backwards: once an invoice exists there is a document in the customer's
+    # hands and in the books describing work that reopening would change. A
+    # repair may go back to the bench only while the quality check has closed
+    # and no bill has been raised -- and because that overturns a completed
+    # quality decision, the zonal sales manager approves it.
+    from gofix.gofix_services import lifecycle
 
-    count = int(sr.get("reopen_count") or 0) + 1
-    sr.db_set({
-        "reopen_active": 1,
-        "reopen_count": count,
-        "reopen_reason": reason,
-        "last_reopened_by": frappe.session.user,
-        "last_reopened_at": now_datetime(),
-    }, update_modified=True)
-
-    _log(sr, "Reopened", _("Reopen #{0}: {1}").format(count, reason))
-    sr.add_comment("Comment", _("Reopened (#{0}) by {1}: {2}").format(
-        count, frappe.session.user, reason))
-
-    return {"ok": True, "reopen_count": count,
-            "message": _("Repair reopened. It will lock again when it is billed.")}
+    return lifecycle.request_reopen(sr.name, reason)
 
 
 @frappe.whitelist()

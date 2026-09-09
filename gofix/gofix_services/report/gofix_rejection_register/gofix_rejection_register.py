@@ -68,6 +68,14 @@ def _conditions(filters, alias="sr"):
 	if filters.get("source_warehouse"):
 		where.append(f"{alias}.source_warehouse = %(source_warehouse)s")
 		values["source_warehouse"] = filters.source_warehouse
+	# Zone / state / city / store, resolved to the warehouses they name.
+	from gofix.report_filters import geo_conditions
+
+	_geo = geo_conditions(filters, company_field=None,
+	                      warehouse_field=f"{alias}.source_warehouse")
+	if _geo:
+		where.append(_geo[len(" AND "):])
+
 	return where, values
 
 

@@ -55,6 +55,14 @@ def get_data(filters):
 	if scope is not None:
 		conditions += f" AND {scope}"
 
+	# The geography the user asked for, alongside the scope they are
+	# entitled to. Both apply: asking for a zone you cannot see returns
+	# nothing, never everything.
+	from gofix.report_filters import geo_conditions
+
+	conditions += geo_conditions(filters, company_field=None,
+	                             warehouse_field='sr.source_warehouse')
+
 	query = f"""
 		SELECT
 			COALESCE(sr.source_warehouse, 'No Warehouse') as warehouse,

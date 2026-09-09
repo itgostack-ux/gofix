@@ -16,13 +16,7 @@ frappe.query_reports["GoFix Rejection Register"] = {
 			default: frappe.datetime.get_today(),
 			reqd: 1,
 		},
-		{
-			fieldname: "company",
-			label: __("Company"),
-			fieldtype: "Link",
-			options: "Company",
-			default: frappe.defaults.get_user_default("Company"),
-		},
+		...gofix_scope_filters(),
 		{
 			fieldname: "source_warehouse",
 			label: __("Store"),

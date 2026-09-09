@@ -5,7 +5,7 @@
  "css": "",
  "custom_format": 1,
  "default_print_language": "en",
- "disabled": 0,
+ "disabled": 1,
  "doc_type": "Service Request",
  "docstatus": 0,
  "doctype": "Print Format",

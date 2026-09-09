@@ -18,13 +18,7 @@ const gofix_daily_tokens_store_query = () => ({
 
 frappe.query_reports["GoFix Daily Tokens"] = {
 	filters: [
-		{
-			fieldname: "company",
-			label: __("Company"),
-			fieldtype: "Link",
-			options: "Company",
-			default: gofix_daily_tokens_active_company(),
-		},
+		...gofix_scope_filters(),
 		{
 			fieldname: "store",
 			label: __("Store"),

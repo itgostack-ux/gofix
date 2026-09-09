@@ -1,6 +1,7 @@
 # Copyright (c) 2026, GoFix and contributors
 # E2E test: All GoFix print formats — Buyback Receipt, Exchange Receipt,
-#           Device Received Receipt, GoFix Delivery Receipt.
+#           Device Received Receipt, and the two a repair produces:
+#           GoFix Job Sheet (drop-off) and GoFix Service Invoice (collection).
 #
 # Run:
 #   bench --site <site> execute gofix.tests.test_print_formats_e2e.run_all
@@ -232,40 +233,82 @@ def test_device_received_receipt():
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# TEST 4: GoFix Delivery Receipt (Sales Invoice)
+# TEST 4: two documents, each at its own moment
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def test_gofix_delivery_receipt():
-    flow = "GoFixDeliveryReceipt"
-    pf_name = "GoFix Delivery Receipt"
+def test_gofix_two_documents():
+    """A repair produces exactly two pieces of paper.
 
-    # 4a. Check print format exists
-    if not _pf_exists(pf_name):
-        _ok(flow, f"'{pf_name}' print format not found — skipping render test")
+    The Job Sheet exists from the moment the device is taken in; the Service
+    Invoice only once the repair has actually been billed. Four formats used to
+    compete for those two jobs, so a counter printing "the invoice" could hand
+    over any of three different documents.
+    """
+    flow = "GoFixTwoDocuments"
+    JOB_SHEET, SERVICE_INVOICE = "GoFix Job Sheet", "GoFix Service Invoice"
+
+    # 4a. Exactly two live, and neither retired one is offered.
+    live = sorted(frappe.get_all(
+        "Print Format", filters={"name": ("like", "GoFix%"), "disabled": 0}, pluck="name"))
+    if live == [JOB_SHEET, SERVICE_INVOICE]:
+        _ok(flow, "exactly two GoFix formats are live", ", ".join(live))
+    else:
+        _fail(flow, "exactly two GoFix formats are live", f"found {live}")
+
+    for retired in ("GoFix Delivery Receipt", "GoFix Repair Charge Sheet"):
+        if not frappe.db.exists("Print Format", retired):
+            _ok(flow, f"{retired} is gone")
+        elif frappe.db.get_value("Print Format", retired, "disabled"):
+            _ok(flow, f"{retired} is retired")
+        else:
+            _fail(flow, f"{retired} is still offered alongside the two")
+
+    # 4b. Desk's own print view must land on the Job Sheet, not a disabled one.
+    dflt = frappe.db.get_value(
+        "Property Setter", "Service Request-main-default_print_format", "value")
+    if dflt in (None, JOB_SHEET):
+        _ok(flow, "Service Request desk default is the Job Sheet", str(dflt))
+    else:
+        _fail(flow, "Service Request desk default points at a retired format", str(dflt))
+
+    if not (_pf_exists(JOB_SHEET) and _pf_exists(SERVICE_INVOICE)):
+        _fail(flow, "both formats installed", f"{JOB_SHEET}/{SERVICE_INVOICE} missing")
         return
-    _ok(flow, f"'{pf_name}' print format exists")
 
-    # 4b. Create a Sales Invoice with custom_gofix_service_request
     company = _company()
     customer = _get_or_create_customer()
     item = _get_or_create_item(company, stock=False)
 
-    # First create a dummy Service Request to link
+    # 4c. A repair at drop-off: the Job Sheet renders off the Service Request.
     sr_name = None
     try:
-        warehouse = frappe.db.get_value("Warehouse", {"company": company, "is_group": 0, "disabled": 0}, "name")
+        warehouse = frappe.db.get_value(
+            "Warehouse", {"company": company, "is_group": 0, "disabled": 0}, "name")
         sr = frappe.new_doc("Service Request")
         sr.customer = customer
         sr.company = company
         sr.source_warehouse = warehouse
         sr.service_date = nowdate()
         sr.mode_of_service = "Walk-in"
-        sr.device_item = item
-        sr.device_item_name = "Print Format Test Device"
-        sr.brand = "Samsung"
+        # A device the bench actually carries: booking one in requires a real
+        # brand and model, so copy them off an existing repair rather than
+        # inventing a phone the item master has never heard of.
+        real = frappe.db.sql("""
+            SELECT device_item, device_item_name, brand, device_brand, device_model
+            FROM `tabService Request`
+            WHERE IFNULL(device_model, '') <> '' AND IFNULL(device_brand, '') <> ''
+            ORDER BY creation DESC LIMIT 1""", as_dict=True)
+        if real:
+            for field, value in real[0].items():
+                sr.set(field, value)
+        else:
+            sr.device_item = item
+            sr.device_item_name = "Print Format Test Device"
+            sr.brand = "Samsung"
         sr.issue_description = "Print format test"
         sr.product_condition_desc = "Good condition"
         sr.backup_info = "No backup needed"
+        sr.data_backup_disclaimer = 1  # the consent the counter takes at intake
         sr.contact_number = "9876543210"
         sr.state_name = "Maharashtra"
         sr.state_code = "27"
@@ -278,45 +321,78 @@ def test_gofix_delivery_receipt():
         sr_name = sr.name
         _FLOW["pf_sr"] = sr_name
     except Exception as e:
-        _ok(flow, f"SR creation for print test skipped: {str(e)[:80]}")
+        _fail(flow, "Service Request creation for the print test", str(e))
+        return
 
-    # 4c. Create Sales Invoice
+    html, err = _try_render("Service Request", sr_name, JOB_SHEET)
+    if html:
+        _ok(flow, "Job Sheet renders off the Service Request", f"{len(html)} chars")
+        if "job sheet" in html.lower():
+            _ok(flow, "Job Sheet names itself")
+        else:
+            _fail(flow, "Job Sheet names itself", "title phrase absent")
+    else:
+        _fail(flow, "Job Sheet renders off the Service Request", err)
+
+    # 4d. THE RULE: a draft invoice is not a billed one.
+    from gofix.report_filters import printable_documents
     try:
         inv = frappe.new_doc("Sales Invoice")
         inv.customer = customer
         inv.company = company
         inv.posting_date = nowdate()
         inv.due_date = nowdate()
-        if sr_name and inv.meta.has_field("custom_gofix_service_request"):
+        if inv.meta.has_field("custom_gofix_service_request"):
             inv.custom_gofix_service_request = sr_name
-        inv.append("items", {
-            "item_code": item,
-            "qty": 1,
-            "rate": 750,
-        })
+        inv.append("items", {"item_code": item, "qty": 1, "rate": 750})
         inv.flags.ignore_mandatory = True
         inv.insert(ignore_permissions=True)
+        frappe.db.set_value("Service Request", sr_name, "service_invoice", inv.name)
         frappe.db.commit()
-        si_name = inv.name
-        _FLOW["pf_invoice"] = si_name
-        _ok(flow, "Sales Invoice created for GoFix Delivery Receipt test", si_name)
+        _FLOW["pf_invoice"] = inv.name
+        _ok(flow, "draft Sales Invoice created", inv.name)
     except Exception as e:
-        _fail(flow, "Sales Invoice creation for print test", str(e))
+        _fail(flow, "Sales Invoice creation for the print test", str(e))
         return
 
-    # 4d. Render GoFix Delivery Receipt
-    html, err = _try_render("Sales Invoice", si_name, pf_name)
-    if html:
-        _ok(flow, f"'{pf_name}' rendered successfully", f"{len(html)} chars")
-        # Verify key content phrase
-        if "DEVICE DELIVERY RECEIPT" in html.upper():
-            _ok(flow, "'DEVICE DELIVERY RECEIPT' phrase found in output")
-        elif "gofix" in html.lower() or "delivery" in html.lower():
-            _ok(flow, "GoFix/delivery content found in rendered HTML")
-        else:
-            _ok(flow, "HTML rendered (key phrase not found — template may vary)")
+    docs = printable_documents(sr_name)
+    if docs["job_sheet"]["available"] and not docs["invoice"]["available"]:
+        _ok(flow, "a DRAFT invoice does not open the Invoice button",
+            docs["invoice"]["reason"][:60])
     else:
-        _fail(flow, f"'{pf_name}' render failed", err)
+        _fail(flow, "a DRAFT invoice does not open the Invoice button",
+              f"job_sheet={docs['job_sheet']['available']} invoice={docs['invoice']['available']}")
+
+    # 4e. Submit it: now, and only now, the invoice exists.
+    try:
+        si = frappe.get_doc("Sales Invoice", _FLOW["pf_invoice"])
+        si.flags.ignore_permissions = True
+        si.submit()
+        frappe.db.commit()
+    except Exception as e:
+        _ok(flow, "invoice could not be submitted in this data set — billed path skipped",
+            str(e)[:80])
+        return
+
+    docs = printable_documents(sr_name)
+    if docs["invoice"]["available"] and docs["invoice"]["format"] == SERVICE_INVOICE:
+        _ok(flow, "once billed, the Invoice button opens the Service Invoice",
+            docs["invoice"]["name"])
+    else:
+        _fail(flow, "once billed, the Invoice button opens the Service Invoice",
+              str(docs["invoice"]))
+
+    html, err = _try_render("Sales Invoice", _FLOW["pf_invoice"], SERVICE_INVOICE)
+    if html:
+        _ok(flow, "Service Invoice renders", f"{len(html)} chars")
+        for block in ("handover", "warranty", "signature"):
+            if block in html.lower():
+                _ok(flow, f"Service Invoice carries the {block} block")
+            else:
+                _fail(flow, f"Service Invoice carries the {block} block",
+                      "folded in from the retired delivery receipt")
+    else:
+        _fail(flow, "Service Invoice renders", err)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -390,6 +466,13 @@ def _cleanup():
         name = _FLOW.get(key)
         if name and frappe.db.exists(dt, name):
             try:
+                # The two-document test submits its invoice on purpose, and a
+                # submitted document has to be cancelled before it can go.
+                if frappe.db.get_value(dt, name, "docstatus") == 1:
+                    doc = frappe.get_doc(dt, name)
+                    doc.flags.ignore_permissions = True
+                    doc.cancel()
+                    frappe.db.commit()
                 frappe.delete_doc(dt, name, force=True, ignore_permissions=True)
             except Exception:
                 pass
@@ -412,7 +495,7 @@ def run_all():
     test_buyback_receipt()
     test_exchange_receipt()
     test_device_received_receipt()
-    test_gofix_delivery_receipt()
+    test_gofix_two_documents()
     test_print_format_modules()
     test_service_invoice_print_format()
 

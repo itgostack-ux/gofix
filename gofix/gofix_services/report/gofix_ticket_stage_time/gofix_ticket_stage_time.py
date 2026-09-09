@@ -94,7 +94,16 @@ def get_data(filters):
 	else:
 		if filters.get("company"):
 			sr_filters["company"] = filters.company
-		if filters.get("store"):
+		# Zone, state and city name a set of stores; store names one. Both end
+		# up as the same warehouse filter this report already understands.
+		from gofix.report_filters import resolve_warehouses
+
+		_wh = resolve_warehouses(filters)
+		if _wh is not None:
+			# An empty set means the chosen slice holds no store — match nothing
+			# rather than quietly dropping the filter.
+			sr_filters["source_warehouse"] = ("in", sorted(_wh) or [""])
+		elif filters.get("store"):
 			sr_filters["source_warehouse"] = filters.store
 		if filters.get("from_date"):
 			sr_filters["service_date"] = (">=", filters.from_date)

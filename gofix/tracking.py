@@ -374,3 +374,24 @@ def customer_estimate_action(sr_name, version_number, action, remarks=None, toke
 		"ok": True,
 		"message": result.get("message", "Approved" if action == "approve" else "Rejected"),
 	}
+
+
+def tracking_url_for_print(sr_name) -> str:
+    """The customer's tracking link, for print formats only.
+
+    ``tracking_token`` on the document is the sha256 *digest*; the plaintext is
+    derived from the site key at read time. A receipt that printed the stored
+    value gave the customer seventy-one characters of hex that the tracking page
+    rejects. This is a jinja method rather than a whitelisted endpoint because
+    minting a link is not something a logged-in user should be able to do for an
+    arbitrary repair.
+
+    Never raises: a receipt must print even when tracking is unavailable.
+    """
+    try:
+        if not sr_name:
+            return ""
+        return generate_tracking_url(sr_name) or ""
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "tracking_url_for_print")
+        return ""

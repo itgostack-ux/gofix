@@ -220,6 +220,31 @@ def calculate_estimate_from_rules(issue_categories, solutions, brand=None,
 			"spare_alternatives": alternatives if rule else 0,
 		})
 
+	# The bench fee, last on the estimate. Every repair carries the cost of
+	# logging, testing, cleaning and handing back the device, and it belonged to
+	# no line -- so small jobs looked free to run and the counter had to explain
+	# a total that did not add up from what was listed. Read from the Item's
+	# price list, so the amount is owned by whoever owns pricing.
+	#
+	# Not charged when nothing else is: an in-house plan bills no labour and no
+	# parts, and a bench fee on a zero estimate is a bill for nothing.
+	if not is_inhouse_plan and line_details:
+		from gofix.setup.gofix_service_charge_item import get_service_charge
+
+		charge = get_service_charge()
+		if charge and flt(charge.get("rate")) > 0:
+			labor_total += flt(charge["rate"])
+			line_details.append({
+				"repair_solution": charge["item_code"],
+				"solution_label": charge["item_name"],
+				"issue_category": None,
+				"labor": flt(charge["rate"]),
+				"spare": 0,
+				"total": flt(charge["rate"]),
+				"pricing_rule": None,
+				"is_service_charge": 1,
+			})
+
 	return {
 		"labor_total": labor_total,
 		"spare_total": spare_total,

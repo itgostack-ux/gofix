@@ -9,13 +9,7 @@ const gofix_first_time_fix_rate_store_query = () => ({
 
 frappe.query_reports["GoFix First Time Fix Rate"] = {
 	filters: [
-		{
-			fieldname: "company",
-			label: __("Company"),
-			fieldtype: "Link",
-			options: "Company",
-			default: frappe.defaults.get_user_default("Company"),
-		},
+		...gofix_scope_filters(),
 		{
 			fieldname: "from_date",
 			label: __("From"),

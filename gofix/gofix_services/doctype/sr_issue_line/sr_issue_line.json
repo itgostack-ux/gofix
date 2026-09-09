@@ -8,6 +8,8 @@
   "issue_category",
   "defect_code",
   "reported_by",
+  "reported_by_technician",
+  "reported_by_technician_name",
   "column_break_1",
   "description",
   "status",
@@ -30,7 +32,7 @@
    "fieldname": "defect_code",
    "fieldtype": "Data",
    "label": "Defect Code",
-   "description": "Technician-diagnosed defect code (IRIS chain: symptom \u2192 category \u2192 defect \u2192 repair)"
+   "description": "Technician-diagnosed defect code (IRIS chain: symptom → category → defect → repair)"
   },
   {
    "default": "Customer",
@@ -40,6 +42,25 @@
    "label": "Reported By",
    "options": "Customer\nTechnician",
    "reqd": 1
+  },
+  {
+   "fieldname": "reported_by_technician",
+   "fieldtype": "Link",
+   "label": "Technician",
+   "options": "Employee",
+   "depends_on": "eval:doc.reported_by=='Technician'",
+   "description": "Technician who had the device when this issue was raised. Stamped from custody, not chosen.",
+   "read_only": 1
+  },
+  {
+   "fieldname": "reported_by_technician_name",
+   "fieldtype": "Data",
+   "label": "Technician Name",
+   "in_list_view": 1,
+   "read_only": 1,
+   "fetch_from": "reported_by_technician.employee_name",
+   "fetch_if_empty": 1,
+   "depends_on": "eval:doc.reported_by=='Technician'"
   },
   {
    "fieldname": "column_break_1",
@@ -95,7 +116,7 @@
  "index_web_pages_for_search": 0,
  "istable": 1,
  "links": [],
- "modified": "2026-07-18 14:00:00.000000",
+ "modified": "2026-09-09 13:00:00.000000",
  "modified_by": "Administrator",
  "module": "GoFix Services",
  "name": "SR Issue Line",

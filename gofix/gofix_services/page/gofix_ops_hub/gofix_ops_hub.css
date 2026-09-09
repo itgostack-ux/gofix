@@ -172,6 +172,12 @@
 }
 
 /* ── Stepper ─────────────────────────────────────────────────────────────── */
+/* Stepper and banner stay put while the work below them scrolls. Six steps of
+   issues, solutions and parts is a long page, and losing sight of whose device
+   it is while ticking faults is how a fault gets logged on the wrong ticket.
+   .goh-main is the scrolling ancestor; the banner sits under the stepper at a
+   height JS measures into --goh-stepper-h (the stepper is hidden on narrow
+   screens, where that measures 0 and the banner rises to the top on its own). */
 .goh-stepper {
 	display: flex;
 	align-items: center;
@@ -180,6 +186,9 @@
 	background: var(--goh-card-bg);
 	border-bottom: 1px solid var(--goh-border);
 	gap: 0;
+	position: sticky;
+	top: 0;
+	z-index: 31;
 }
 .goh-step {
 	display: flex;
@@ -259,6 +268,9 @@
 	background: var(--goh-card-bg);
 	border-bottom: 1px solid var(--goh-border);
 	gap: 16px;
+	position: sticky;
+	top: var(--goh-stepper-h, 0px);
+	z-index: 30;
 }
 .goh-banner-left { flex: 1; min-width: 0; }
 .goh-banner-title {
@@ -305,6 +317,9 @@
 	background: var(--goh-card-bg);
 	border-bottom: 2px solid var(--goh-border);
 	padding: 0 16px;
+	position: sticky;
+	top: calc(var(--goh-stepper-h, 0px) + var(--goh-banner-h, 0px));
+	z-index: 29;
 }
 .goh-tab {
 	padding: 8px 16px;
@@ -905,3 +920,35 @@
 }
 .goh-access-title { font-weight: 600; margin-bottom: 3px; }
 .goh-access-detail { color: var(--goh-text-muted); font-size: 13px; }
+
+/* ── Estimate figure ─────────────────────────────────────────────────────── */
+/* The estimated cost is a result, not an input. It reads as a figure with its
+   provenance beside it, and the row wraps instead of pushing the exception
+   button off the edge on a narrow till screen. */
+.goh-confirm-cost {
+	display: flex;
+	align-items: baseline;
+	flex-wrap: wrap;
+	gap: 6px 10px;
+	padding: 10px 12px;
+	margin-top: 8px;
+	border: 1px solid var(--goh-border);
+	border-radius: 4px;
+	background: var(--goh-card-bg);
+}
+.goh-est-figure {
+	font-size: 20px;
+	font-weight: 700;
+	letter-spacing: -0.3px;
+}
+.goh-est-note {
+	color: var(--goh-muted);
+	font-size: 11px;
+	flex: 1 1 auto;
+	min-width: 140px;
+}
+.goh-confirm-cost .btn { flex: 0 0 auto; }
+
+/* The assign row: label, hours and button share a baseline rather than each
+   sitting at whatever height its own control happens to be. */
+.goh-est-hours-note { line-height: 1.3; }

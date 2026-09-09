@@ -965,19 +965,80 @@ def get_ticket_detail(sr_name) -> dict:
 		)
 		customer_info = contacts[0] if contacts else {}
 
+	# What this ticket permits right now, decided once so the buttons and the
+	# server cannot disagree. The screenshot that prompted this had a red "Not
+	# Repairable" sitting on a ticket at Invoice: the click would have been
+	# refused, and nothing had told the button.
+	from gofix.gofix_services.actions import available_actions
+
+	try:
+		permitted = available_actions(sr.name)
+	except Exception:
+		frappe.log_error(frappe.get_traceback(), "available_actions")
+		permitted = {"actions": {}}
+
 	issue_lines = [
 		{
 			"name": row.name,
 			"issue_category": row.issue_category,
 			"reported_by": row.reported_by,
+			# "Reported By" only says Customer or Technician. WHICH technician
+			# found the fault is the part anyone re-reading the ticket wants,
+			# and it was nowhere on the row until now.
+			"reported_by_technician": row.get("reported_by_technician") or "",
+			"reported_by_technician_name": (
+				row.get("reported_by_technician_name")
+				or row.get("reported_by_technician")
+				or ""
+			),
 			"description": row.description or "",
 			"status": row.status,
 			"deleted_reason": row.deleted_reason or "",
 			"deleted_by": row.deleted_by or "",
 			"deleted_at": str(row.deleted_at) if row.deleted_at else "",
+			# Who physically typed the row. Not the same claim as "this
+			# technician found the fault" -- it is only ever shown when nobody
+			# recorded that, and it is never written back onto the row.
+			"added_by_user": row.owner or "",
+			"technician_inferred": 0,
 		}
 		for row in sr.get("issue_lines", [])
 	]
+
+	# A row saying "Technician" without saying which one is the common case on
+	# every ticket raised before the field existed, and the grid showed the
+	# literal word "Technician" in the column meant to name a person. We do
+	# know who typed it, so say that instead of nothing -- marked as inferred
+	# so the screen can show it as authorship rather than as a recorded pick.
+	_author_users = {
+		i["added_by_user"] for i in issue_lines
+		if i["added_by_user"] and i["reported_by"] == "Technician"
+		and not i["reported_by_technician"]
+	}
+	if _author_users:
+		_author_names = {
+			r.user_id: (r.employee_name or r.name)
+			for r in frappe.get_all(
+				"Employee", filters={"user_id": ("in", tuple(_author_users))},
+				fields=["name", "user_id", "employee_name"],
+				limit_page_length=len(_author_users))
+		}
+		# Somebody may have logged it who is not an Employee at all (an admin,
+		# an integration). Their full name still beats the word "Technician".
+		_missing_users = tuple(_author_users - set(_author_names))
+		if _missing_users:
+			_author_names.update({
+				r.name: (r.full_name or r.name)
+				for r in frappe.get_all(
+					"User", filters={"name": ("in", _missing_users)},
+					fields=["name", "full_name"],
+					limit_page_length=len(_missing_users))
+			})
+		for _i in issue_lines:
+			if (_i["reported_by"] == "Technician" and not _i["reported_by_technician"]
+					and _author_names.get(_i["added_by_user"])):
+				_i["reported_by_technician_name"] = _author_names[_i["added_by_user"]]
+				_i["technician_inferred"] = 1
 
 	# The Repair Solution docname IS the code (it was re-keyed onto
 	# solution_code), so the link value alone renders as "SFT-VIR" — unreadable
@@ -1097,6 +1158,35 @@ def get_ticket_detail(sr_name) -> dict:
 		else:
 			a["waiting_hours"] = 0
 
+	# Who the Analysis grid stamps on a new issue. Not a picker: the person who
+	# found a fault is the person holding the device, and that is already
+	# recorded — the open custody period (the running clock) first, then the
+	# In-Progress assignment when the technician has paused but still has the
+	# handset. Nobody holding it means nobody found anything, which is why
+	# adding an issue is refused until the ticket is assigned.
+	issue_active_technician = _active_issue_technician(sr_name, assignments=assignments)
+	if issue_active_technician.get("employee"):
+		eng_name_map.setdefault(
+			issue_active_technician["employee"], issue_active_technician["employee_name"]
+		)
+	# Backfill the display name for rows saved before the name column existed,
+	# so an old row reads as a person rather than "HR-EMP-00042".
+	_stamped = tuple({
+		i["reported_by_technician"] for i in issue_lines
+		if i["reported_by_technician"] and i["reported_by_technician"] not in eng_name_map
+	})
+	if _stamped:
+		eng_name_map.update({
+			r.name: r.employee_name
+			for r in frappe.get_all(
+				"Employee", filters={"name": ("in", _stamped)},
+				fields=["name", "employee_name"], limit_page_length=len(_stamped),
+			)
+		})
+	for _i in issue_lines:
+		if _i["reported_by_technician"] and _i["reported_by_technician_name"] == _i["reported_by_technician"]:
+			_i["reported_by_technician_name"] = eng_name_map.get(_i["reported_by_technician"]) or _i["reported_by_technician"]
+
 	# QC state comes off the request, which is the document being certified.
 	# A legacy repair whose verdict was only ever written on its Sales Order
 	# still reads through -- the request was backfilled, and checklist_rows
@@ -1154,6 +1244,12 @@ def get_ticket_detail(sr_name) -> dict:
 		"name": sr.name,
 		"decision": sr.decision,
 		"status": sr.decision,
+		# What this ticket permits right now. Every screen reads this rather
+		# than keeping its own list of statuses, so a button that is hidden and
+		# a click that is refused come from the same rule.
+		"permitted_actions": permitted.get("actions") or {},
+		"lifecycle_state": {k: permitted.get(k) for k in
+		                    ("qc_closed", "billing_started", "billing_complete", "terminal")},
 		# Why the job was turned away. Recorded at rejection but never sent to
 		# the hub, so the reason was invisible to everyone downstream.
 		"rejection_reason": sr.get("rejection_reason") or "",
@@ -1231,6 +1327,7 @@ def get_ticket_detail(sr_name) -> dict:
 		"advance_amount": flt(sr.get("advance_amount")),
 		"customer_info": customer_info,
 		"issue_lines": issue_lines,
+		"issue_active_technician": issue_active_technician,
 		"solution_lines": solution_lines,
 		"device_photos": get_device_photo_summary(sr),
 		"spare_lines": spare_lines,
@@ -1279,6 +1376,67 @@ def _invalidate_qc_checklist(parent) -> int:
 	return len(rows)
 
 
+def _active_issue_technician(sr_name, assignments=None) -> dict:
+	"""The technician who currently has the device on this ticket.
+
+	Order:
+	  1. the open custody period — the clock the Analysis header is counting up;
+	  2. the In-Progress assignment, for a technician who paused the clock but
+	     still has the handset in hand.
+
+	Returns ``{}`` when nobody holds it. That is not a gap to paper over with
+	"whoever is typing": a fault is found by the person with the device, and an
+	issue attributed to a front-desk user who never opened the handset is worse
+	than no attribution at all. Callers refuse the write instead.
+	"""
+	period = frappe.get_all(
+		"GoFix Custody Log",
+		filters={"service_request": sr_name, "released_at": ("is", "not set")},
+		fields=["technician", "technician_name", "taken_at"],
+		order_by="taken_at desc",
+		limit_page_length=1,
+	)
+	holder = source = None
+	if period and period[0].technician:
+		holder, source = period[0].technician, "running"
+	else:
+		if assignments is None:
+			assignments = frappe.get_all(
+				"Job Assignment",
+				filters={"service_request": sr_name, "docstatus": 1,
+					"assignment_status": "In Progress"},
+				fields=["service_engineer", "assignment_status"],
+				order_by="modified desc",
+				limit_page_length=1,
+			)
+		holder = next(
+			(a.service_engineer for a in assignments
+			 if a.get("assignment_status") == "In Progress" and a.service_engineer),
+			None,
+		)
+		source = "holding" if holder else None
+
+	if not holder:
+		return {}
+	return {
+		"employee": holder,
+		"employee_name": frappe.db.get_value("Employee", holder, "employee_name") or holder,
+		"source": source,
+	}
+
+
+def _assert_issue_technician(sr_name, assignments=None) -> dict:
+	"""The active technician, or the error the counter needs to see."""
+	active = _active_issue_technician(sr_name, assignments=assignments)
+	if not active.get("employee"):
+		frappe.throw(
+			_("Assign this ticket to a technician before adding an issue — "
+			  "an issue is recorded against whoever has the device."),
+			title=_("No Technician Assigned"),
+		)
+	return active
+
+
 @frappe.whitelist(methods=["POST"])
 def save_issue_lines(sr_name, issues_json) -> dict:
 	"""Save issue lines identified during technical analysis.
@@ -1292,15 +1450,36 @@ def save_issue_lines(sr_name, issues_json) -> dict:
 	sr.flags.ignore_validate_update_after_submit = True
 	sr.flags.ignore_mandatory = True
 
-	# Preserve deleted rows
-	deleted_rows = [row.as_dict() for row in sr.get("issue_lines", []) if row.status == "Deleted"]
+	# Rows are addressed by their own docname so an edit stays an edit. The
+	# table used to be emptied and rebuilt from the payload, which re-created
+	# every row: `owner` became whoever pressed Save, so the "logged by" line
+	# named the last editor rather than the person who raised the issue.
+	prior = {row.name: row for row in sr.get("issue_lines", [])}
+	deleted_rows = [row.as_dict() for row in prior.values() if row.status == "Deleted"]
+
+	# The technician is taken from custody, never from the payload: the browser
+	# does not get to say who found a fault. A row that already names one keeps
+	# it — re-stamping on every save would rewrite history to whoever happens to
+	# hold the device today.
+	active = None
+	# Only a NEW row demands a holder. An existing row that predates the column
+	# is left unattributed rather than back-stamped with whoever happens to hold
+	# the device today — that would invent a finding, and editing a description
+	# would fail on tickets nobody is currently working.
+	if any(not (iss.get("name") or "") and iss.get("reported_by", "Technician") == "Technician"
+	       for iss in issues):
+		active = _assert_issue_technician(sr_name)
 
 	sr.set("issue_lines", [])
 	# Re-add deleted rows first
 	for drow in deleted_rows:
 		sr.append("issue_lines", {
+			"name": drow.get("name"),
+			"owner": drow.get("owner"),
 			"issue_category": drow.get("issue_category"),
 			"reported_by": drow.get("reported_by", "Technician"),
+			"reported_by_technician": drow.get("reported_by_technician"),
+			"reported_by_technician_name": drow.get("reported_by_technician_name"),
 			"description": drow.get("description", ""),
 			"status": "Deleted",
 			"deleted_reason": drow.get("deleted_reason", ""),
@@ -1309,9 +1488,28 @@ def save_issue_lines(sr_name, issues_json) -> dict:
 		})
 	# Then add active rows
 	for iss in issues:
+		reported_by = iss.get("reported_by", "Technician")
+		was = prior.get(iss.get("name") or "") or frappe._dict()
+		if reported_by != "Technician":
+			# A customer-reported fault has no technician behind it, so the
+			# field is cleared rather than keeping a stamp from before the
+			# reporter was switched.
+			technician, technician_name = "", ""
+		elif was.get("reported_by_technician") or iss.get("name"):
+			# Keep what the row already says — including "nothing", for rows
+			# raised before the column existed.
+			technician = was.get("reported_by_technician") or ""
+			technician_name = was.get("reported_by_technician_name") or technician
+		else:
+			technician = active["employee"]
+			technician_name = active["employee_name"]
 		sr.append("issue_lines", {
+			"name": iss.get("name") or None,
+			"owner": was.get("owner"),
 			"issue_category": iss.get("issue_category"),
-			"reported_by": iss.get("reported_by", "Technician"),
+			"reported_by": reported_by,
+			"reported_by_technician": technician,
+			"reported_by_technician_name": technician_name,
 			"description": iss.get("description", ""),
 			"status": iss.get("status", "Open"),
 		})
@@ -5662,6 +5860,11 @@ def mark_not_repairable(sr_name, status="Not Repairable", reason="", reason_code
 	# Without a code this stays the old two-outcome path: the customer-decision
 	# outcomes only exist in the coded flow, because recording one of those as
 	# free text is exactly what this replaced.
+	# A closed quality check has already judged this device.
+	from gofix.gofix_services.lifecycle import assert_repairable_verdict_open
+
+	assert_repairable_verdict_open(sr_name)
+
 	if status not in ("Not Repairable", "BER"):
 		frappe.throw(
 			_("{0} can only be recorded with a coded reason.").format(status),

@@ -11,13 +11,7 @@ const technician_performance_active_company = () => {
 
 frappe.query_reports["Technician Performance"] = {
 	filters: [
-		{
-			fieldname: "company",
-			label: __("Company"),
-			fieldtype: "Link",
-			options: "Company",
-			default: technician_performance_active_company(),
-		},
+		...gofix_scope_filters(),
 		{
 			fieldname: "from_date",
 			label: __("From Date"),

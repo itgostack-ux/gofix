@@ -11,13 +11,7 @@ const ceo_repair_active_company = () => {
 
 frappe.query_reports["CEO Repair Dashboard"] = {
 	filters: [
-		{
-			fieldname: "company",
-			label: __("Company"),
-			fieldtype: "Link",
-			options: "Company",
-			default: ceo_repair_active_company(),
-		},
+		...gofix_scope_filters(),
 		{
 			fieldname: "from_date",
 			label: __("From Date"),

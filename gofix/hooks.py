@@ -23,6 +23,11 @@ before_request = ["gofix.overrides.warehouse_selection.ensure_patched"]
 jinja = {
 	"methods": [
 		"gofix.gofix_services.page.gofix_ops_hub.gofix_ops_hub.get_repair_history",
+		# The device receipt needs the customer's tracking link. The plaintext
+		# token is derived from the site key and never rests in the database, so
+		# a print format cannot build the URL itself -- and the builder must not
+		# be whitelisted, or any logged-in user could mint a link for any repair.
+		"gofix.tracking.tracking_url_for_print",
 	]
 }
 
@@ -77,7 +82,14 @@ add_to_apps_screen = [
 # GoGizmo App Switcher top nav removed — it hid the top-right Desk controls and
 # caused navigation confusion. Navigate via the standard Desk sidebar/workspaces.
 app_include_css = ["/assets/gofix/css/gofix.css"]
-app_include_js = []
+# The five scope filters every GoFix report declares (Company, Zone, State,
+# City, Store), so no report can quietly offer a different subset.
+app_include_js = [
+    "/assets/gofix/js/report_filters.js",
+    # The two documents a repair produces — job sheet and invoice —
+    # offered identically from the POS, the Ops Hub and the Job Tracker.
+    "/assets/gofix/js/print_documents.js",
+]
 
 doctype_list_js = {
     "Sales Order": "public/js/sales_order_list.js",
@@ -106,6 +118,11 @@ after_migrate = [
     # How the device arrives and how it goes back, both pointing at the
     # Device Logistics Method and Courier Partner masters.
     "gofix.setup.service_request_logistics_fields.create_service_request_logistics_fields",
+    "gofix.setup.service_request_intake_executive_field.create_service_request_intake_executive_field",
+    "gofix.setup.gofix_service_charge_item.create_gofix_service_charge_item",
+    "gofix.setup.service_request_reopen_fields.create_service_request_reopen_fields",
+    "gofix.setup.service_request_reopen_fields.create_reopen_exception_type",
+    "gofix.setup.gofix_print_formats.configure_gofix_print_formats",
     "gofix.setup.sales_invoice_custom_fields.create_sales_invoice_custom_fields",
     "gofix.setup.competitive_ops_fields.create_competitive_ops_fields",
     "gofix.setup.material_request_custom_fields.create_material_request_custom_fields",
@@ -136,6 +153,11 @@ override_doctype_class = {
 }
 
 doc_events = {
+    # A reopen approved by the zonal sales manager takes effect the moment it
+    # is approved, rather than waiting for someone to come back and click.
+    "CH Exception Request": {
+        "on_update": "gofix.gofix_services.lifecycle.on_reopen_exception_approved",
+    },
 	# Item is the master of the service catalogue; these mirror it into GoFix.
 	"Item": {
 		"on_update": "gofix.catalogue_sync.sync_spare_mappings_from_item",

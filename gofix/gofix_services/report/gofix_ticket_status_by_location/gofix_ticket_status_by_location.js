@@ -3,13 +3,7 @@
 
 frappe.query_reports["GoFix Ticket Status by Location"] = {
 	filters: [
-		{
-			fieldname: "company",
-			label: __("Company"),
-			fieldtype: "Link",
-			options: "Company",
-			default: frappe.defaults.get_user_default("Company"),
-		},
+		...gofix_scope_filters(),
 		{
 			fieldname: "location",
 			label: __("Location (Store)"),

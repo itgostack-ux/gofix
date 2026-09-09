@@ -146,10 +146,16 @@ def handover_readiness(service_request: str) -> dict:
         blockers.append(_("Quality check not passed (currently {0})").format(
             sr.get("qc_status") or _("not started")))
 
-    unpaid = outstanding_invoices(sr)
-    for inv in unpaid:
-        blockers.append(_("Outstanding {0} on {1}").format(
-            frappe.format_value(inv["outstanding"], {"fieldtype": "Currency"}), inv["invoice"]))
+    # A device goes home once it has been billed AND paid. Listing only the
+    # unpaid invoices missed the case that matters most: a repair nobody billed
+    # at all has no outstanding amount either, so it passed this gate and the
+    # device left without a bill ever being raised.
+    from gofix.gofix_services.lifecycle import invoice_is_complete
+
+    billing = invoice_is_complete(sr)
+    if not billing.get("complete"):
+        blockers.append(billing.get("reason") or _("The repair has not been invoiced."))
+    unpaid = billing.get("outstanding") or []
 
     if not sr.get("delivery_otp_verified"):
         blockers.append(_("Handover OTP not verified"))

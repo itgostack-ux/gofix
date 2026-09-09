@@ -19,7 +19,8 @@ this.parent     = $(page.body);
 this._detail    = null;
 this._data      = null;
 this._filters   = {
-company: this._active_company(),
+// No company key: the header owns it, and a copy here would go stale the
+// moment somebody switched company in another tab.
 date_from: frappe.datetime.add_days(frappe.datetime.nowdate(), -30),
 date_to:   frappe.datetime.nowdate(),
 warehouse: null,
@@ -58,7 +59,7 @@ this.page.add_field({
 fieldname: 'warehouse', label: __('Store'), fieldtype: 'Link', options: 'Warehouse',
 get_query: () => ({
 query: 'gofix.gofix_services.store_context.warehouse_query',
-filters: { company: this._active_company() || this._filters.company || '' },
+filters: { company: this._active_company() || '' },
 }),
 change: () => { this._filters.warehouse = this.page.fields_dict.warehouse.get_value() || null; this._load(); },
 });
@@ -85,6 +86,19 @@ value="${this._filters.date_to}">
 <button class="btn btn-xs btn-default" id="jt-range-all"
 title="${__('Show every ticket regardless of date')}">${__('All time')}</button>
 </div>
+<!-- Company, Zone, State, City, Store — the same five every GoFix report
+     offers. They live here rather than in the page toolbar because
+     page.add_field renders nothing on this page, which is why Store was
+     declared and never seen. -->
+<div class="jt-scope-bar">
+<span class="jt-scope-company" id="jt-company" title="${__('Set from the company selected in the header — switch it there to change this board')}"></span>
+<select class="form-control input-sm jt-scope" id="jt-zone" data-f="zone"></select>
+<select class="form-control input-sm jt-scope" id="jt-state" data-f="state"></select>
+<select class="form-control input-sm jt-scope" id="jt-city" data-f="city"></select>
+<select class="form-control input-sm jt-scope" id="jt-store" data-f="store"></select>
+<button class="btn btn-xs btn-default" id="jt-scope-clear"
+title="${__('Clear the zone, state, city and store filters')}">${__('Clear')}</button>
+</div>
 <div class="jt-board" id="jt-board">
 <div class="jt-loading"><i class="fa fa-spinner fa-spin fa-2x"></i><br>${__('Loading…')}</div>
 </div>
@@ -100,6 +114,50 @@ title="${__('Show every ticket regardless of date')}">${__('All time')}</button>
 </div>
 </div>
 `);
+
+// Only geography that actually has a store: offering all 815 cities when 61
+// stores exist between them invites a filter that returns nothing and reads
+// as a broken board.
+this._fill_scope_filters = () => {
+	const set = (id, label, values, current) => {
+		const el = document.getElementById(id);
+		if (!el) return;
+		el.innerHTML = `<option value="">${label}</option>` +
+			values.map((v) => `<option value="${frappe.utils.escape_html(v)}"${
+				v === current ? ' selected' : ''}>${frappe.utils.escape_html(v)}</option>`).join('');
+	};
+	frappe.xcall('gofix.report_filters.geo_filter_options',
+		{ company: this._active_company() || null })
+		.then((o) => {
+			set('jt-zone', __('All Zones'), o.zones || [], this._filters.zone);
+			set('jt-state', __('All States'), o.states || [], this._filters.state);
+			set('jt-city', __('All Cities'), o.cities || [], this._filters.city);
+			set('jt-store', __('All Stores'), o.stores || [], this._filters.store);
+		})
+		.catch(() => { /* a filter that cannot load must not empty the board */ });
+
+	// Company is not a choice here. Every page on this bench takes it from the
+	// header selection, and switching it there reloads the page — so offering a
+	// second, independent company picker on this board would let it disagree
+	// with the rest of the desk.
+	const el = document.getElementById('jt-company');
+	if (el) el.textContent = this._active_company() || __('No company selected');
+};
+this._fill_scope_filters();
+
+document.querySelectorAll('.jt-scope').forEach((el) => {
+	el.addEventListener('change', () => {
+		this._filters[el.dataset.f] = el.value || null;
+		// Company sits above the rest: changing it invalidates what is below.
+		this._load();
+	});
+});
+const _clear = document.getElementById('jt-scope-clear');
+if (_clear) _clear.addEventListener('click', () => {
+	['zone', 'state', 'city', 'store'].forEach((f) => { this._filters[f] = null; });
+	this._fill_scope_filters();
+	this._load();
+});
 
 const _reload_range = () => {
 this._filters.date_from = document.getElementById('jt-date-from').value;
@@ -132,8 +190,15 @@ this.parent.find('#jt-board').html(
 `<div class="jt-loading"><i class="fa fa-spinner fa-spin fa-2x"></i><br>${__('Loading…')}</div>`
 );
 frappe.xcall('gofix.gofix_services.page.job_tracker.job_tracker.get_board_data', {
-company: this._active_company() || this._filters.company || '',
+// The header's company, always. There is no per-board override.
+company: this._active_company() || '',
+// "store" is the CH Store the user picked; "warehouse" is the older toolbar
+// field. Either narrows the board, and the server resolves both.
 warehouse: this._filters.warehouse || '',
+zone:  this._filters.zone  || '',
+state: this._filters.state || '',
+city:  this._filters.city  || '',
+store: this._filters.store || '',
 date_from: this._filters.date_from,
 date_to:   this._filters.date_to,
 }).then(data => {
@@ -199,7 +264,7 @@ const filters = { decision: status };
 if (status === 'Rejected') {
 filters.repairability_status = ['in', ['Not Repairable', 'BER']];
 }
-const co = this._active_company() || this._filters.company || '';
+const co = this._active_company() || '';
 if (co) filters.company = co;
 if (this._filters.warehouse) filters.source_warehouse = this._filters.warehouse;
 frappe.set_route('List', 'Service Request', filters);
@@ -321,8 +386,14 @@ this.parent.find('#jt-drawer-body').html(`
    class="btn btn-xs btn-default"><i class="fa fa-external-link"></i> ${__('Open Form')}</a>
 <button class="btn btn-xs btn-primary" id="jt-btn-assign">
 <i class="fa fa-user-plus"></i> ${__('Assign Technician')}</button>
-<button class="btn btn-xs btn-default" id="jt-btn-print">
-<i class="fa fa-print"></i> ${__('Print')}</button>
+<!-- Two named documents rather than a generic Print that dropped the user
+     into the format picker with four to choose between. -->
+<button class="btn btn-xs btn-default" id="jt-btn-job-sheet"
+title="${__('What the customer signed when they handed the device in')}">
+<i class="fa fa-file-text-o"></i> ${__('Job Sheet')}</button>
+<button class="btn btn-xs btn-default" id="jt-btn-invoice"
+title="${__('The bill — available once the repair has been billed')}">
+<i class="fa fa-print"></i> ${__('Invoice')}</button>
 </div>
 
 <div class="jt-dw-badges">
@@ -371,7 +442,18 @@ ${parts_html}
 `);
 
 this.parent.find('#jt-btn-assign').on('click', () => this._show_assign_dialog(sr.name));
-this.parent.find('#jt-btn-print').on('click', () => frappe.set_route('print', 'Service Request', sr.name));
+// Which of the two exist is the server's answer, so this board cannot offer
+// an invoice the POS and the Ops Hub would refuse.
+const $sheet = this.parent.find('#jt-btn-job-sheet');
+const $inv = this.parent.find('#jt-btn-invoice');
+window.gofix_print_documents.fetch(sr.name).then((docs) => {
+	$sheet.on('click', () => window.gofix_print_documents.open(docs.job_sheet));
+	if (docs.invoice && docs.invoice.available) {
+		$inv.on('click', () => window.gofix_print_documents.open(docs.invoice));
+	} else {
+		$inv.prop('disabled', true).attr('title', (docs.invoice || {}).reason || '');
+	}
+}).catch(() => { $sheet.prop('disabled', true); $inv.prop('disabled', true); });
 }
 
 // ─────────── Assign Dialog ───────────────────────────────────────────────

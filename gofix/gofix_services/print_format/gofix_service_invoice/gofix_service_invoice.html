@@ -225,6 +225,20 @@
 			print-color-adjust: exact;
 		}
 	}
+
+	/* Handover checklist and signatures, folded in from the delivery receipt
+	   this document replaces. Print-safe: no colour dependence, no hairlines. */
+	.gfx-handover { width: 100%; border-collapse: collapse; margin-top: 10px; }
+	.gfx-handover td { border: 1px solid #d1d5db; padding: 5px 8px; font-size: 9.5px; }
+	.gfx-handover-head { background: #f9fafb; font-weight: 700; font-size: 9px;
+		text-transform: uppercase; letter-spacing: .4px; }
+	.gfx-box { display: inline-block; width: 11px; height: 11px; border: 1.5px solid #9ca3af;
+		border-radius: 2px; margin-right: 6px; vertical-align: middle; }
+	.gfx-sign { width: 100%; border-collapse: collapse; margin-top: 10px; }
+	.gfx-sign td { border: 1px solid #d1d5db; padding: 6px 8px; width: 33.33%; text-align: center; }
+	.gfx-sign-line { border-top: 1px solid #999; height: 38px; margin-top: 6px; }
+	.gfx-sign-label { font-size: 8.5px; color: #6b7280; padding-top: 3px; }
+	.gfx-sign-sub { font-size: 8px; color: #9ca3af; }
 </style>
 
 <div class="gfix-inv">
@@ -361,6 +375,10 @@
 			{% if sr and sr.repair_warranty_days %}
 				<div style="margin-top:6px;"><b>Repair Warranty:</b> {{ sr.repair_warranty_days }} days{% if sr.repair_warranty_expiry %}, valid till {{ frappe.utils.format_date(sr.repair_warranty_expiry) }}{% endif %}</div>
 			{% endif %}
+			<div style="margin-top:6px;font-size:9px;color:#555">
+				Warranty excludes physical damage, liquid damage and unauthorised
+				modification. Present this invoice for any warranty service.
+			</div>
 		</div>
 		<table class="summary">
 			<tr><td>Total Qty</td><td class="right">{{ "%g"|format(totals.qty) }}</td></tr>
@@ -375,6 +393,50 @@
 			<tr><td>Outstanding</td><td class="right nowrap">{{ money(doc.outstanding_amount) }}</td></tr>
 		</table>
 	</div>
+
+	<!-- Handover. This document is now the one the customer leaves with, so the
+	     checks and the signature that used to sit on a separate delivery receipt
+	     belong here. Two documents, not four: a job sheet at drop-off and this
+	     at collection. -->
+	<table class="gfx-handover">
+		<tr>
+			<td colspan="4" class="gfx-handover-head">
+				Device handover checklist — please verify before leaving
+			</td>
+		</tr>
+		<tr>
+			<td><span class="gfx-box"></span>Device powers on</td>
+			<td><span class="gfx-box"></span>Screen &amp; touch</td>
+			<td><span class="gfx-box"></span>Speaker &amp; mic</td>
+			<td><span class="gfx-box"></span>Charging port</td>
+		</tr>
+		<tr>
+			<td><span class="gfx-box"></span>Camera(s)</td>
+			<td><span class="gfx-box"></span>Network / SIM</td>
+			<td><span class="gfx-box"></span>Accessories returned</td>
+			<td><span class="gfx-box"></span>Physical condition</td>
+		</tr>
+	</table>
+
+	<table class="gfx-sign">
+		<tr>
+			<td>
+				<div class="gfx-sign-line"></div>
+				<div class="gfx-sign-label">Customer signature</div>
+				<div class="gfx-sign-sub">I have received the device in working order</div>
+			</td>
+			<td>
+				<div class="gfx-sign-line"></div>
+				<div class="gfx-sign-label">Handed over on</div>
+				<div class="gfx-sign-sub">{{ frappe.format(doc.posting_date, {"fieldtype": "Date"}) }}</div>
+			</td>
+			<td>
+				<div class="gfx-sign-line"></div>
+				<div class="gfx-sign-label">Handed over by</div>
+				<div class="gfx-sign-sub">{{ frappe.db.get_value("User", doc.owner, "full_name") or doc.owner }}</div>
+			</td>
+		</tr>
+	</table>
 
 	<div class="footer">
 		<div class="muted">

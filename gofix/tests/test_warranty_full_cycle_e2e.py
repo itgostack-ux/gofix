@@ -101,6 +101,26 @@ def _get_or_create_issue_category(name="Screen Damage"):
     return name
 
 
+def _apply_intake_mandatories(sr):
+    """What booking a device in now requires, and this suite predates.
+
+    Brand and model became mandatory (a repair cannot be routed to a technician
+    without knowing what the device is), and the data-loss acknowledgement is a
+    consent the counter has to take. Copied off a real repair so the model is
+    one the item master recognises rather than a string invented here.
+    """
+    real = frappe.db.sql("""
+        SELECT device_item, device_item_name, brand, device_brand, device_model
+        FROM `tabService Request`
+        WHERE IFNULL(device_model, '') <> '' AND IFNULL(device_brand, '') <> ''
+        ORDER BY creation DESC LIMIT 1""", as_dict=True)
+    if real:
+        for field, value in real[0].items():
+            sr.set(field, value)
+    sr.data_backup_disclaimer = 1
+    return sr
+
+
 def _create_service_request(customer, warehouse, device_item, company, imei="IMEI123TEST001"):
     sr = frappe.new_doc("Service Request")
     sr.customer = customer
@@ -122,6 +142,7 @@ def _create_service_request(customer, warehouse, device_item, company, imei="IME
     sr.decision = "Draft"
     sr.priority = "Medium"
     sr.serial_no = imei
+    _apply_intake_mandatories(sr)
     try:
         sr.insert(ignore_permissions=True)
         frappe.db.commit()
@@ -282,10 +303,18 @@ def test_repair_job_card_and_parts():
         try:
             from gofix.gofix_services.page.gofix_ops_hub.gofix_ops_hub import add_spare_to_ticket
             reservation = add_spare_to_ticket(sr_name, spare_item, 1, rate=1)
-            spu = frappe.get_doc("Spare Parts Usage", reservation["spare_usage"])
             frappe.db.commit()
-            _ok(flow, "Planned Spare Parts Usage created", spu.name)
-            _FLOW["spu_name"] = spu.name
+            # A Spare Parts Usage exists only when the part was in stock to
+            # reserve. Out of stock, the API raises a requisition instead and
+            # says so -- reading spare_usage regardless asked for document None.
+            if reservation.get("spare_usage"):
+                spu = frappe.get_doc("Spare Parts Usage", reservation["spare_usage"])
+                _ok(flow, "Planned Spare Parts Usage created", spu.name)
+                _FLOW["spu_name"] = spu.name
+            else:
+                _ok(flow, "spare not in stock — requisition raised instead",
+                    f"status={reservation.get('status')} "
+                    f"mr={reservation.get('material_request')}")
         except Exception as e:
             _fail(flow, "Spare Parts Usage creation", str(e))
     else:
@@ -462,7 +491,7 @@ def test_device_delivery_and_invoice():
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# TEST 6: GoFix Delivery Receipt Print Format
+# TEST 6: the handover document — GoFix Service Invoice
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def test_delivery_receipt_print_format():
@@ -472,26 +501,33 @@ def test_delivery_receipt_print_format():
         _fail(flow, "Pre-condition: Sales Invoice not available")
         return
 
-    # 6a. Check that the GoFix Delivery Receipt print format exists
-    pf_exists = frappe.db.exists("Print Format", "GoFix Delivery Receipt")
+    # 6a. The handover document is the Service Invoice: the delivery receipt was
+    # folded into it, so warranty terms and the customer's signature now travel
+    # with the bill rather than on a second sheet nobody was required to print.
+    pf_exists = frappe.db.exists("Print Format", "GoFix Service Invoice")
     if pf_exists:
-        _ok(flow, "GoFix Delivery Receipt print format exists")
+        _ok(flow, "GoFix Service Invoice print format exists")
     else:
-        _ok(flow, "GoFix Delivery Receipt print format not found (may not be installed yet)")
+        _ok(flow, "GoFix Service Invoice print format not found (may not be installed yet)")
         return
 
     # 6b. Attempt to render the print format and check for key phrase
     try:
         # frappe.get_print is the correct API in Frappe v15
-        html = frappe.get_print("Sales Invoice", inv_name, print_format="GoFix Delivery Receipt")
-        if html and "DEVICE DELIVERY RECEIPT" in html.upper():
-            _ok(flow, "'DEVICE DELIVERY RECEIPT' found in rendered HTML")
-        elif html:
-            _ok(flow, "Print format rendered (DEVICE DELIVERY RECEIPT phrase not found — template may vary)")
-        else:
+        html = frappe.get_print("Sales Invoice", inv_name, print_format="GoFix Service Invoice")
+        if not html:
             _fail(flow, "Print format rendered empty HTML")
+            return
+        # What the delivery receipt carried has to survive on the invoice, or
+        # retiring it lost the warranty terms and the customer's signature.
+        for block in ("handover", "warranty", "signature"):
+            if block in html.lower():
+                _ok(flow, f"Service Invoice carries the {block} block")
+            else:
+                _fail(flow, f"Service Invoice carries the {block} block",
+                      "folded in from the retired delivery receipt")
     except Exception as e:
-        _fail(flow, "get_print for GoFix Delivery Receipt", str(e))
+        _fail(flow, "get_print for GoFix Service Invoice", str(e))
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -579,6 +615,7 @@ def test_refund_flow_irreparable():
             sr.advance_amount = 500
         if sr.meta.has_field("advance_received_via"):
             sr.advance_received_via = "Cash"
+        _apply_intake_mandatories(sr)
         sr.insert(ignore_permissions=True)
         frappe.db.commit()
         refund_sr = sr.name
@@ -687,6 +724,7 @@ def test_estimate_approval_flow():
         sr2.decision = "In Service"
         sr2.priority = "Low"
         sr2.serial_no = "IMEI-REJECT-TEST"
+        _apply_intake_mandatories(sr2)
         sr2.insert(ignore_permissions=True)
         frappe.db.commit()
 

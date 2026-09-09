@@ -11,13 +11,7 @@ const store_wise_status_active_company = () => {
 
 frappe.query_reports["Store Wise Service Status"] = {
 	filters: [
-		{
-			fieldname: "company",
-			label: __("Company"),
-			fieldtype: "Link",
-			options: "Company",
-			default: store_wise_status_active_company(),
-		},
+		...gofix_scope_filters(),
 		{
 			fieldname: "from_date",
 			label: __("From Date"),

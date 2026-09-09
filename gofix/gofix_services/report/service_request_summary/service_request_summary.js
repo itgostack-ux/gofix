@@ -18,13 +18,7 @@ const service_request_summary_store_query = () => ({
 
 frappe.query_reports["Service Request Summary"] = {
 	filters: [
-		{
-			fieldname: "company",
-			label: __("Company"),
-			fieldtype: "Link",
-			options: "Company",
-			default: service_request_summary_active_company(),
-		},
+		...gofix_scope_filters(),
 		{
 			fieldname: "from_date",
 			label: __("From Date"),

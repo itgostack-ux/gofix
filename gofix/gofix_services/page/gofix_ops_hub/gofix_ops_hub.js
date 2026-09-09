@@ -364,6 +364,12 @@ class GoFixOpsHub {
 	}
 
 	_select_ticket(name) {
+		// Clicking another ticket in the queue abandons whatever is on screen
+		// too -- the most common way of all to lose a half-filled step.
+		if (this._dirty && name !== this.selectedSR) {
+			this._confirm_leave(() => this._select_ticket(name));
+			return;
+		}
 		this.selectedSR = name;
 		this.parent.find(".goh-q-card").removeClass("goh-q-active");
 		this.parent.find(`.goh-q-card[data-sr="${name}"]`).addClass("goh-q-active");
@@ -452,6 +458,65 @@ class GoFixOpsHub {
 		this._bind_step_events(d);
 		this._bind_not_repairable(d);
 		this._bind_invoice_print_actions();
+		this._bind_notes(d);
+		this._bind_document_printing(d);
+		this._measure_sticky_header();
+		this._watch_unsaved(d);
+	}
+
+	/**
+	 * Tell the sticky banner and tab bar how far down to sit.
+	 *
+	 * The stepper's height is not a constant -- it is hidden entirely on narrow
+	 * screens -- so it is measured rather than guessed, and re-measured when the
+	 * window changes shape.
+	 */
+	_measure_sticky_header() {
+		const detail = this.parent.find(".goh-detail")[0];
+		if (!detail) return;
+		const set = () => {
+			const h = (el) => (el && el.offsetParent !== null ? el.offsetHeight : 0);
+			detail.style.setProperty("--goh-stepper-h",
+				h(detail.querySelector(".goh-stepper")) + "px");
+			detail.style.setProperty("--goh-banner-h",
+				h(detail.querySelector(".goh-banner")) + "px");
+		};
+		set();
+		if (this._sticky_resize) $(window).off("resize.gohSticky", this._sticky_resize);
+		this._sticky_resize = frappe.utils.debounce(set, 150);
+		$(window).on("resize.gohSticky", this._sticky_resize);
+	}
+
+	/**
+	 * Leaving a step with edits still on screen loses them silently.
+	 *
+	 * Every step here is a form that saves on its own button, so clicking a
+	 * different step -- or a different tab -- throws away whatever was typed
+	 * with nothing said about it. Anything the user changes inside the work
+	 * pane marks the ticket dirty, and navigating away then asks first. Saving
+	 * clears it, because the save re-renders from the server.
+	 */
+	_watch_unsaved(d) {
+		this._dirty = false;
+		const pane = this.parent.find("#goh-tab-work");
+		pane.off("input.gohDirty change.gohDirty")
+			.on("input.gohDirty change.gohDirty",
+				"input, select, textarea", (e) => {
+					// Filters and pickers that only change what is displayed are
+					// not unsaved work.
+					if ($(e.target).closest("[data-no-dirty]").length) return;
+					this._dirty = true;
+				});
+	}
+
+	/** Run `next`, first asking if there is unsaved work on screen. */
+	_confirm_leave(next) {
+		if (!this._dirty) { next(); return; }
+		frappe.confirm(
+			__("This step has changes you have not saved. Leaving now discards them.")
+				+ "<br><br>" + __("Continue without saving?"),
+			() => { this._dirty = false; next(); }
+		);
 	}
 
 		_print_invoice(invoice_name) {
@@ -582,6 +647,15 @@ class GoFixOpsHub {
 		this.parent.find(".goh-step-clickable").on("click", function () {
 			const stage = $(this).data("stage");
 			if (!stage || stage === d.ops_stage) return;
+			const go = () => self._show_stage_view(d, stage);
+			self._confirm_leave(go);
+		});
+	}
+
+	/* Render another step's content without moving the ticket's real stage. */
+	_show_stage_view(d, stage) {
+		const self = this;
+		{
 
 			// Temporarily render the clicked stage's content (read-only view)
 			// but keep the real ops_stage for the stepper highlighting
@@ -612,9 +686,13 @@ class GoFixOpsHub {
 
 			// Bind the "back to current" button
 			self.parent.find("#goh-back-to-current").on("click", () => {
-				self._load_detail(d.name);
+				self._confirm_leave(() => self._load_detail(d.name));
 			});
-		});
+			// A different step is on screen now, so nothing on it is unsaved yet.
+			self._dirty = false;
+			self._watch_unsaved(d);
+			self._measure_sticky_header();
+		}
 	}
 
 	/* ── Info Banner ────────────────────────────────────────────────────── */
@@ -673,6 +751,14 @@ class GoFixOpsHub {
 						<button class="btn btn-xs btn-danger goh-not-repairable-btn" title="${__("Mark Not Repairable")}" style="margin-right:4px;">
 							<i class="fa fa-ban"></i> ${__("Not Repairable")}
 						</button>
+						<button class="btn btn-xs btn-default goh-print-job-sheet" data-sr="${esc(d.name)}"
+							title="${__("What the customer signed when they handed the device in")}">
+							<i class="fa fa-file-text-o"></i> ${__("Job Sheet")}
+						</button>
+						<button class="btn btn-xs btn-default goh-print-service-invoice" data-sr="${esc(d.name)}"
+							title="${__("The bill — available once the repair has been billed")}">
+							<i class="fa fa-print"></i> ${__("Invoice")}
+						</button>
 						<button class="btn btn-xs btn-default goh-print-label" data-sr="${esc(d.name)}"
 							title="${__("Print the barcode label for the device")}">
 							<i class="fa fa-barcode"></i> ${__("Label")}
@@ -699,11 +785,18 @@ class GoFixOpsHub {
 	_bind_tabs() {
 		this.parent.find("#goh-tabs .goh-tab").on("click", (e) => {
 			const tab = $(e.currentTarget).data("tab");
-			this.parent.find(".goh-tab").removeClass("goh-tab-active");
-			$(e.currentTarget).addClass("goh-tab-active");
-			this.parent.find(".goh-tab-content").addClass("goh-hidden");
-			this.parent.find(`#goh-tab-${tab}`).removeClass("goh-hidden");
+			if (tab === "work") { this._switch_tab(tab, e.currentTarget); return; }
+			// Work is the only tab that holds a form. Leaving it with edits on
+			// screen loses them just as surely as clicking another step.
+			this._confirm_leave(() => this._switch_tab(tab, e.currentTarget));
 		});
+	}
+
+	_switch_tab(tab, btn) {
+		this.parent.find(".goh-tab").removeClass("goh-tab-active");
+		$(btn).addClass("goh-tab-active");
+		this.parent.find(".goh-tab-content").addClass("goh-hidden");
+		this.parent.find(`#goh-tab-${tab}`).removeClass("goh-hidden");
 	}
 
 	/* ═══════════════════════════════════════════════════════════════════════ */
@@ -957,8 +1050,74 @@ class GoFixOpsHub {
 					</div>
 				` : ""}
 				${!d.customer_remarks && !d.internal_remarks ? `<p class="text-muted">${__("No remarks recorded")}</p>` : ""}
+
+				<!-- The tab showed remarks and offered no way to add one, so a
+				     technician working here had to go to the till to record what
+				     they had just found. Same endpoint the POS uses, so both
+				     write to the same two fields and the same audit comment. -->
+				<div class="goh-note-add" style="margin-top:10px">
+					<button class="btn btn-xs btn-default" id="goh-add-note">
+						<i class="fa fa-plus"></i> ${__("Add Note")}
+					</button>
+				</div>
 			</div>
 		`;
+	}
+
+	/**
+	 * The two documents a repair produces.
+	 *
+	 * Asked of the server rather than decided here, so the Ops Hub cannot offer
+	 * an invoice the POS would refuse. An unbilled repair has no invoice: the
+	 * button says so instead of printing a bill nobody raised.
+	 */
+	_bind_document_printing(d) {
+		const $sheet = this.parent.find(".goh-print-job-sheet");
+		const $inv = this.parent.find(".goh-print-service-invoice");
+		window.gofix_print_documents.fetch(d.name).then((docs) => {
+			$sheet.off("click").on("click", () => window.gofix_print_documents.open(docs.job_sheet));
+			if (docs.invoice && docs.invoice.available) {
+				$inv.prop("disabled", false)
+					.off("click").on("click", () => window.gofix_print_documents.open(docs.invoice));
+			} else {
+				$inv.prop("disabled", true).attr("title", (docs.invoice || {}).reason || "");
+			}
+		}).catch(() => {
+			// A printing problem must not take the ticket screen with it.
+			$sheet.prop("disabled", true);
+			$inv.prop("disabled", true);
+		});
+	}
+
+	/** Record a note against the ticket, the same way the counter does. */
+	_bind_notes(d) {
+		this.parent.find("#goh-add-note").off("click").on("click", () => {
+			frappe.prompt(
+				[
+					{
+						fieldname: "visibility", fieldtype: "Select", reqd: 1,
+						label: __("Who is this for?"),
+						options: [__("Internal"), __("Customer")].join("\n"),
+						default: __("Internal"),
+						description: __("A customer note may be shown to them; an internal one stays with the workshop."),
+					},
+					{ fieldname: "note", fieldtype: "Small Text", reqd: 1,
+					  label: __("Note") },
+				],
+				(v) => {
+					frappe.xcall("gofix.gofix_services.api.add_ticket_note", {
+						service_request: d.name,
+						note: v.note,
+						visibility: v.visibility === __("Customer") ? "Customer" : "Internal",
+					}).then(() => {
+						frappe.show_alert({ message: __("Note recorded."), indicator: "green" });
+						this._load_detail(d.name);
+					});
+				},
+				__("Add Note"),
+				__("Record"),
+			);
+		});
 	}
 
 	/* ═══════════════════════════════════════════════════════════════════════ */
@@ -1444,6 +1603,25 @@ class GoFixOpsHub {
 				title="${esc(s.repair_solution)} · ${esc(s.status)}${s.technician_name ? " · " + esc(s.technician_name) : ""}">${esc(s.solution_name || s.repair_solution)}</span>`).join(" ");
 		};
 
+		/* The technician is not chosen, it is observed: whoever holds the device
+		   is who found the fault, so the cell reports custody rather than
+		   offering a list. A row saved before the field existed has nobody
+		   recorded, and the best we can honestly say is who typed it. */
+		const activeTech = d.issue_active_technician || {};
+		const issueTechCell = (row) => {
+			if (row.reported_by !== "Technician") {
+				return `<span class="text-muted">—</span>`;
+			}
+			if (row.reported_by_technician && !row.technician_inferred) {
+				return `<span title="${esc(row.reported_by_technician)}">${esc(row.reported_by_technician_name || row.reported_by_technician)}</span>`;
+			}
+			if (row.reported_by_technician_name) {
+				return `<span class="text-muted small" title="${__("Nobody recorded who found this — shown is who logged the row.")}">${
+					__("Logged by {0}", [esc(row.reported_by_technician_name)])}</span>`;
+			}
+			return `<span class="text-muted">—</span>`;
+		};
+
 		const issueRows = activeIssues.map((row, i) => `
 			<tr data-name="${esc(row.name)}" data-idx="${i}">
 				<td><select class="form-control input-xs goh-issue-cat" data-selected="${esc(row.issue_category)}"><option value="">${__("Issue Category")}</option></select></td>
@@ -1453,6 +1631,7 @@ class GoFixOpsHub {
 						<option value="Customer" ${row.reported_by === "Customer" ? "selected" : ""}>${__("Customer")}</option>
 					</select>
 				</td>
+				<td class="goh-issue-tech-cell">${issueTechCell(row)}</td>
 				<td><input class="form-control input-xs goh-issue-desc" value="${esc(row.description)}" placeholder="${__("Description")}"></td>
 				<td>${solutionCell(row.issue_category)}</td>
 				<td><span class="goh-badge ${row.status === "Resolved" ? "badge-green" : row.status === "Open" ? "badge-blue" : "badge-muted"}">${esc(row.status)}</span></td>
@@ -1464,12 +1643,13 @@ class GoFixOpsHub {
 			<div class="goh-section mt-3" style="border-left:3px solid #dc2626; background:#fef2f2; padding:10px 14px;">
 				<div class="goh-section-title text-danger"><i class="fa fa-history"></i> ${__("Deleted Issues Log")} (${deletedIssues.length})</div>
 				<table class="goh-table">
-					<thead><tr><th>${__("Issue")}</th><th>${__("Reported By")}</th><th>${__("Description")}</th><th>${__("Reason for Deletion")}</th><th>${__("Deleted By")}</th><th>${__("Deleted At")}</th></tr></thead>
+					<thead><tr><th>${__("Issue")}</th><th>${__("Reported By")}</th><th>${__("Technician")}</th><th>${__("Description")}</th><th>${__("Reason for Deletion")}</th><th>${__("Deleted By")}</th><th>${__("Deleted At")}</th></tr></thead>
 					<tbody>
 						${deletedIssues.map(row => `
 							<tr style="text-decoration: line-through; opacity: 0.7;">
 								<td>${esc(row.issue_category)}</td>
 								<td>${esc(row.reported_by)}</td>
+								<td>${esc(row.reported_by_technician_name || "—")}</td>
 								<td>${esc(row.description || "—")}</td>
 								<td class="text-danger">${esc(row.deleted_reason || "—")}</td>
 								<td>${esc(frappe.user.full_name(row.deleted_by) || row.deleted_by || "—")}</td>
@@ -1501,10 +1681,10 @@ class GoFixOpsHub {
 
 				<table class="goh-table" id="goh-issue-table">
 					<thead>
-						<tr><th>${__("Issue Category")}</th><th style="width:130px">${__("Reported By")}</th><th>${__("Description")}</th><th style="width:200px">${__("Solutions")}</th><th style="width:80px">${__("Status")}</th><th style="width:40px"></th></tr>
+						<tr><th>${__("Issue Category")}</th><th style="width:130px">${__("Reported By")}</th><th style="width:170px">${__("Technician")}</th><th>${__("Description")}</th><th style="width:200px">${__("Solutions")}</th><th style="width:80px">${__("Status")}</th><th style="width:40px"></th></tr>
 					</thead>
 					<tbody id="goh-issue-tbody">
-						${issueRows || `<tr><td colspan="6" class="text-muted text-center">${__("No issues added yet. Click + to add.")}</td></tr>`}
+						${issueRows || `<tr><td colspan="7" class="text-muted text-center">${__("No issues added yet. Click + to add.")}</td></tr>`}
 					</tbody>
 				</table>
 
@@ -1547,12 +1727,19 @@ class GoFixOpsHub {
 					<span class="text-muted">${__("Pricing the chosen repairs…")}</span>
 				</div>
 
-				<div class="goh-confirm-cost" style="display:flex;align-items:center;gap:10px">
+				<!-- The estimate is what the pricing rules and the parts come to.
+				     It used to be a free-text box any technician could overwrite,
+				     which meant the price a customer was quoted need not match any
+				     rule, any part or any other branch -- and nothing recorded who
+				     changed it or why. Anyone who needs a different number raises
+				     an exception, which is approved by somebody and leaves a trail. -->
+				<div class="goh-confirm-cost">
 					<span class="goh-kv-label">${__("Estimated Cost")}</span>
-					<span style="font-size:18px;font-weight:600">₹</span>
-					<input type="number" class="form-control" id="goh-est-cost" value="${flt(d.estimated_cost)}" min="0" step="100" style="max-width:180px;font-size:18px;font-weight:700">
-					<button class="btn btn-xs btn-default" id="goh-save-est-cost" style="white-space:nowrap"><i class="fa fa-save"></i> ${__("Save")}</button>
-					<button class="btn btn-xs btn-primary" id="goh-use-calc" style="white-space:nowrap;display:none"><i class="fa fa-calculator"></i> ${__("Use calculated")}</button>
+					<span class="goh-est-figure" id="goh-est-cost-display">₹${format_number(flt(d.estimated_cost))}</span>
+					<span class="goh-est-note">${__("From the pricing rules and the parts chosen above.")}</span>
+					<button class="btn btn-xs btn-default" id="goh-raise-price-exception">
+						<i class="fa fa-flag-o"></i> ${__("Request a different price")}
+					</button>
 				</div>
 
 				<!-- Coupons are produced at the counter, but which repairs the job
@@ -1676,7 +1863,8 @@ class GoFixOpsHub {
 				</div>
 				${items.map(s => `
 					<label style="display:flex;align-items:center;gap:8px;padding:4px 8px 4px 20px;cursor:pointer;border-radius:4px;margin:0" class="goh-sol-assign-row" onmouseover="this.style.background='var(--bg-light-gray)'" onmouseout="this.style.background=''">
-						<input type="checkbox" class="goh-assign-check" data-row="${esc(s.name)}" checked>
+						<input type="checkbox" class="goh-assign-check" data-row="${esc(s.name)}"
+							data-minutes="${flt(s.estimated_minutes) || 0}" checked>
 						<span style="font-weight:500;font-size:13px" title="${esc(s.repair_solution)}">${esc(s.solution_name || s.repair_solution)}</span>
 						<span class="text-muted" style="font-size:12px">${s.estimated_minutes || 0}min</span>
 						${s.requires_spare ? '<span class="goh-badge badge-orange" style="font-size:10px">Spare</span>' : ""}
@@ -1741,9 +1929,10 @@ class GoFixOpsHub {
 								<label class="goh-field-label" style="font-size:11px">${__("Technician")}</label>
 								<div id="goh-tech-field"></div>
 							</div>
-							<div style="flex:0 0 90px">
+							<div style="flex:0 0 120px">
 								<label class="goh-field-label" style="font-size:11px">${__("Est. Hours")}</label>
-								<input class="form-control input-sm" id="goh-est-hours" type="number" value="2" min="0.5" step="0.5">
+								<input class="form-control input-sm" id="goh-est-hours" type="number" min="0.25" step="0.25">
+								<div class="goh-est-hours-note text-muted" style="font-size:10.5px;margin-top:2px"></div>
 							</div>
 							<div style="flex:0 0 auto">
 								<button class="btn btn-sm btn-primary" id="goh-do-assign"><i class="fa fa-check"></i> ${__("Assign")}</button>
@@ -2494,7 +2683,36 @@ class GoFixOpsHub {
 				self._fill_issue_category_selects();
 			});
 
+			// Switching the reporter to Customer takes the technician off the
+			// row; switching back re-shows who will be stamped on Save.
+			const holderCell = d.issue_active_technician || {};
+			content.find(".goh-issue-tech-cell").each(function () {
+				$(this).data("saved-html", $(this).html());
+			});
+			content.on("change", ".goh-issue-reporter", function () {
+				const $cell = $(this).closest("tr").find(".goh-issue-tech-cell");
+				if (!$cell.length) return;
+				if ($(this).val() !== "Technician") {
+					$cell.html(`<span class="text-muted">—</span>`);
+				} else {
+					$cell.html($cell.data("saved-html")
+						|| frappe.utils.escape_html(holderCell.employee_name || holderCell.employee || "—"));
+				}
+			});
+
 			content.find("#goh-add-issue").on("click", () => {
+				// Nobody holding the device means nobody could have found a
+				// fault. Refuse here rather than letting the row be typed and
+				// rejected on Save, which loses the typing.
+				const holder = d.issue_active_technician || {};
+				if (!holder.employee) {
+					frappe.msgprint({
+						title: __("No Technician Assigned"),
+						message: __("Assign this ticket to a technician before adding an issue — an issue is recorded against whoever has the device."),
+						indicator: "red",
+					});
+					return;
+				}
 				const tbody = this.parent.find("#goh-issue-tbody");
 				tbody.find("td[colspan]").closest("tr").remove();
 				const idx = tbody.find("tr").length;
@@ -2502,6 +2720,7 @@ class GoFixOpsHub {
 					<tr data-idx="${idx}">
 						<td><select class="form-control input-xs goh-issue-cat"><option value="">${__("Issue Category")}</option></select></td>
 						<td><select class="form-control input-xs goh-issue-reporter"><option value="Technician">${__("Technician")}</option><option value="Customer">${__("Customer")}</option></select></td>
+						<td class="goh-issue-tech-cell">${frappe.utils.escape_html(holder.employee_name || holder.employee)}</td>
 						<td><input class="form-control input-xs goh-issue-desc" placeholder="${__("Description")}"></td>
 						<td><span class="text-muted small">${__("None assigned")}</span></td>
 						<td></td>
@@ -2600,10 +2819,9 @@ class GoFixOpsHub {
 							<th class="text-right">₹${format_number(est.total)}</th>
 						</tr></tfoot>
 					</table>`);
-				const input = content.find("#goh-est-cost");
-				if (!flt(input.val())) input.val(est.total);
-				else if (flt(input.val()) !== flt(est.total)) content.find("#goh-use-calc").show();
-				content.find("#goh-use-calc").off("click").on("click", () => input.val(est.total).trigger("change"));
+				// The figure IS the calculation. There is nothing to reconcile
+				// between a typed number and the rate card any more.
+				content.find("#goh-est-cost-display").text("₹" + format_number(est.total));
 			});
 
 			content.find("#goh-send-wa").on("click", () => {
@@ -2674,43 +2892,51 @@ class GoFixOpsHub {
 				});
 			});
 
-			content.find("#goh-save-est-cost").on("click", () => {
-				const cost = parseFloat(content.find("#goh-est-cost").val()) || 0;
+			// Departing from the rate card is an exception, not an edit. The
+			// amount and the reason go together, because a price nobody can
+			// explain is the thing this replaces.
+			content.find("#goh-raise-price-exception").on("click", () => {
 				const calculated = flt(self._last_estimate_total);
-				// Matching the rate card needs no ceremony. Departing from it is
-				// an exception, so the reason is collected here rather than
-				// letting the server reject the click with nothing to send.
-				const save = (reason) => frappe.xcall(`${API}.set_estimated_cost`, {
-					sr_name: d.name, estimated_cost: cost, reason: reason || "",
-				}).then((r) => {
-					if (r && r.override && r.exception) {
-						const approved = flt(r.estimated_cost) === cost;
-						frappe.msgprint({
-							title: approved ? __("Override Approved") : __("Sent for Approval"),
-							indicator: approved ? "green" : "orange",
-							message: approved
-								? __("Approved under exception {0}. The customer is quoted {1}.",
-									[r.exception, format_currency(r.estimated_cost)])
-								: __("Exception {0} is awaiting approval. Until it is approved the estimate stays at the rate-card price {1} — quote that to the customer.",
-									[r.exception, format_currency(r.calculated)]),
-						});
-					} else {
-						frappe.show_alert({ message: __("Estimated cost updated."), indicator: "green" });
-					}
-					self._refresh_all();
-				});
-
-				if (Math.abs(cost - calculated) < 0.01) {
-					save("");
-					return;
-				}
 				frappe.prompt(
-					[{
-						fieldname: "reason", fieldtype: "Small Text", reqd: 1,
-						label: __("Why is this different from the rate-card price of {0}?",
-							[format_currency(calculated)]),
-					}],
-					(v) => save(v.reason),
+					[
+						{
+							fieldname: "amount", fieldtype: "Currency", reqd: 1,
+							default: calculated,
+							label: __("Price to quote the customer"),
+							description: __("The rate card says {0}.", [format_currency(calculated)]),
+						},
+						{
+							fieldname: "reason", fieldtype: "Small Text", reqd: 1,
+							label: __("Why does this repair need a different price?"),
+						},
+					],
+					(v) => {
+						const cost = flt(v.amount);
+						if (Math.abs(cost - calculated) < 0.01) {
+							frappe.show_alert({
+								message: __("That is the rate-card price — nothing to approve."),
+								indicator: "blue",
+							});
+							return;
+						}
+						frappe.xcall(`${API}.set_estimated_cost`, {
+							sr_name: d.name, estimated_cost: cost, reason: v.reason,
+						}).then((r) => {
+							if (r && r.override && r.exception) {
+								const approved = flt(r.estimated_cost) === cost;
+								frappe.msgprint({
+									title: approved ? __("Override Approved") : __("Sent for Approval"),
+									indicator: approved ? "green" : "orange",
+									message: approved
+										? __("Approved under exception {0}. The customer is quoted {1}.",
+											[r.exception, format_currency(r.estimated_cost)])
+										: __("Exception {0} is awaiting approval. Until it is approved the estimate stays at the rate-card price {1} — quote that to the customer.",
+											[r.exception, format_currency(r.calculated)]),
+								});
+							}
+							self._refresh_all();
+						});
+					},
 					__("Price Change Needs Approval"),
 					__("Send for Approval"),
 				);
@@ -2757,6 +2983,40 @@ class GoFixOpsHub {
 					.then(() => self._refresh_all());
 			});
 
+			// Est. Hours is the work being assigned, not a guess. It sat at a
+			// hardcoded 2 while the solution beside it said 480 minutes, so the
+			// job was booked at a quarter of the time it needed and every
+			// capacity and SLA figure built on it was wrong. It follows the
+			// ticks, and stops following them the moment somebody types their
+			// own number -- a technician who knows better is not overruled by a
+			// checkbox.
+			const $hours = content.find("#goh-est-hours");
+			const $hoursNote = content.find(".goh-est-hours-note");
+			const sumHours = () => {
+                let mins = 0;
+                content.find(".goh-assign-check:checked").each(function () {
+                    mins += flt($(this).data("minutes")) || 0;
+                });
+                return mins;
+			};
+			const syncHours = () => {
+				if ($hours.data("touched")) return;
+				const mins = sumHours();
+				// Quarter-hour granularity: a job is booked in slots, and 0.25 is
+				// the smallest one anybody schedules.
+				const hrs = mins ? Math.max(0.25, Math.round((mins / 60) * 4) / 4) : 0;
+				$hours.val(hrs || "");
+				$hoursNote.text(mins
+					? __("{0} min of selected work", [mins])
+					: __("nothing selected"));
+			};
+			$hours.on("input", () => {
+				$hours.data("touched", true);
+				$hoursNote.text(__("set by hand"));
+			});
+			content.on("change", ".goh-assign-check", syncHours);
+			syncHours();
+
 			// Assign selected solutions to technician
 			content.find("#goh-do-assign").on("click", () => {
 				const tech = this._tech_field && this._tech_field.get_value();
@@ -2772,7 +3032,7 @@ class GoFixOpsHub {
 					sr_name: d.name,
 					solution_rows_json: JSON.stringify(selectedRows),
 					technician: tech,
-					estimated_hours: parseFloat(content.find("#goh-est-hours").val() || 2),
+					estimated_hours: parseFloat(content.find("#goh-est-hours").val()) || 0,
 				}).then((r) => {
 					frappe.show_alert({ message: __("Technician assigned to {0} solution(s)!", [selectedRows.length]), indicator: "green" });
 					self._refresh_all();
@@ -3578,6 +3838,9 @@ class GoFixOpsHub {
 			const cat = $(this).find(".goh-issue-cat").val();
 			if (!cat || !cat.trim()) return;
 			issues.push({
+				// The row's own docname, so an edit stays an edit — the server
+				// keeps its technician and its author instead of re-creating it.
+				name: $(this).data("name") || "",
 				issue_category: cat.trim(),
 				reported_by: $(this).find(".goh-issue-reporter").val() || "Technician",
 				description: $(this).find(".goh-issue-desc").val() || "",
@@ -3723,101 +3986,13 @@ class GoFixOpsHub {
 					<div class="goh-sol-category" data-category="${esc(cat)}">
 						<h6 class="goh-sol-cat-title"><i class="fa fa-tag"></i> ${esc(cat)}</h6>
 						${body}
-						<button class="btn btn-xs btn-default goh-add-sol-btn mt-1" data-category="${esc(cat)}"><i class="fa fa-plus"></i> ${__("Add Solution")}</button>
 					</div>`;
 		}
 		this.parent.find("#goh-sol-picker").html(allHtml);
 
-		// Bind "Add Solution" buttons
-		this.parent.find(".goh-add-sol-btn").on("click", function () {
-			const cat = $(this).data("category");
-			const dlg = new frappe.ui.Dialog({
-				title: __("Add Solution for {0}", [cat]),
-				fields: [
-					{ fieldname: "solution_name", label: __("Solution Name"), fieldtype: "Data", reqd: 1, description: __("e.g. Screen Replacement, Battery Replace") },
-					{ fieldname: "estimated_minutes", label: __("Estimated Minutes"), fieldtype: "Int", default: 30 },
-					{ fieldname: "requires_spare", label: __("Requires Spare Part"), fieldtype: "Check" },
-					{ fieldname: "description", label: __("Description"), fieldtype: "Small Text" },
-				],
-				primary_action_label: __("Create & Select"),
-				primary_action: v => {
-					const call = (on_duplicate) => frappe.xcall(`${API}.quick_create_solution`, {
-						solution_name: v.solution_name,
-						issue_category: cat,
-						estimated_minutes: v.estimated_minutes || 30,
-						requires_spare: v.requires_spare ? 1 : 0,
-						description: v.description || "",
-						on_duplicate: on_duplicate || null,
-					});
-
-					call(null).then(r => {
-						dlg.hide();
-						if (r.status === "exists_elsewhere") {
-							self._resolve_duplicate_solution(d, cat, r, call);
-							return;
-						}
-						self._announce_solution_result(r, cat);
-						self._load_solutions_for_categories(d);
-					});
-				},
-			});
-			dlg.show();
-		});
-	}
-
-	/** Tell the user exactly what the server did — never claim more than that. */
-	_announce_solution_result(r, cat) {
-		const label = r.solution_name || r.name;
-		if (r.status === "created") {
-			frappe.show_alert({ message: __("Solution '{0}' created and selected.", [label]), indicator: "green" });
-		} else if (r.status === "reactivated") {
-			frappe.show_alert({ message: __("Solution '{0}' already existed here but was inactive — reactivated and selected.", [label]), indicator: "orange" });
-		} else if (r.status === "reused") {
-			frappe.show_alert({ message: __("Reusing '{0}' from {1} on this job.", [label, r.owner_issue_category]), indicator: "blue" });
-		} else {
-			frappe.show_alert({ message: __("Solution '{0}' already exists in {1} — tick it below.", [label, cat]), indicator: "blue" });
-		}
-	}
-
-	/**
-	 * The label is taken by a solution filed under a different Issue Category.
-	 * Name the category and let the user choose, rather than silently doing
-	 * nothing and reporting success.
-	 */
-	_resolve_duplicate_solution(d, cat, r, call) {
-		const self = this;
-		const esc = frappe.utils.escape_html;
-		const owners = (r.existing || []).map(e => e.issue_category);
-		const dlg = new frappe.ui.Dialog({
-			title: __("'{0}' already exists", [r.solution_name]),
-			fields: [{
-				fieldtype: "HTML",
-				options: `
-					<p>${__("A repair solution called <b>{0}</b> is already filed under <b>{1}</b>.",
-						[esc(r.solution_name), esc(owners.join(", "))])}</p>
-					<p class="text-muted small">${__("<b>Reuse</b> puts that same solution on this job — one catalogue entry, one service item, one price. <b>Create separate</b> makes a second solution owned by {0}, which is right only when the work genuinely differs.", [esc(cat)])}</p>`,
-			}],
-			primary_action_label: __("Reuse existing"),
-			primary_action: () => {
-				call("reuse").then(res => {
-					dlg.hide();
-					self._extraSolutions[cat] = (self._extraSolutions[cat] || [])
-						.filter(x => x.name !== res.name)
-						.concat([res]);
-					self._announce_solution_result(res, cat);
-					self._load_solutions_for_categories(d);
-				});
-			},
-			secondary_action_label: __("Create separate for {0}", [cat]),
-			secondary_action: () => {
-				call("duplicate").then(res => {
-					dlg.hide();
-					self._announce_solution_result(res, cat);
-					self._load_solutions_for_categories(d);
-				});
-			},
-		});
-		dlg.show();
+		// No "Add Solution" here on purpose: the catalogue is a master, and a
+		// technician working a ticket picks from it rather than extending it
+		// mid-repair. New solutions are raised through the master itself.
 	}
 
 	_refresh_all() {
@@ -3828,9 +4003,16 @@ class GoFixOpsHub {
 	/* ── Not Repairable Flow ─────────────────────────────────────────── */
 	_bind_not_repairable(d) {
 		const self = this;
-		// Hide for terminal states
-		if (["done", "closed", "draft"].includes(d.ops_stage)) {
-			this.parent.find(".goh-not-repairable-btn").hide();
+		// The server decides. A stage list here drifted from the rule the
+		// server enforces, so a ticket at Invoice kept a red Not Repairable
+		// button that would only ever have produced an error.
+		const allowed = ((d.permitted_actions || {}).close_without_repair) || {};
+		if (!allowed.allowed) {
+			const $btn = this.parent.find(".goh-not-repairable-btn");
+			$btn.hide();
+			// Kept discoverable rather than silently absent: somebody looking
+			// for it deserves to know why it is gone.
+			if (allowed.reason) $btn.attr("title", allowed.reason);
 			return;
 		}
 		this.parent.find(".goh-not-repairable-btn").on("click", () => {

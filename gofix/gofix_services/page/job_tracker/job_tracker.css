@@ -375,3 +375,43 @@
 .jt-table tr:last-child td {
   border-bottom: none;
 }
+
+/* ── Scope bar ───────────────────────────────────────────────────────────── */
+/* Company, Zone, State, City, Store. In the page body, not the toolbar:
+   page.add_field renders nothing here, which is how the Store filter came to be
+   declared in code and never seen on screen. Wraps rather than overflowing, so
+   a narrow window loses none of the five. */
+.jt-scope-bar {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px;
+	padding: 8px 12px;
+	border-bottom: 1px solid var(--border-color, #e2e8f0);
+	background: var(--fg-color, #fff);
+}
+.jt-scope-bar .jt-scope {
+	width: auto;
+	min-width: 140px;
+	max-width: 220px;
+}
+
+/* Company is shown, not chosen: it comes from the header selection like every
+   other page on this bench. Styled as a locked chip so it reads as context
+   rather than as a control somebody failed to open. */
+.jt-scope-bar .jt-scope-company {
+	display: inline-flex;
+	align-items: center;
+	min-height: 28px;
+	padding: 0 10px;
+	border: 1px solid var(--border-color, #e2e8f0);
+	border-radius: 4px;
+	background: var(--bg-light-gray, #f4f5f6);
+	color: var(--text-muted, #6b7280);
+	font-size: 12px;
+	font-weight: 600;
+	white-space: nowrap;
+	max-width: 260px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}

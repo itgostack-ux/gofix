@@ -85,6 +85,15 @@ def get_data(filters):
 	if scope:
 		conditions.append(scope)
 
+	# The geography the user asked for, on top of the scope they are entitled
+	# to. Asked and allowed are AND-ed: choosing a zone you cannot see returns
+	# nothing, never everything.
+	from gofix.report_filters import geo_conditions
+
+	_geo = geo_conditions(filters, company_field='sr.company', warehouse_field='sr.source_warehouse')
+	if _geo:
+		conditions.append(_geo[len(" AND "):])
+
 	rows = frappe.db.sql(
 		f"""
 		SELECT

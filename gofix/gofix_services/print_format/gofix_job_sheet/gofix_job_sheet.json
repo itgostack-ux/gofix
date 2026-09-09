@@ -12,7 +12,7 @@
  "line_breaks": 0,
  "modified": "2026-08-28 00:00:00.000000",
  "module": "GoFix Services",
- "name": "GoFix Intake Receipt",
+ "name": "GoFix Job Sheet",
  "print_format_builder": 0,
  "print_format_type": "Jinja",
  "show_section_headings": 0,

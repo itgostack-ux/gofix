@@ -95,6 +95,13 @@ def _fetch(filters: dict) -> list[dict]:
 		params["store"] = filters["store"]
 
 	# Row-level scope: only tokens for stores the user is scoped to.
+	# The geography the user asked for, alongside what they may see.
+	from gofix.report_filters import geo_conditions
+
+	_geo = geo_conditions(filters, company_field=None, warehouse_field="t.store")
+	if _geo:
+		conds.append(_geo[len(" AND "):])
+
 	scope = scope_where_clause(warehouse_field="t.store")
 	if scope:
 		conds.append(scope)

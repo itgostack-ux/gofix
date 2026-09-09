@@ -18,13 +18,7 @@ const repair_profitability_store_query = () => ({
 
 frappe.query_reports["Repair Profitability"] = {
 	filters: [
-		{
-			fieldname: "company",
-			label: __("Company"),
-			fieldtype: "Link",
-			options: "Company",
-			default: repair_profitability_active_company(),
-		},
+		...gofix_scope_filters(),
 		{
 			fieldname: "from_date",
 			label: __("From Date"),

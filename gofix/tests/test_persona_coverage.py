@@ -51,8 +51,17 @@ class TestGoFixPersonaCoverage(TestCase):
 	def test_customers_can_answer_status_estimate_history_and_receipt_questions(self):
 		self.assertTrue((Path(__file__).resolve().parents[1] / "www/track-repair/index.py").exists())
 		self.assertTrue((ROOT / "doctype/estimate_version/estimate_version.json").exists())
-		self.assertTrue(frappe.db.exists("Print Format", "GoFix Delivery Receipt"))
-		self.assertTrue(frappe.db.exists("Print Format", "Device Received Receipt"))
+		# A repair produces two documents: a job sheet at drop-off and an
+		# invoice at collection. The delivery receipt and charge sheet were
+		# retired into those two — disabled rather than deleted, so a site that
+		# printed them historically can still read them back.
+		self.assertTrue(frappe.db.exists("Print Format", "GoFix Job Sheet"))
+		self.assertTrue(frappe.db.exists("Print Format", "GoFix Service Invoice"))
+		for retired in ("GoFix Delivery Receipt", "GoFix Repair Charge Sheet"):
+			if frappe.db.exists("Print Format", retired):
+				self.assertTrue(
+					frappe.db.get_value("Print Format", retired, "disabled"),
+					"%s should be retired, not offered alongside the two" % retired)
 
 	def test_ceo_can_answer_scale_margin_override_damage_and_rework_questions(self):
 		self.assertIn("CEO", self._roles("report/ceo_repair_dashboard/ceo_repair_dashboard.json"))

@@ -16,7 +16,9 @@ def get_context(context):
 
 
 @frappe.whitelist()
-def get_board_data(warehouse=None, date_from=None, date_to=None, search=None, company=None) -> dict:
+def get_board_data(warehouse=None, date_from=None, date_to=None, search=None,
+                   company=None, zone=None, state=None, city=None,
+                   store=None) -> dict:
 	"""Return all active Service Requests grouped by decision for the Kanban board."""
 	frappe.has_permission("Service Request", "read", throw=True)
 	company = active_company(company)
@@ -40,6 +42,19 @@ def get_board_data(warehouse=None, date_from=None, date_to=None, search=None, co
 		filters.append(["company", "=", company])
 	if warehouse:
 		filters.append(["source_warehouse", "=", warehouse])
+
+	# Zone, state and city name a set of stores; the board filters on the
+	# warehouse column it already has, so the geography lives in CH Store rather
+	# than being copied onto every repair. Same five filters the reports offer.
+	from gofix.report_filters import resolve_warehouses
+
+	_wh = resolve_warehouses({"company": company, "zone": zone,
+	                          "state": state, "city": city,
+	                          "store": store})
+	if _wh is not None:
+		# An empty set means the slice holds no store: match nothing rather than
+		# quietly dropping the filter and showing everything.
+		filters.append(["source_warehouse", "in", sorted(_wh) or [""]])
 	if search:
 		filters.append(["name", "like", f"%{search}%"])
 

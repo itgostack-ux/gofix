@@ -11,13 +11,7 @@ const device_history_active_company = () => {
 
 frappe.query_reports["Device Service History"] = {
 	filters: [
-		{
-			fieldname: "company",
-			label: __("Company"),
-			fieldtype: "Link",
-			options: "Company",
-			default: device_history_active_company(),
-		},
+		...gofix_scope_filters(),
 		{
 			fieldname: "customer",
 			label: __("Customer"),

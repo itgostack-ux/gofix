@@ -1646,6 +1646,8 @@ def get_store_service_board(warehouse, tab=None, search=None) -> dict:
 	devices still requires the customer-consent OTP (custody gate); this
 	board only surfaces them.
 	"""
+	from gofix.gofix_services.actions import available_actions
+
 	_require_store_operation_role()
 	frappe.has_permission("Service Request", "read", throw=True)
 	if not warehouse:
@@ -1694,6 +1696,24 @@ def get_store_service_board(warehouse, tab=None, search=None) -> dict:
 	# Whether a job has been opened yet. The counter's separate "Pending Store
 	# Repairs" list carried this and the service board did not, which is the one
 	# thing that list could do that this board could not.
+	# Which of these repairs has actually been billed. The card's "Print
+	# Invoice" is the same document the Ops Hub and the Job Tracker print, so it
+	# must appear under the same rule: a SUBMITTED invoice, not merely a link to
+	# a draft one. Gathered in one query for the whole board.
+	billed = set()
+	if rows:
+		names = [r.name for r in rows]
+		billed = {
+			row[0] for row in frappe.db.sql("""
+				SELECT sr.name
+				FROM `tabService Request` sr
+				LEFT JOIN `tabGoFix Service Invoice Line` l ON l.parent = sr.name
+				LEFT JOIN `tabSales Invoice` si1 ON si1.name = l.invoice AND si1.docstatus = 1
+				LEFT JOIN `tabSales Invoice` si2 ON si2.name = sr.service_invoice AND si2.docstatus = 1
+				WHERE sr.name IN %(names)s AND (si1.name IS NOT NULL OR si2.name IS NOT NULL)
+			""", {"names": names})
+		}
+
 	job_by_sr = {}
 	if rows:
 		for ja in frappe.get_all(
@@ -1706,6 +1726,7 @@ def get_store_service_board(warehouse, tab=None, search=None) -> dict:
 			job_by_sr.setdefault(ja.service_request, ja)
 
 	for r in rows:
+		r["invoice_printable"] = r.name in billed
 		job = job_by_sr.get(r.name)
 		r["job_assignment"] = job.name if job else ""
 		r["job_status"] = job.assignment_status if job else ""
@@ -1719,6 +1740,15 @@ def get_store_service_board(warehouse, tab=None, search=None) -> dict:
 		r["device_at"] = device_at
 		r["at_home_store"] = bool(device_at == warehouse)
 		r.update(device_movement_options(r, warehouse))
+		# Which buttons this card may show, decided by the same rule the server
+		# enforces on the click. The card used to carry its own status lists
+		# inline -- a different set from the Ops Hub's -- so the same ticket
+		# offered different actions depending on the screen.
+		try:
+			r["permitted_actions"] = available_actions(r["name"])["actions"]
+		except Exception:
+			frappe.log_error(frappe.get_traceback(), "available_actions board row")
+			r["permitted_actions"] = {}
 
 	decision_counts = {
 		row.decision: cint(row.count)

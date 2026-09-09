@@ -45,6 +45,14 @@ def get_data(filters):
 		conditions += " AND COALESCE(sr.company, so.company) = %(company)s"
 		params["company"] = company
 
+	# A technician's work still happened somewhere. The report joins the Service
+	# Request already, so zone / state / city / store narrow it through the store
+	# the repair belongs to rather than being offered on screen and ignored.
+	from gofix.report_filters import geo_conditions
+
+	conditions += geo_conditions(filters, company_field=None,
+	                             warehouse_field="sr.source_warehouse")
+
 	scope = scope_where_clause(warehouse_field="so.set_warehouse")
 	scope_sql = f" AND {scope}" if scope else ""
 	row_limit = min(get_int_setting("interactive_report_row_limit", 2000), 10000)

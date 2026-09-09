@@ -10,13 +10,7 @@ const gofix_ticket_stage_time_store_query = () => ({
 
 frappe.query_reports["GoFix Ticket Stage Time"] = {
 	filters: [
-		{
-			fieldname: "company",
-			label: __("Company"),
-			fieldtype: "Link",
-			options: "Company",
-			default: frappe.defaults.get_user_default("Company"),
-		},
+		...gofix_scope_filters(),
 		{
 			fieldname: "service_request",
 			label: __("SR Number"),

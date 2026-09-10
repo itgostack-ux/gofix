@@ -1502,6 +1502,8 @@ class ServiceRequest(Document):
 		if not items:
 			frappe.throw(_("No service items or spare parts to invoice"), title=_("Service Request Error"))
 
+		assert_bill_matches_agreed_quote(self, items)
+
 		posting_date = self.get("actual_completion_date") or today()
 		
 		# Create invoice
@@ -2372,6 +2374,60 @@ class ServiceRequest(Document):
 						self.serial_no, annual_count),
 					title=_("Annual Warranty Claim Cap Reached"),
 				)
+
+def latest_approved_estimate(sr):
+	"""The estimate version the customer actually agreed to, or None.
+
+	Highest version number wins: a revision supersedes what came before it, so
+	only the newest approval is the current agreement. "Customer Approved" is
+	the only status that counts -- Pending and Sent to Customer are offers
+	nobody has accepted yet.
+	"""
+	approved = [
+		ev for ev in (sr.get("estimate_versions") or [])
+		if ev.status == "Customer Approved"
+	]
+	if not approved:
+		return None
+	return max(approved, key=lambda ev: cint(ev.version_number))
+
+
+def assert_bill_matches_agreed_quote(sr, items):
+	"""Refuse a bill that differs from the estimate the customer approved.
+
+	Billing a figure other than the agreed one, silently, is the single thing an
+	estimate exists to prevent. The machinery for changing it already exists:
+	revise the estimate, and the customer approves the revision. So a divergence
+	is not an error to absorb -- it is a revision nobody raised. Same doctrine as
+	the below-cost gate: refuse, and name the step that unblocks it.
+
+	Nothing is enforced when no approved estimate exists, or when the approved
+	figure is zero -- a warranty rework is legitimately Rs 0, and a ticket that
+	was never quoted has nothing to diverge from.
+	"""
+	agreed = latest_approved_estimate(sr)
+	if not agreed or flt(agreed.estimate_amount) <= 0:
+		return
+
+	billed = sum(flt(i.get("qty") or 1) * flt(i.get("rate")) for i in items)
+	billed -= flt(sr.get("service_discount_amount") or 0)
+
+	tolerance = flt(get_setting("quote_billing_tolerance", 1.0)) or 1.0
+	if abs(billed - flt(agreed.estimate_amount)) <= tolerance:
+		return
+
+	frappe.throw(
+		_("This repair was approved at {0}, but the bill comes to {1}. "
+		  "Raise a revised estimate and have the customer approve it before "
+		  "billing — approved estimate v{2} is what they agreed to.").format(
+			frappe.bold(frappe.format_value(
+				flt(agreed.estimate_amount), {"fieldtype": "Currency"})),
+			frappe.bold(frappe.format_value(billed, {"fieldtype": "Currency"})),
+			agreed.version_number,
+		),
+		title=_("Bill Does Not Match the Approved Quote"),
+	)
+
 
 # API Methods
 def _require_service_lookup_access(action):

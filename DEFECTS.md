@@ -24,9 +24,14 @@ env/bin/python <playwright surface suite>
 
 `get_invoice_summary` read three fields off `Service Request Service Item` that the
 doctype does not have. Any submitted ticket carrying a service line raised
-`AttributeError` on the first attribute, so the billing summary never rendered. The
-same fault sat in `create_ops_hub_invoice`, which meant **Create Invoice** and the
-POS "bill this repair" line were dead on the same tickets.
+`AttributeError` on the first attribute, so the billing summary never rendered.
+
+> **Correction.** An earlier version of this record said the same fault also killed
+> **Create Invoice**. It does not. `create_ops_hub_invoice` is refused at the top —
+> *"Repairs are billed at the POS counter, not from the Ops Hub"* — so execution never
+> reaches the bad field read. That second call site was **latent, not live**. It is
+> fixed here anyway, because the function is still reachable by name and the read
+> would fail the moment the refusal were lifted.
 
 ```
 21 of 21 tickets with service lines CRASH (21 of 67 submitted)
@@ -102,23 +107,51 @@ nothing in the system objecting.
   SR-260818-10554   agreed 6,000   card 3,440
 ```
 
-**Fix.** An agreed-quote gate in `create_ops_hub_invoice`, alongside the existing
-below-cost gate and following the same doctrine: refuse, and name the step that
-unblocks it. If the latest **Customer Approved** estimate version is non-zero and the
-bill differs by more than `quote_billing_tolerance` (default ₹1), billing is refused
-with *"Raise a revised estimate and have the customer approve it before billing."*
+**Fix.** `assert_bill_matches_agreed_quote()` in
+`gofix_services/doctype/service_request/service_request.py`, called from
+`ServiceRequest.create_service_invoice` once the invoice lines are known. If the latest
+**Customer Approved** estimate version is non-zero and the bill differs by more than
+`quote_billing_tolerance` (default ₹1), billing is refused with *"Raise a revised
+estimate and have the customer approve it before billing."*
 
 A divergence is not an error to absorb — it is a revision nobody raised, and the
 estimate-version machinery already exists to raise one.
 
-`_latest_approved_estimate()` takes the **highest version number** among approved
+`latest_approved_estimate()` takes the **highest version number** among approved
 versions: a revision supersedes what came before, and only the newest approval is the
 current agreement. `Pending` and `Sent to Customer` are offers nobody has accepted and
 do not count.
 
-**Proved fixed.** Finds v1 @ ₹3,500 on a real ticket and matches the database; picks
-v2 @ ₹2,500 over v1 @ ₹1,000 and ignores a higher `Pending` v3; returns `None` when
-nothing is approved.
+> **The gate was first written in the wrong place.** It went into
+> `create_ops_hub_invoice`, which is refused at its first statement — so the gate sat in
+> unreachable code and enforced nothing. It has been moved to
+> `create_service_invoice`, which is the live path, and the test below asserts that
+> placement rather than trusting it.
+
+**Proved fixed.** Eight behaviours, all as intended:
+
+| Case | Result |
+|---|---|
+| Bill equals the approved ₹2,000 | allowed |
+| Bill of ₹920 against an approved ₹2,000 | **refused** |
+| ₹2,000.50 against ₹2,000 (inside ₹1 tolerance) | allowed |
+| ₹2,500 less a ₹500 discount | allowed — the discount counts |
+| Two lines summing to ₹2,000 | allowed |
+| No approved estimate at all | allowed |
+| Warranty rework approved at ₹0 | allowed |
+| Newest approval wins over an older one and a higher `Pending` | v2 @ ₹2,500 |
+
+Placement asserted by source inspection: present in `create_service_invoice`, absent
+from `create_ops_hub_invoice`.
+
+### Still open on GF-002b
+
+**The POS counter path is not covered.** Repairs are billed through the POS cart
+(`ch_pos/api/pos_api.py`, which stamps `custom_gofix_service_request` on the invoice),
+and that path does not call `create_service_invoice`. The gate therefore protects the
+Service Request form route only. Extending it to the cart is the remaining work, and
+until it is done a repair billed at the counter can still diverge from its approved
+quote.
 
 ---
 

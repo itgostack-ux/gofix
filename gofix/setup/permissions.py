@@ -154,11 +154,24 @@ def ensure_default_permissions():
     seed_operational_docperms()
 
 
-# Warehouse link fields on Service Request that must NOT be governed by
-# Warehouse User Permissions. Scope for this doctype is decided in one place —
-# gofix.security.get_service_request_query — and it deliberately ORs across
-# these fields, because a device transferred to a hub is still the origin
-# store's ticket.
+# Link fields on a repair ticket that must NOT be governed by User Permissions.
+#
+# The Warehouse fields on the header: scope for this doctype is decided in one
+# place — gofix.security.get_service_request_query — and it deliberately ORs
+# across these fields, because a device transferred to a hub is still the
+# origin store's ticket.
+#
+# The two child-table fields: a CH User Scope also issues an Employee User
+# Permission (the user's own record), and Frappe ANDs a match for every link
+# field on every CHILD ROW as well as the header. Both of these are legitimately
+# BLANK — a customer-reported fault has no technician behind it (save_issue_lines
+# clears the field on purpose), and a spare line has no warehouse until one is
+# sourced — and Frappe reads a blank as "not one of yours". So merely appending
+# an issue line to a ticket revoked the writer's permission on that ticket, and
+# the Ops Hub could not record what the customer had walked in to report.
+# Nothing is lost by exempting them: the warehouse that actually moves stock is
+# the required one on Spare Parts Usage, which keeps both its User Permission
+# check and an explicit assert_service_request_access(..., "write").
 _SR_UNGOVERNED_WAREHOUSE_FIELDS = (
     "source_warehouse",
     "current_location",
@@ -166,6 +179,12 @@ _SR_UNGOVERNED_WAREHOUSE_FIELDS = (
     "billing_location",
     "transferred_to_store",
 )
+
+_UNGOVERNED_LINK_FIELDS = {
+    "Service Request": _SR_UNGOVERNED_WAREHOUSE_FIELDS,
+    "SR Issue Line": ("reported_by_technician",),
+    "SR Spare Line": ("warehouse",),
+}
 
 
 def ignore_user_permissions_on_service_locations():
@@ -182,33 +201,44 @@ def ignore_user_permissions_on_service_locations():
     layer here is both redundant and wrong. Turning it off for these fields
     leaves exactly one authority on who sees which ticket.
 
+    The same AND runs over every CHILD ROW, which is worse: it decides WRITE, not
+    just visibility, and two of those links are blank by design. Appending an
+    issue line for a customer-reported fault — no technician, so the field is
+    deliberately empty — was enough to make Frappe deny write on the ticket the
+    row belongs to, and the Ops Hub could not save what the customer reported.
+
     Property Setters, so this is configuration rather than a schema edit, and
     re-running it is a no-op.
     """
-    if not frappe.db.exists("DocType", "Service Request"):
-        return
-
-    meta = frappe.get_meta("Service Request")
     changed = []
-    for fieldname in _SR_UNGOVERNED_WAREHOUSE_FIELDS:
-        df = meta.get_field(fieldname)
-        if not df or df.fieldtype != "Link":
+    for doctype, fieldnames in _UNGOVERNED_LINK_FIELDS.items():
+        if not frappe.db.exists("DocType", doctype):
             continue
-        if cint(df.ignore_user_permissions):
-            continue
-        frappe.make_property_setter(
-            {
-                "doctype": "Service Request",
-                "fieldname": fieldname,
-                "property": "ignore_user_permissions",
-                "value": 1,
-                "property_type": "Check",
-            },
-            is_system_generated=True,
-        )
-        changed.append(fieldname)
+        meta = frappe.get_meta(doctype)
+        touched = False
+        for fieldname in fieldnames:
+            df = meta.get_field(fieldname)
+            if not df or df.fieldtype != "Link":
+                continue
+            if cint(df.ignore_user_permissions):
+                continue
+            frappe.make_property_setter(
+                {
+                    "doctype": doctype,
+                    "fieldname": fieldname,
+                    "property": "ignore_user_permissions",
+                    "value": 1,
+                    "property_type": "Check",
+                },
+                is_system_generated=True,
+            )
+            changed.append(f"{doctype}.{fieldname}")
+            touched = True
+        if touched:
+            frappe.clear_cache(doctype=doctype)
 
     if changed:
+        # The child tables belong to the ticket's own cache entry.
         frappe.clear_cache(doctype="Service Request")
         frappe.logger("gofix").info(
             f"GoFix: user permissions no longer gate {', '.join(changed)}"

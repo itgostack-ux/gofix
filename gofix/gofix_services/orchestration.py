@@ -60,6 +60,20 @@ def create_estimate_version(service_request, reason=None, send_to_customer=False
 	else:
 		flag_if_uneconomic(sr, estimate_total)
 
+	# A quote of nothing is not a quote. Zero is a legitimate figure when the
+	# repair is ours to carry -- a rework inside its own workmanship warranty --
+	# and warranty_ctx above is what says so. Zero for any other reason means
+	# the ticket was never priced: no repair chosen, or no pricing rule matched.
+	# Recording that as an estimate produced 18 customer-approved quotes at Rs 0
+	# on this site alone, each one an approval of no agreed figure at all.
+	if flt(estimate_total) <= 0 and not warranty_ctx["covered"]:
+		frappe.throw(
+			_("There is nothing to quote yet — no repair on this ticket has a price. "
+			  "Pick the work on the Solutions step first, or check that a GoFix "
+			  "Pricing Rule covers it."),
+			title=_("Nothing to Quote"),
+		)
+
 	# Determine version number
 	existing_versions = sr.get("estimate_versions") or []
 	new_version = len(existing_versions) + 1

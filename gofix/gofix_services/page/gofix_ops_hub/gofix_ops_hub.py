@@ -16,7 +16,13 @@ import frappe
 from frappe import _
 from frappe.utils import add_days, cint, flt, get_datetime, getdate, now_datetime, nowdate, time_diff_in_hours
 
-from gofix.config import get_int_setting, get_user_roles, has_role_setting, require_role_setting
+from gofix.config import (
+	get_float_setting,
+	get_int_setting,
+	get_user_roles,
+	has_role_setting,
+	require_role_setting,
+)
 from gofix.gofix_services.store_context import (
 	active_company as _active_company,
 	get_store_options as _get_store_options,
@@ -4883,6 +4889,23 @@ def _get_labour_cost(sr) -> dict:
 	return {"hours": hours_total, "cost": cost_total}
 
 
+def _latest_approved_estimate(sr):
+	"""The estimate version the customer actually agreed to, or None.
+
+	Highest version number wins: a revision supersedes what came before it, and
+	only the newest approval represents the current agreement. Versions are
+	approved by the customer, so "Customer Approved" is the only status that
+	counts -- Pending and Sent to Customer are offers nobody has accepted yet.
+	"""
+	approved = [
+		ev for ev in (sr.get("estimate_versions") or [])
+		if ev.status == "Customer Approved"
+	]
+	if not approved:
+		return None
+	return max(approved, key=lambda ev: cint(ev.version_number))
+
+
 def _get_company_cost(sr) -> dict:
 	"""True cost the company bears for this repair (SAP RRB / Oracle debrief
 	parity): consumed parts at buying cost + damaged parts at buying cost +
@@ -4978,13 +5001,18 @@ def get_invoice_summary(sr_name) -> dict:
 
 	sr = frappe.get_doc("Service Request", sr_name)
 
+	# Service Request Service Item carries item_name / estimated_cost / actual_cost.
+	# This read service_item_name / rate / amount, none of which exist on it, so
+	# every ticket holding a service line raised AttributeError here instead of a
+	# billing summary. Actual cost wins once the work is done; the estimate stands
+	# in until then.
 	service_items = [
 		{
 			"item_code": row.service_item,
-			"item_name": row.service_item_name or "",
+			"item_name": row.item_name or "",
 			"qty": 1,
-			"rate": flt(row.rate),
-			"amount": flt(row.amount or row.rate),
+			"rate": flt(row.actual_cost or row.estimated_cost),
+			"amount": flt(row.actual_cost or row.estimated_cost),
 		}
 		for row in sr.get("service_items", [])
 	]
@@ -5550,12 +5578,15 @@ def create_ops_hub_invoice(sr_name, remote_otp=None) -> dict:
 	items = []
 
 	# 1) Service items on SR
+	# Same three phantom fields as get_invoice_summary. The `or row.item_name`
+	# fallback here never ran: reading row.service_item_name raises before the
+	# `or` is ever evaluated, so this call site was equally dead.
 	for row in sr.get("service_items", []):
 		items.append({
 			"item_code": row.service_item,
-			"item_name": row.service_item_name or row.item_name or "",
+			"item_name": row.item_name or "",
 			"qty": 1,
-			"rate": flt(row.rate or row.actual_cost or row.estimated_cost or 0),
+			"rate": flt(row.actual_cost or row.estimated_cost or 0),
 			"uom": "Nos",
 		})
 
@@ -5610,6 +5641,31 @@ def create_ops_hub_invoice(sr_name, remote_otp=None) -> dict:
 	discount = flt(sr.get("service_discount_amount") or 0)
 	final_cost = flt(sr.get("final_cost") or 0)
 	effective_total = final_cost if final_cost else (items_total - discount)
+
+	# ── Agreed-quote gate ─────────────────────────────────────────────────
+	# The customer approved a figure. Billing a different one silently is the
+	# one thing an estimate exists to prevent -- and the machinery for changing
+	# it already exists: revise the estimate, and the customer approves the
+	# revision. So a divergence is not an error to absorb, it is a revision
+	# nobody raised. Same doctrine as the below-cost gate below: refuse, and
+	# name the step that unblocks it.
+	agreed = _latest_approved_estimate(sr)
+	if agreed and flt(agreed.estimate_amount) > 0:
+		tolerance = get_float_setting("quote_billing_tolerance", 1.0, minimum=0)
+		drift = abs(effective_total - flt(agreed.estimate_amount))
+		if drift > tolerance:
+			frappe.throw(
+				_("This repair was approved at {0}, but the bill comes to {1}. "
+				  "Raise a revised estimate and have the customer approve it before "
+				  "billing — approved estimate v{2} is what they agreed to.").format(
+					frappe.bold(frappe.format_value(
+						flt(agreed.estimate_amount), {"fieldtype": "Currency"})),
+					frappe.bold(frappe.format_value(
+						effective_total, {"fieldtype": "Currency"})),
+					agreed.version_number,
+				),
+				title=_("Bill Does Not Match the Approved Quote"),
+			)
 
 	company_cost = _get_company_cost(sr)
 	if company_cost["total"] > 0 and effective_total < company_cost["total"]:

@@ -17,5 +17,16 @@ def create_material_request_custom_fields():
                 "description": "Linked GoFix Service Request (auto-populated)",
             },
         ],
+        "Material Request Item": [
+            {
+                "fieldname": "custom_ticket_no",
+                "label": "Ticket No",
+                "fieldtype": "Data",
+                "insert_after": "item_code",
+                "in_list_view": 1,
+                "depends_on": "eval:parent.company=='GOFIX SOLUTIONS PRIVATE LIMITED'",
+                "description": "Ticket this spare is being requested against (GoFix only)",
+            },
+        ],
     }
     create_custom_fields(custom_fields, update=True)

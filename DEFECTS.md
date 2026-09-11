@@ -169,29 +169,30 @@ quote.
 
 ### Every server-created Material Issue and Material Receipt failed for 8 days
 
-Not a code defect, and not fixed here, but it blocked spare fitment on
-`erpnext.local` and the diagnosis is worth keeping.
+Site configuration, not app code, but it blocked spare fitment on `erpnext.local`.
+**Fixed 11 September 2026** — see Resolution.
 
-Two Property Setter rows on `Stock Entry Detail` contradict each other:
+Two Property Setter rows on `Stock Entry Detail` contradicted each other:
 
 | Field | Property | Value | Created |
 |---|---|---|---|
 | `t_warehouse` | `reqd` | `1` | 2026-09-01 22:59 |
-| `t_warehouse` | `mandatory_depends_on` | `eval:parent.purpose != "Material Issue"` | 2026-09-09 21:39 |
 | `s_warehouse` | `reqd` | `1` | 2026-09-01 22:59 |
+| `t_warehouse` | `mandatory_depends_on` | `eval:parent.purpose != "Material Issue"` | 2026-09-02 23:32 |
 
 ERPNext's `validate_warehouse` **deliberately clears** `d.t_warehouse` for a Material
-Issue (`stock_entry.py:974`). Frappe's mandatory check then rejects the field ERPNext
-just cleared, because `reqd = 1`.
+Issue (`stock_entry.py:974`), and symmetrically clears `d.s_warehouse` for a Material
+Receipt (`stock_entry.py:978`). Frappe's mandatory check then rejects the field ERPNext
+just cleared, because `reqd = 1`. The setter demands a value ERPNext guarantees is blank.
 
 **`mandatory_depends_on` cannot fix this.** It is client-side only —
-`base_document.py:973` selects mandatory fields by `reqd == 1` and never reads it. The
+`base_document.py:972` selects mandatory fields by `reqd == 1` and never reads it. The
 form looks correct in the browser and the server still refuses.
 
 ```
 383 Material Issue rows      — all 383 have no t_warehouse
 180 Material Receipt rows    — all 180 have no s_warehouse
-last Material Issue to post  — 2 September, the morning after the property setter appeared
+last Stock Entry to post     — 2 September, the morning after the property setters appeared
 ```
 
 Symptom at the counter:
@@ -202,9 +203,24 @@ Could not issue MSB000001-Original x1.0 from GF-PALAVAKKAM-Sellable - GF:
 [Stock Entry, GFTNMT26000014]: t_warehouse
 ```
 
-**Resolution:** delete both `reqd` property setters. They are site-local data — no app
-ships them, and `ch_erp15`'s fixtures carry only the `mandatory_depends_on` row.
-ERPNext's own per-purpose validation is what should be enforcing this.
+**Provenance — the two rows do not have the same origin.** An earlier revision of this
+note said both were site-local and that no app shipped them. That is wrong for
+`t_warehouse`, and it is why deleting the row did not make the problem go away:
+
+| Row | Origin | Deleting it is |
+|---|---|---|
+| `t_warehouse-reqd` | **shipped** in `ch_erp15/ch_erp15/custom/stock_entry_detail.json`, added by `5b52099` (1 Sep, "Stock Entry Mandatory Feilds and do validations") | temporary — `migrate.py:180` calls `sync_customizations()`, which re-creates it. The DB row's `modified` of 9 Sep 21:39 is exactly that resurrection. |
+| `s_warehouse-reqd` | site-local, no app file | permanent |
+
+This is the `custom/*.json` channel described in `CLAUDE.md` — a Customize Form snapshot
+re-applied on every migrate, which will resurrect what you delete.
+
+**Resolution (applied 11 Sep 2026):** the fix is two parts, and the first is the one that
+makes it stick.
+
+1. Remove the `Stock Entry Detail-t_warehouse-reqd` object from
+   `ch_erp15/ch_erp15/custom/stock_entry_detail.json`, so migrate stops re-applying it.
+2. Delete both live rows and clear the doctype cache:
 
 ```python
 frappe.delete_doc("Property Setter", "Stock Entry Detail-t_warehouse-reqd", force=1)
@@ -212,4 +228,12 @@ frappe.delete_doc("Property Setter", "Stock Entry Detail-s_warehouse-reqd", forc
 frappe.clear_cache(doctype="Stock Entry Detail"); frappe.db.commit()
 ```
 
-**Check production for the same two rows before go-live.**
+No replacement validation is needed: ERPNext's `validate_warehouse` already enforces the
+source/target rule per purpose and throws `Source warehouse is mandatory for row 1`.
+
+Verified after the fix: Material Issue, Material Receipt and Material Transfer all clear
+the mandatory check, re-running `sync_customizations_for_doctype` on the edited file no
+longer re-creates the row, and the native guard still fires.
+
+**Check production for the same two rows before go-live**, and remove the snapshot entry
+there too — deleting the row alone will not survive the next migrate.

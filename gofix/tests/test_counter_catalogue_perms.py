@@ -121,3 +121,41 @@ class TestCounterCatalogueRead(unittest.TestCase):
 
     def test_running_it_again_creates_nothing(self):
         self.assertEqual(ensure_counter_catalogue_read(), 0)
+
+
+class TestTechnicianPickerGate(unittest.TestCase):
+    """Assigning a repair must not require HR access.
+
+    `get_technicians_for_grade` returns four fields for one company's active
+    technicians — a roster for a picker. It used to demand the Employee read
+    DocPerm, which both over-granted (anyone who assigns a repair got every
+    Employee field) and under-served (a counter user holds no HR role, so the
+    Service Intake page died on "No permission for Employee").
+    """
+
+    def tearDown(self):
+        frappe.db.rollback()
+
+    def test_a_counter_user_can_list_technicians_without_employee_read(self):
+        from gofix.gofix_services.page.gofix_ops_hub.gofix_ops_hub import (
+            get_technicians_for_grade,
+        )
+
+        user = _counter_user()
+        if not user:
+            self.skipTest("no non-privileged POS Executive holding POS User")
+        original = frappe.session.user
+        try:
+            frappe.set_user(user)
+            self.assertFalse(
+                frappe.has_permission("Employee", "read"),
+                "the point of the fix is that HR access is NOT needed")
+            rows = get_technicians_for_grade()
+            self.assertIsInstance(rows, list)
+            for row in rows:
+                self.assertEqual(
+                    set(row) - {"grade_display", "active_jobs"},
+                    {"name", "employee_name", "technician_grade", "designation"},
+                    "the roster must stay four fields — it is a picker, not an HR record")
+        finally:
+            frappe.set_user(original)

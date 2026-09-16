@@ -2232,7 +2232,17 @@ def get_technicians_for_grade(minimum_grade=None, issue_category=None, company=N
 	and a GoGizmo employee is not a GoFix technician. Defaults to the caller's
 	own company so an unqualified call cannot enumerate the whole group.
 	"""
-	frappe.has_permission("Employee", "read", throw=True)
+	# Gate on working repair tickets, not on HR.
+	#
+	# This returns four fields — id, display name, grade, designation — for the
+	# active technicians of one company. That is a roster for a picker, not an
+	# Employee record. Demanding the Employee read DocPerm for it meant anyone
+	# who had to assign a repair also got read on every Employee field, personal
+	# details included; and it meant the counter could not assign at all, since
+	# a store user holds no HR role. Service Request read is the capability that
+	# actually applies: if you may work a repair ticket, you may see who could
+	# be assigned it.
+	frappe.has_permission("Service Request", "read", throw=True)
 
 	row_limit = get_int_setting("token_queue_limit", 200)
 	company = company or frappe.defaults.get_user_default("Company")
@@ -2245,6 +2255,11 @@ def get_technicians_for_grade(minimum_grade=None, issue_category=None, company=N
 		fields=["name", "employee_name", "technician_grade", "designation"],
 		order_by="employee_name",
 		limit_page_length=row_limit,
+		# Four fields of one company's roster, already gated above. Without
+		# this the list silently comes back empty for a counter user rather
+		# than throwing, which is worse: an empty technician picker looks like
+		# "nobody is available" instead of "you are not allowed to see this".
+		ignore_permissions=True,
 	)
 
 	grade_names = {emp.technician_grade for emp in employees if emp.technician_grade}
@@ -2255,6 +2270,9 @@ def get_technicians_for_grade(minimum_grade=None, issue_category=None, company=N
 		filters={"name": ("in", tuple(grade_names))},
 		fields=["name", "grade_name", "grade_level"],
 		limit_page_length=len(grade_names),
+		# Same reason: the grade label is part of the picker's display, and a
+		# counter user has no reason to hold a DocPerm on the grade master.
+		ignore_permissions=True,
 	) if grade_names else []
 	grade_by_name = {grade.name: grade for grade in grade_rows}
 	req_level = cint((grade_by_name.get(minimum_grade) or {}).get("grade_level", 0))

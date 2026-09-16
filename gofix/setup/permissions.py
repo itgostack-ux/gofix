@@ -128,6 +128,60 @@ def seed_operational_docperms() -> int:
     return created + updated
 
 
+# Catalogues the counter picks from when it takes a device in.
+#
+# These are read-only masters: the symptom list, the accessories handed over
+# with the phone, the reason the customer walked in, the solutions a repair can
+# resolve to. Every one of them was readable by System Manager, GoFix Floor
+# Manager and GoFix Technician only — which nobody noticed while every cashier
+# held System Manager. With that role removed the Service Intake form dies on
+# the first picker it renders: "Insufficient Permission for GoFix Accessory".
+#
+# POS User is the grant because every till profile carries it — CH Store
+# Executive, CH Store Manager and the legacy Ch POS User all include it — so one
+# row per doctype covers the whole counter population without naming profiles
+# that change.
+#
+# Read and report only, deliberately. Maintaining a catalogue stays with GoFix
+# Floor Manager; the counter only chooses from it.
+COUNTER_CATALOGUES = (
+    "GoFix Accessory",
+    "GoFix Symptom",
+    "GoFix Visit Reason",
+    "GoFix Referral Source",
+    "GoFix Cancellation Reason",
+    "GoFix Pause Reason",
+    "Repair Solution",
+    "Solution Spare Mapping",
+)
+
+#: The role every till profile grants. One grant, whole counter.
+COUNTER_ROLE = "POS User"
+
+
+#: Not a catalogue, but the counter must read it for the same reason: the
+#: intake asks "is this IMEI one of ours, or the customer's own device?" and
+#: ``ch_pos.api.repair.describe_device_serial`` answers that behind an explicit
+#: ``has_permission("Serial No", "read", throw=True)``. Without read the lookup
+#: throws before it can answer either way. Read only — the counter never
+#: creates a serial; an unmatched IMEI is recorded on the ticket instead.
+COUNTER_READ_ONLY = ("Serial No",)
+
+
+def ensure_counter_catalogue_read():
+    """Let a counter user read what the intake form makes them pick from.
+
+    Idempotent: ``seed_default_docperms`` inserts only missing rows, so an
+    administrator who has since widened or narrowed one of these is left alone.
+    """
+    from ch_erp15.ch_erp15.default_permissions import seed_default_docperms
+
+    return seed_default_docperms({
+        doctype: {COUNTER_ROLE: {"read", "report"}}
+        for doctype in COUNTER_CATALOGUES + COUNTER_READ_ONLY
+    })
+
+
 def ensure_default_permissions():
     if not frappe.db.exists("Role", "GoFix Floor Manager"):
         frappe.get_doc({
@@ -152,6 +206,7 @@ def ensure_default_permissions():
     })
 
     seed_operational_docperms()
+    ensure_counter_catalogue_read()
 
 
 # Link fields on a repair ticket that must NOT be governed by User Permissions.

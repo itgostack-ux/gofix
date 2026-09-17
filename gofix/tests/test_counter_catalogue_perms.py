@@ -147,9 +147,12 @@ class TestTechnicianPickerGate(unittest.TestCase):
         original = frappe.session.user
         try:
             frappe.set_user(user)
-            self.assertFalse(
-                frappe.has_permission("Employee", "read"),
-                "the point of the fix is that HR access is NOT needed")
+            # Deliberately NOT asserting the user lacks Employee read. This
+            # estate happens to grant it to POS User, and an earlier version of
+            # this test asserted the absence — which broke the moment that
+            # unrelated grant appeared, while saying nothing about the fix. The
+            # fix is that the picker does not REQUIRE HR access; that is what
+            # the gate assertion below pins.
             rows = get_technicians_for_grade()
             self.assertIsInstance(rows, list)
             for row in rows:
@@ -159,3 +162,17 @@ class TestTechnicianPickerGate(unittest.TestCase):
                     "the roster must stay four fields — it is a picker, not an HR record")
         finally:
             frappe.set_user(original)
+
+
+    def test_the_gate_is_service_request_not_employee(self):
+        """What the fix actually changed: assigning a repair asks whether you
+        may work a repair ticket, not whether you may read HR records."""
+        import inspect
+
+        from gofix.gofix_services.page.gofix_ops_hub.gofix_ops_hub import (
+            get_technicians_for_grade,
+        )
+
+        src = inspect.getsource(get_technicians_for_grade)
+        self.assertIn('has_permission("Service Request", "read", throw=True)', src)
+        self.assertNotIn('has_permission("Employee", "read", throw=True)', src)

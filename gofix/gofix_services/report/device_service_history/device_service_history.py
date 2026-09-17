@@ -74,10 +74,12 @@ def get_data(filters):
 	# The geography the user asked for, alongside the scope they are
 	# entitled to. Both apply: asking for a zone you cannot see returns
 	# nothing, never everything.
-	from gofix.report_filters import geo_conditions
+	# geo_clauses, not geo_conditions: ``conditions`` is a list here, and
+	# ``list += str`` appends the string one character at a time.
+	from gofix.report_filters import geo_clauses
 
-	conditions += geo_conditions(filters, company_field=None,
-	                             warehouse_field='sr.source_warehouse')
+	conditions += geo_clauses(filters, company_field=None,
+	                          warehouse_field='sr.source_warehouse')
 
 	where = " AND ".join(conditions) if conditions else "1=1"
 

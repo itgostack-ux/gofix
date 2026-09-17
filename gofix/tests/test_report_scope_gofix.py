@@ -189,18 +189,22 @@ class TestReportScopeGofix(unittest.TestCase):
         self.assertIsNone(clause)
 
     # 3 — walkin_conversion_report._get_scope_sql prefixes with " AND "
+    #
+    # The report moved to ch_pos when POS Kiosk Token became the single walk-in
+    # token for both companies; the gofix copy and its shim were deleted. It is
+    # anchored on the token (t.store / t.pos_profile), not on a Service Request.
     def test_03_walkin_scope_sql_scoped(self):
-        from gofix.gofix_services.report.walkin_conversion_report.walkin_conversion_report import (
+        from ch_pos.pos_core.report.walkin_conversion_report.walkin_conversion_report import (
             _get_scope_sql,
         )
         sql = _get_scope_sql()
         self.assertTrue(sql.startswith(" AND "))
-        self.assertIn("sr.source_warehouse", sql)
+        self.assertIn("t.store", sql)
 
     # 4 — walkin_conversion_report._get_scope_sql returns empty for bypass
     def test_04_walkin_scope_sql_bypass(self):
         frappe.set_user("Administrator")
-        from gofix.gofix_services.report.walkin_conversion_report.walkin_conversion_report import (
+        from ch_pos.pos_core.report.walkin_conversion_report.walkin_conversion_report import (
             _get_scope_sql,
         )
         self.assertEqual(_get_scope_sql(), "")
@@ -242,17 +246,13 @@ class TestReportScopeGofix(unittest.TestCase):
         result = tp_execute({})
         self.assertTrue(len(result) >= 2)
 
-    # 8 — Walkin conversion report runs for both variants (module + shim)
+    # 8 — Walkin conversion report runs scoped (one report now, no shim)
     def test_08_walkin_reports_scoped(self):
-        from gofix.gofix_services.report.walkin_conversion_report.walkin_conversion_report import (
+        from ch_pos.pos_core.report.walkin_conversion_report.walkin_conversion_report import (
             execute as wc_execute,
         )
-        from gofix.gofix_services.report.walk_in_conversion_report.walk_in_conversion_report import (
-            execute as wc_shim_execute,
-        )
-        for fn in (wc_execute, wc_shim_execute):
-            result = fn({})
-            self.assertTrue(len(result) >= 2)
+        result = wc_execute({})
+        self.assertTrue(len(result) >= 2)
 
     # 9 — Administrator bypass runs every touched report
     def test_09_administrator_bypass(self):
@@ -269,7 +269,7 @@ class TestReportScopeGofix(unittest.TestCase):
         from gofix.gofix_services.report.technician_performance.technician_performance import (
             execute as tp_execute,
         )
-        from gofix.gofix_services.report.walkin_conversion_report.walkin_conversion_report import (
+        from ch_pos.pos_core.report.walkin_conversion_report.walkin_conversion_report import (
             execute as wc_execute,
         )
         srs_execute({})
@@ -277,3 +277,43 @@ class TestReportScopeGofix(unittest.TestCase):
         ceo_execute({})
         tp_execute({})
         wc_execute({})
+
+    # 10 — every gofix report executes for a scoped, non-bypass user
+    def test_10_all_gofix_reports_execute_for_scoped_user(self):
+        """The whole report surface, not the handful named above.
+
+        gofix_first_time_fix_rate and device_service_history collect their
+        predicates in a *list* and were doing ``conditions += geo_conditions(...)``
+        — a string, appended one character at a time, producing
+        ``... AND A AND N AND D ...``. It raised a SQL syntax error for every
+        scoped user and nothing at all for Administrator, because the scope
+        clause is empty for a bypass caller. A per-report smoke run as the
+        scoped user is the only thing that sees it.
+        """
+        import importlib
+        import pkgutil
+
+        import gofix.gofix_services.report as report_pkg
+
+        failures = []
+        checked = 0
+        for mod in pkgutil.iter_modules(report_pkg.__path__):
+            if not mod.ispkg:
+                continue
+            path = f"{report_pkg.__name__}.{mod.name}.{mod.name}"
+            try:
+                execute = importlib.import_module(path).execute
+            except (ModuleNotFoundError, AttributeError):
+                continue  # a report with no python module (Query/Report Builder)
+            checked += 1
+            try:
+                execute({})
+            except Exception as exc:  # noqa: BLE001 — we want the report named
+                failures.append(f"{mod.name}: {type(exc).__name__}: {exc}"[:300])
+
+        self.assertTrue(checked, "No gofix report modules were discovered.")
+        self.assertFalse(
+            failures,
+            "Reports that fail for a scoped user (Administrator would not see "
+            f"these):\n  " + "\n  ".join(failures),
+        )

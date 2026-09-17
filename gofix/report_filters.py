@@ -60,13 +60,21 @@ def resolve_warehouses(filters) -> set | None:
     return {r.warehouse for r in rows if r.warehouse}
 
 
-def geo_conditions(filters, *, company_field=None, warehouse_field=None,
-                   user=None) -> str:
-    """A WHERE fragment for what was asked AND what the asker may see.
+def geo_clauses(filters, *, company_field=None, warehouse_field=None,
+                user=None) -> list[str]:
+    """The individual WHERE clauses for what was asked AND what the asker may see.
 
-    Returns "" when nothing narrows the query. Every fragment is parameter-free
+    Returns [] when nothing narrows the query. Every clause is parameter-free
     and quoted through ``frappe.db.escape``, because these values arrive from a
     filter dialog.
+
+    Use this from a report that collects its predicates in a list;
+    ``geo_conditions`` below is the same thing pre-joined for the reports that
+    build one long SQL string. A list-building report that appended the string
+    form instead was iterating it character by character, producing
+    ``... AND A AND N AND D ...`` — valid Python, a SQL syntax error, and
+    invisible to Administrator because the scope clause is empty for a bypass
+    caller.
     """
     filters = filters or {}
     clauses = []
@@ -103,6 +111,19 @@ def geo_conditions(filters, *, company_field=None, warehouse_field=None,
         # report still honours the filters the user set.
         pass
 
+    return clauses
+
+
+def geo_conditions(filters, *, company_field=None, warehouse_field=None,
+                   user=None) -> str:
+    """``geo_clauses`` pre-joined, with the leading ``AND`` a string-building
+    report needs. Returns "" when nothing narrows the query."""
+    clauses = geo_clauses(
+        filters,
+        company_field=company_field,
+        warehouse_field=warehouse_field,
+        user=user,
+    )
     return (" AND " + " AND ".join(clauses)) if clauses else ""
 
 

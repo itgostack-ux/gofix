@@ -103,17 +103,17 @@ def _get_or_create_ch_store(name: str, warehouse: str, company: str) -> None:
             z.zone_name = f"{name} Zone"
             z.company = company
             z.city = frappe.db.get_value("CH City", {"disabled": 0}, "name")
-            # NOT the store's own warehouse: location_hierarchy rejects a store
-            # whose warehouse is any zone's source hub ("configured as a zone hub").
-            z.source_warehouse = (
-                frappe.db.get_value(
-                    "Warehouse",
-                    {"company": company, "is_group": 1, "name": ("!=", warehouse)},
-                    "name",
-                )
-                or frappe.db.get_value(
-                    "Warehouse", {"company": company, "name": ("!=", warehouse)}, "name"
-                )
+            # A LEDGER warehouse, never a group one: location_hierarchy's
+            # _validate_hub_candidate rejects a group warehouse as a zone hub
+            # because stock cannot post to it. The old fixture asked for
+            # is_group=1 first, so on any company whose only group warehouse is
+            # the "All Warehouses" root it aborted the whole module in setUpClass.
+            # Also not the store's own warehouse: location_hierarchy rejects a
+            # store whose warehouse is some zone's source hub.
+            z.source_warehouse = frappe.db.get_value(
+                "Warehouse",
+                {"company": company, "is_group": 0, "name": ("!=", warehouse)},
+                "name",
             )
             z.flags.ignore_permissions = True
             z.insert(ignore_permissions=True)
@@ -142,7 +142,14 @@ class TestReportScopeGofix(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        cls.company = frappe.db.get_value("Company", {}, "name")
+        cls.company = (
+            frappe.defaults.get_defaults().get("company")
+            # Undefined MariaDB order otherwise: once a sibling suite has left a
+            # ZZZ-prefixed test company behind, this picked that company and
+            # every warehouse/zone fixture below was built under a shell that
+            # has no ledger warehouses.
+            or frappe.db.get_value("Company", {"name": ("not like", "ZZZ %")}, "name")
+        )
         if not cls.company:
             raise Exception("No Company in this site — cannot run Tier 4 gofix tests.")
 

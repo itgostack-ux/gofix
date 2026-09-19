@@ -103,18 +103,15 @@ def _get_or_create_ch_store(name: str, warehouse: str, company: str) -> None:
             z.zone_name = f"{name} Zone"
             z.company = company
             z.city = frappe.db.get_value("CH City", {"disabled": 0}, "name")
-            # A LEDGER warehouse, never a group one: location_hierarchy's
-            # _validate_hub_candidate rejects a group warehouse as a zone hub
-            # because stock cannot post to it. The old fixture asked for
-            # is_group=1 first, so on any company whose only group warehouse is
-            # the "All Warehouses" root it aborted the whole module in setUpClass.
-            # Also not the store's own warehouse: location_hierarchy rejects a
-            # store whose warehouse is some zone's source hub.
-            z.source_warehouse = frappe.db.get_value(
-                "Warehouse",
-                {"company": company, "is_group": 0, "name": ("!=", warehouse)},
-                "name",
-            )
+            # Build a warehouse for the hub instead of hunting for one.
+            # location_hierarchy._validate_hub_candidate refuses a candidate that
+            # is a group, disabled, a store bin, owned by a CH Store, typed
+            # anything but "Zone Warehouse", or — the one that bit us — a Transit
+            # warehouse. Asking for "the first ledger warehouse of this company"
+            # satisfied only the first of those, so on a company whose first ledger
+            # warehouse is Goods In Transit the whole module aborted in setUpClass.
+            # A freshly created Warehouse carries none of those attributes.
+            z.source_warehouse = _get_or_create_warehouse(f"{name} Zone Hub", company)
             z.flags.ignore_permissions = True
             z.insert(ignore_permissions=True)
             zone = z.name

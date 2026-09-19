@@ -3476,6 +3476,7 @@ def add_spare_to_ticket(sr_name, spare_item, qty, rate=0, repair_solution=None,
 	# a transfer when the network has the part and a purchase when it does not,
 	# and either way it goes out released — see _raise_spare_requisition.
 	requisition = None
+	purchase_request = None
 	sourced_from = None
 	plan_line = sr.spare_lines[-1]
 	if not in_stock:
@@ -3492,12 +3493,16 @@ def add_spare_to_ticket(sr_name, spare_item, qty, rate=0, repair_solution=None,
 					),
 				)
 			else:
+				# Same shape as the "raise spare requests" button: the bench
+				# asks by TRANSFER, and the draft Purchase Request behind it is
+				# how the part gets bought.
 				requisition = _raise_spare_requisition(
 					sr, [plan_line],
-					mr_type="Purchase",
+					mr_type="Material Transfer",
 					destination=warehouse,
 					reason=_("No free stock at the bench, the hubs or any other store."),
 				)
+				purchase_request = _raise_purchase_request_behind(requisition, sr)
 		except Exception:
 			# The spare line is the technician's request and must survive even if
 			# the requisition could not be raised; the ticket's spare request
@@ -3521,6 +3526,7 @@ def add_spare_to_ticket(sr_name, spare_item, qty, rate=0, repair_solution=None,
 		"stock_entry": stock_entry,
 		"approval_required": approval_required,
 		"material_request": requisition,
+		"purchase_request": purchase_request,
 		"sourced_from": sourced_from,
 	}
 
@@ -3882,11 +3888,18 @@ def _raise_spare_requisition(sr, lines, *, mr_type, destination, source_warehous
                              reason="") -> str:
 	"""Raise ONE requisition for `lines` and release it to whoever must act.
 
-	Two shapes, same document:
+	Always a ``Material Transfer``: the part is coming to the bench either way.
+	What differs is where from —
 
-	* ``Material Transfer`` — the part exists somewhere in the network and is
-	  being pulled to the bench. No money is involved; the stock is already ours.
-	* ``Purchase`` — the part exists nowhere and has to be bought.
+	* stock found in the network — pulled from that warehouse, nothing to buy;
+	* nothing free anywhere — no source warehouse, and a draft Purchase Request
+	  is raised behind it (``_raise_purchase_request_behind``) to buy the part
+	  and bring it in to the hub for distribution.
+
+	It used to raise a ``Purchase``-type request in the second case. That put
+	the ticket on a track of its own: it was never a store request, so the
+	stock team had nothing to distribute when the goods landed and the
+	Request Fulfilment Hub could not see it.
 
 	Both are released immediately (``custom_approval_status = "Approved"``,
 	then submitted) rather than parked for a stock manager. The approval gate
@@ -3919,6 +3932,12 @@ def _raise_spare_requisition(sr, lines, *, mr_type, destination, source_warehous
 	mr.title = f"Spares for {sr.name} — {sr.customer_name or sr.customer}"
 	if mr.meta.get_field("custom_request_notes"):
 		mr.custom_request_notes = reason
+	# The store the bench belongs to. Everything downstream reads it -- the
+	# Purchase Request raised behind this one, the Request Fulfilment Hub, the
+	# distribution plan that sends the part back -- and a requisition with a
+	# blank store drops out of all three.
+	if mr.meta.get_field("custom_store") and not mr.get("custom_store"):
+		mr.custom_store = frappe.db.get_value("CH Store", {"warehouse": destination}, "name")
 
 	for sl in lines:
 		row = {
@@ -3962,13 +3981,56 @@ def _raise_spare_requisition(sr, lines, *, mr_type, destination, source_warehous
 			reason,
 		),
 	)
-	if released and mr_type == "Purchase":
-		_notify_purchase_team(mr, sr)
 	return mr.name
 
 
-def _notify_purchase_team(mr, sr) -> None:
-	"""Tell whoever buys spares that a released requisition is waiting."""
+def _raise_purchase_request_behind(mr_name, sr) -> str | None:
+	"""Raise the DRAFT Purchase Request that buys a spare store request.
+
+	The store request says what the bench needs; this says how it gets bought.
+	It is created in draft, awaiting Stock Manager approval, exactly as one
+	raised from a store — the ticket does not get to skip the gate, it only
+	gets to not wait for someone to notice the shortage.
+
+	A failure here is not allowed to lose the store request: the requisition is
+	already submitted and is the technician's actual request. The reason is put
+	on the ticket instead, where whoever is watching the repair will see it.
+	"""
+	try:
+		from ch_erp15.ch_erp15.store_request_api import (
+			raise_purchase_request_for_service_request,
+		)
+	except ImportError:
+		return None
+
+	try:
+		result = raise_purchase_request_for_service_request(mr_name) or {}
+	except Exception as exc:
+		frappe.log_error(
+			frappe.get_traceback(), f"GoFix: no purchase request behind {mr_name}"
+		)
+		sr.add_comment(
+			"Comment",
+			_("Spare request {0} was raised, but the Purchase Request behind it was not: {1}. "
+			  "Raise it from the store request.").format(mr_name, exc),
+		)
+		return None
+
+	pr_name = result.get("name")
+	if pr_name:
+		try:
+			_notify_purchase_team(frappe.get_doc("Material Request", mr_name), sr,
+					      purchase_request=pr_name)
+		except Exception:
+			frappe.log_error(frappe.get_traceback(), f"GoFix: purchase team not told of {pr_name}")
+	return pr_name
+
+
+def _notify_purchase_team(mr, sr, purchase_request=None) -> None:
+	"""Tell whoever buys spares that a released requisition is waiting.
+
+	Points at the Purchase Request when there is one: that is the document
+	they act on, and the store request behind it is one click away."""
 	try:
 		from ch_erp15.ch_erp15.store_request_api import _get_purchase_team_users
 
@@ -3979,13 +4041,14 @@ def _notify_purchase_team(mr, sr) -> None:
 		return
 
 	notification = frappe.new_doc("Notification Log")
-	notification.subject = _("Spare purchase {0} released for repair {1}").format(mr.name, sr.name)
+	notification.subject = _("Spare purchase {0} released for repair {1}").format(
+		purchase_request or mr.name, sr.name)
 	notification.email_content = _(
 		"No free stock for these spares anywhere in the network, so the requisition "
 		"was released straight to purchasing. Device: {0}. Customer: {1}."
 	).format(sr.device_item_name or sr.device_item or "—", sr.customer_name or sr.customer or "—")
-	notification.document_type = "Material Request"
-	notification.document_name = mr.name
+	notification.document_type = "Purchase Request" if purchase_request else "Material Request"
+	notification.document_name = purchase_request or mr.name
 	notification.type = "Alert"
 	for user in recipients:
 		notification.for_user = user
@@ -4042,14 +4105,24 @@ def raise_material_request(sr_name) -> dict:
 		)
 		raised.append((mr_name, [row[0] for row in rows], _("transfer from {0}").format(label)))
 
+	purchase_requests = []
 	if to_buy:
+		# A part nobody has still comes to the bench as a TRANSFER request.
+		# Raising a Purchase-type Material Request here put the ticket on a
+		# track of its own: it never appeared as a store request, the stock
+		# team had nothing to distribute once the goods landed, and the buying
+		# was invisible to the Request Fulfilment Hub. The store request is the
+		# demand; the Purchase Request raised behind it is how it gets bought.
 		mr_name = _raise_spare_requisition(
 			sr, to_buy,
-			mr_type="Purchase",
+			mr_type="Material Transfer",
 			destination=warehouse,
 			reason=_("No free stock at the bench, the hubs or any other store."),
 		)
 		raised.append((mr_name, to_buy, _("purchase")))
+		pr_name = _raise_purchase_request_behind(mr_name, sr)
+		if pr_name:
+			purchase_requests.append(pr_name)
 
 	sr.flags.ignore_validate_update_after_submit = True
 	sr.flags.ignore_mandatory = True
@@ -4069,10 +4142,17 @@ def raise_material_request(sr_name) -> dict:
 		summary.append(f"{mr_name} — {items} ({kind})")
 		sr.add_comment("Comment", _("Spare request {0} raised for {1} — {2}.").format(mr_name, items, kind))
 
+	lines = [
+		f'<a href="/app/material-request/{line.split(" — ")[0]}">{line}</a>' for line in summary
+	]
+	# The purchase request is the half a buyer acts on, so it is named here
+	# rather than left to be found from the store request.
+	for pr_name in purchase_requests:
+		lines.append(
+			_('<a href="/app/purchase-request/{0}">{0}</a> — draft, awaiting stock approval').format(pr_name)
+		)
 	frappe.msgprint(
-		"<br>".join(
-			f'<a href="/app/material-request/{line.split(" — ")[0]}">{line}</a>' for line in summary
-		),
+		"<br>".join(lines),
 		title=_("Spare Requests Raised"),
 		indicator="green",
 	)
@@ -4080,6 +4160,7 @@ def raise_material_request(sr_name) -> dict:
 		"ok": True,
 		"material_requests": [mr for mr, _r, _k in raised],
 		"material_request": raised[0][0] if raised else None,
+		"purchase_requests": purchase_requests,
 		"count": len(pending_lines),
 		"transfers": len(transfers),
 		"purchases": 1 if to_buy else 0,

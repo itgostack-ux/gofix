@@ -1,7 +1,7 @@
 frappe.pages["store-queue"].on_page_load = function (wrapper) {
 	const page = frappe.ui.make_app_page({
 		parent: wrapper,
-		title: __("Store Queue"),
+		title: __("Walk-in Queue"),
 		single_column: true,
 	});
 	page.main.html(`<div id="store-queue-app"></div>`);

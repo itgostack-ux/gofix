@@ -10,12 +10,22 @@
  "owner": "Administrator",
  "page_name": "store-queue",
  "roles": [
-  {"role": "System Manager"},
-  {"role": "Service Manager"},
-  {"role": "Service Engineer"},
-  {"role": "Sales User"},
-  {"role": "Sales Manager"}
+  {
+   "role": "System Manager"
+  },
+  {
+   "role": "Service Manager"
+  },
+  {
+   "role": "Service Engineer"
+  },
+  {
+   "role": "Sales User"
+  },
+  {
+   "role": "Sales Manager"
+  }
  ],
  "system_page": 0,
- "title": "Store Queue"
+ "title": "Walk-in Queue"
 }

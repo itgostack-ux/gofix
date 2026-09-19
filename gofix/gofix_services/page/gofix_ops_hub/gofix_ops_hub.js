@@ -9,7 +9,7 @@
 frappe.pages["gofix-ops-hub"].on_page_load = function (wrapper) {
 	const page = frappe.ui.make_app_page({
 		parent: wrapper,
-		title: __("GoFix Ops Hub"),
+		title: __("Repairs Control"),
 		single_column: true,
 	});
 	// Show loading indicator immediately

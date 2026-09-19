@@ -1,7 +1,7 @@
 frappe.pages["service-hub"].on_page_load = function (wrapper) {
 	const page = frappe.ui.make_app_page({
 		parent: wrapper,
-		title: __("Service Hub"),
+		title: __("Repairs Desk"),
 		single_column: true,
 	});
 	wrapper.service_hub = new ServiceHub(page);

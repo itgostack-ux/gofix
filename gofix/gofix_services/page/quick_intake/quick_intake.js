@@ -10,7 +10,7 @@
 frappe.pages["quick-intake"].on_page_load = function (wrapper) {
 	const page = frappe.ui.make_app_page({
 		parent: wrapper,
-		title: __("Quick Intake"),
+		title: __("Book a Repair"),
 		single_column: true,
 	});
 	page.main.html(`<div id="quick-intake-app"></div>`);

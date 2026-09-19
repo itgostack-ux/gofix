@@ -12,13 +12,23 @@
  "owner": "Administrator",
  "page_name": "quick-intake",
  "roles": [
-  {"role": "System Manager"},
-  {"role": "Sales User"},
-  {"role": "Sales Manager"},
-  {"role": "Service Manager"},
-  {"role": "Service Engineer"}
+  {
+   "role": "System Manager"
+  },
+  {
+   "role": "Sales User"
+  },
+  {
+   "role": "Sales Manager"
+  },
+  {
+   "role": "Service Manager"
+  },
+  {
+   "role": "Service Engineer"
+  }
  ],
  "standard": "Yes",
  "system_page": 0,
- "title": "Quick Intake"
+ "title": "Book a Repair"
 }

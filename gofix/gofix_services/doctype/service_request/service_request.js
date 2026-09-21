@@ -289,11 +289,11 @@ frappe.ui.form.on('Service Request', {
 	
 	serial_no: function(frm) {
 		// serial_no is a free-text Data field — user may enter an IMEI not yet in the system.
-		// Use the quick-intake search_serial API which returns found=false gracefully.
+		// search_serial returns found=false gracefully rather than throwing.
 		const imei = (frm.doc.serial_no || '').trim();
 		if (!imei) return;
 
-		frappe.xcall('gofix.gofix_services.page.quick_intake.quick_intake.search_serial', {
+		frappe.xcall('gofix.gofix_services.api.search_serial', {
 			serial_no: imei
 		}).then(result => {
 			if (!result.found) {

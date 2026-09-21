@@ -56,16 +56,6 @@
   {
    "hidden": 0,
    "is_query_report": 0,
-   "label": "Quick Intake",
-   "link_count": 0,
-   "link_to": "quick-intake",
-   "link_type": "Page",
-   "onboard": 0,
-   "type": "Link"
-  },
-  {
-   "hidden": 0,
-   "is_query_report": 0,
    "label": "Store Queue",
    "link_count": 0,
    "link_to": "store-queue",
@@ -565,7 +555,7 @@
    "type": "Link"
   }
  ],
- "modified": "2026-09-08 15:00:00.000000",
+ "modified": "2026-09-21 16:00:00.000000",
  "modified_by": "Administrator",
  "module": "GoFix Services",
  "name": "GoFix",

@@ -2988,3 +2988,82 @@ def get_compatible_spare_items(doctype, txt, searchfield, start, page_len, filte
 		""",
 		values,
 	)
+
+
+# ─── Serial lookup ──────────────────────────────────────────────────────────
+#
+# Lifted out of the Quick Intake page when that page was retired. It was the
+# one thing in there anything else used: the Service Request form calls it to
+# fill a device from a scanned serial. An API that outlives its screen belongs
+# with the module's other endpoints, not inside a page directory.
+
+def _get_brand(item_code: str) -> str:
+	"""Return brand for an item, falling back to the variant template's brand."""
+	brand = frappe.db.get_value("Item", item_code, "brand") or ""
+	if not brand:
+		template = frappe.db.get_value("Item", item_code, "variant_of")
+		if template:
+			brand = frappe.db.get_value("Item", template, "brand") or ""
+	return brand
+
+
+def _require_intake_access(*read_doctypes):
+	for doctype in read_doctypes:
+		if not frappe.has_permission(doctype, ptype="read"):
+			frappe.throw(
+				_("You do not have read permission for {0}.").format(doctype),
+				frappe.PermissionError,
+			)
+
+
+@frappe.whitelist()
+def search_serial(serial_no) -> dict:
+	"""Look up serial and return device details + warranty + open SRs."""
+	_require_intake_access("Serial No", "Item", "Service Request")
+	serial_no = (serial_no or "").strip()
+	if not serial_no or len(serial_no) > 140 or not frappe.db.exists("Serial No", serial_no):
+		return {"found": False}
+
+	sn = frappe.get_doc("Serial No", serial_no)
+	sn.check_permission("read")
+	from gofix.scope_guard import assert_warehouse
+	assert_warehouse(
+		warehouse=sn.warehouse,
+		company=sn.company,
+		msg=_("This serial number is outside your assigned store scope."),
+	)
+
+	# Check warranty via ch_item_master
+	warranty_info = {"warranty_covered": False, "warranty_status": "No Warranty"}
+	try:
+		from ch_item_master.ch_item_master.warranty_api import check_warranty
+		warranty_info = check_warranty(serial_no=serial_no, company=sn.company)
+	except Exception:
+		pass
+
+	# Open service requests for this serial — scoped to the caller's stores so
+	# another store's service history for the device is not exposed.
+	from gofix.scope_guard import user_scope
+	allowed_wh, _co, bypass = user_scope()
+	sr_filters = {
+		"serial_no": serial_no,
+		"decision": ["not in", ["Completed", "Delivered", "Cancelled", "Invoiced"]],
+		"docstatus": ["<", 2],
+	}
+	if not bypass:
+		sr_filters["source_warehouse"] = ["in", list(allowed_wh) or ["__none__"]]
+	open_srs = frappe.get_all("Service Request", filters=sr_filters,
+		fields=["name", "decision", "service_date", "issue_category"], limit=5)
+	for row in open_srs:
+		row["status"] = row.decision
+
+	return {
+		"found": True,
+		"item_code": sn.item_code,
+		"item_name": sn.item_name,
+		"brand": _get_brand(sn.item_code),
+		"warranty_status": "Under Warranty" if warranty_info.get("warranty_covered") else "Out of Warranty",
+		"warranty_plan": (warranty_info.get("covering_plan") or {}).get("warranty_plan", ""),
+		"warranty_expiry": str((warranty_info.get("covering_plan") or {}).get("end_date", "")),
+		"open_requests": open_srs,
+	}

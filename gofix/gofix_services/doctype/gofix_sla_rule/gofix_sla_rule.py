@@ -4,7 +4,14 @@
 import frappe
 from frappe import _
 from frappe.model.document import Document
-from frappe.utils import flt, now_datetime, time_diff_in_hours, validate_email_address
+from frappe.utils import (
+	add_to_date,
+	cint,
+	flt,
+	now_datetime,
+	time_diff_in_hours,
+	validate_email_address,
+)
 
 from gofix.config import get_business_role_users, get_business_user_emails, get_int_setting
 
@@ -255,10 +262,74 @@ def _scoped_escalation_users(role, sr_name, *, company=_UNSET, store=_UNSET):
 	return get_business_role_users((role,), company=company, store=store)
 
 
+def _escalation_marker(level) -> str:
+	"""A stable, untranslated tag the dedupe can match on.
+
+	It is part of the visible comment rather than hidden metadata, because the
+	person reading the ticket wants to know which level fired too. Left out of
+	``_()`` on purpose: a translated marker would stop matching the comments
+	written before the language changed, and the escalation would silently
+	repeat.
+	"""
+	return f"[SLA escalation L{cint(level)}]"
+
+
+def _escalation_already_recorded(sr_name, level, within_seconds):
+	"""Has this level already been recorded for this ticket, recently?
+
+	Asked of the comment on the ticket rather than of the cache. A cache key
+	set inside a transaction that later rolls back would suppress an escalation
+	that never actually happened -- the same trap the daily standup documents.
+	The record is the dedupe; the cache in front of it is only a fast path.
+
+	The comment and not the Notification Log, because the comment is written
+	whether or not anyone was reachable. Keying off the notifications would
+	re-record every sweep on precisely the tickets that escalate to nobody.
+
+	Time-bounded rather than absolute, because an SLA that is still breached an
+	hour later is supposed to escalate again.
+	"""
+	return bool(frappe.db.sql("""
+		SELECT 1 FROM `tabComment`
+		WHERE reference_doctype = 'Service Request'
+		  AND reference_name = %(sr)s
+		  AND content LIKE %(marker)s
+		  AND creation >= %(since)s
+		LIMIT 1""",
+		{
+			"sr": sr_name,
+			"marker": f"%{_escalation_marker(level)}%",
+			"since": add_to_date(now_datetime(), seconds=-cint(within_seconds)),
+		},
+	))
+
+
 def _send_sla_alert(sr_name, sla, level, elapsed, users=None, user_emails=None):
-	"""Send in-app + optional email escalation notification for SLA breach."""
+	"""Record an SLA escalation, and tell whoever is meant to act on it.
+
+	This used to raise a realtime toast and, where configured, send an email.
+	Neither survives not being looked at: a toast reaches only a browser that
+	happens to be open at that second, and every one of the nine SLA rules on
+	this estate has ``send_email_alert`` switched off. So a breach escalated,
+	the counter went up, and nothing anywhere recorded that it had -- which is
+	how eleven escalations left no trace and twenty-nine devices sat unassigned
+	for a week with nobody told.
+
+	What makes an escalation real is the record, so there are now two, both in
+	tables of their own (``tabService Request`` is 243 columns and ~63.5KB into
+	MySQL's 65,535-byte row limit -- it cannot take another field):
+
+	  * a Notification Log per recipient, which waits in their bell until read
+	  * a comment on the ticket, so the escalation is visible to anyone who
+	    opens it and is still there when the people change
+
+	The toast stays, for whoever is looking. It is no longer the delivery.
+	"""
+	repeat_seconds = get_int_setting("sla_escalation_repeat_seconds", 3600, minimum=60)
 	key = f"sla_escalation_{level}_{sr_name}"
 	if frappe.cache.get_value(key):
+		return False
+	if _escalation_already_recorded(sr_name, level, repeat_seconds):
 		return False
 
 	role = sla.escalation_1_role if level == 1 else sla.escalation_2_role
@@ -268,12 +339,54 @@ def _send_sla_alert(sr_name, sla, level, elapsed, users=None, user_emails=None):
 	message = _("SLA Breach (Level {0}): Service Request {1} — {2:.1f}h elapsed (target: {3}h)").format(
 		level, sr_name, elapsed, sla.target_hours)
 
-	delivered = False
+	# The trail on the ticket itself, written first and unconditionally. An
+	# escalation with nobody to tell still happened, and losing the record of
+	# it is how the last one went unnoticed. This comment is also the dedupe,
+	# which is why it is written whether or not anyone was reachable -- keying
+	# off delivery instead would re-comment every fifteen minutes forever on
+	# exactly the tickets nobody is watching.
+	recorded = False
+	try:
+		frappe.get_doc({
+			"doctype": "Comment",
+			"comment_type": "Info",
+			"reference_doctype": "Service Request",
+			"reference_name": sr_name,
+			"content": "{} {} {}".format(
+				_escalation_marker(level),
+				message,
+				_("Escalated to {0}.").format(role or _("nobody configured")),
+			),
+		}).insert(ignore_permissions=True)
+		recorded = True
+	except Exception:
+		frappe.log_error(frappe.get_traceback(), f"SLA escalation comment failed for {sr_name}")
+
 	for user in users:
+		try:
+			frappe.get_doc({
+				"doctype": "Notification Log",
+				"for_user": user,
+				"type": "Alert",
+				"document_type": "Service Request",
+				"document_name": sr_name,
+				"subject": message,
+				"email_content": message,
+			}).insert(ignore_permissions=True)
+		except Exception:
+			frappe.log_error(frappe.get_traceback(), f"SLA escalation log failed for {user}")
+		# A toast as well, for whoever happens to be looking.
 		frappe.publish_realtime("msgprint",
 			{"message": message, "alert": True},
 			user=user)
-		delivered = True
+
+	if not users:
+		# A breach that reaches no one is a configuration finding, not a quiet
+		# success. The standup sweep reports its unreachable stores the same way.
+		frappe.log_error(
+			f"Service Request: {sr_name}\nLevel: {level}\nRole: {role or '(none set)'}",
+			"GoFix SLA: escalation with no recipient in scope",
+		)
 
 	# Send email if configured
 	if sla.send_email_alert:
@@ -304,17 +417,15 @@ def _send_sla_alert(sr_name, sla, level, elapsed, users=None, user_emails=None):
 					reference_name=sr_name,
 					delayed=True,
 				)
-				delivered = True
 			except Exception:
 				frappe.log_error(frappe.get_traceback(), f"SLA alert email failed for {sr_name}")
 
-	if delivered:
-		frappe.cache.set_value(
-			key,
-			1,
-			expires_in_sec=get_int_setting("sla_escalation_repeat_seconds", 3600, minimum=60),
-		)
-	return delivered
+	# Set only after something durable exists, so a rolled-back transaction
+	# cannot leave the cache claiming an escalation that is not on record. If
+	# the comment failed, nothing is suppressed and the next sweep retries.
+	if recorded:
+		frappe.cache.set_value(key, 1, expires_in_sec=repeat_seconds)
+	return recorded
 
 
 def _send_sla_warning(sr_name, sla, elapsed, tech_user=_UNSET):

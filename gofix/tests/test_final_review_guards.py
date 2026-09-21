@@ -1,4 +1,5 @@
 import inspect
+from contextlib import ExitStack
 from types import SimpleNamespace
 from unittest import TestCase
 from unittest.mock import Mock, patch
@@ -25,40 +26,52 @@ class TestFinalReviewGuards(TestCase):
 			"add_comment": Mock(),
 		})
 
-	def test_replacement_approval_rejects_caller_supplied_identity(self):
-		doc = self._replacement_doc()
-		with (
+	def _granted(self, stack, doc):
+		"""Enter the patches that put the caller *past* the DocPerm gate.
+
+		``frappe.session`` is swapped for a user who does not exist on the
+		site, so the endpoints' own ``has_permission(..., throw=True)`` would
+		refuse every one of these calls before the guard under test ran — and
+		the two identity tests below would then pass on the wrong exception.
+		The DocPerm gate is asserted separately by
+		``test_sensitive_replacement_mutations_are_post_only`` and by the
+		release-guard suites; here it is stubbed so each test proves the
+		guard it is named after.
+		"""
+		for patcher in (
 			patch.object(service_request, "require_role_setting"),
 			patch.object(service_request, "_get_locked_service_request", return_value=doc),
+			patch.object(service_request.frappe, "has_permission", return_value=True),
 			patch.object(service_request.frappe, "session", frappe._dict(user="manager@example.com")),
-			patch.object(service_request.frappe.db, "set_value") as set_value,
-			self.assertRaises(frappe.PermissionError),
 		):
-			service_request.approve_item_replacement("SR-1", approver_user="victim@example.com")
+			stack.enter_context(patcher)
+		return stack.enter_context(patch.object(service_request.frappe.db, "set_value"))
+
+	def test_replacement_approval_rejects_caller_supplied_identity(self):
+		doc = self._replacement_doc()
+		with ExitStack() as stack:
+			set_value = self._granted(stack, doc)
+			with self.assertRaises(frappe.PermissionError) as raised:
+				service_request.approve_item_replacement("SR-1", approver_user="victim@example.com")
+		self.assertIn("authenticated session", str(raised.exception))
 		set_value.assert_not_called()
 
 	def test_replacement_completion_rejects_caller_supplied_identity(self):
 		doc = self._replacement_doc()
-		with (
-			patch.object(service_request, "require_role_setting"),
-			patch.object(service_request, "_get_locked_service_request", return_value=doc),
-			patch.object(service_request.frappe, "session", frappe._dict(user="manager@example.com")),
-			patch.object(service_request.frappe.db, "set_value") as set_value,
-			self.assertRaises(frappe.PermissionError),
-		):
-			service_request.complete_item_replacement("SR-1", completed_by="victim@example.com")
+		with ExitStack() as stack:
+			set_value = self._granted(stack, doc)
+			with self.assertRaises(frappe.PermissionError) as raised:
+				service_request.complete_item_replacement("SR-1", completed_by="victim@example.com")
+		self.assertIn("authenticated session", str(raised.exception))
 		set_value.assert_not_called()
 
 	def test_replacement_completion_cannot_swap_the_approved_serial(self):
 		doc = self._replacement_doc()
-		with (
-			patch.object(service_request, "require_role_setting"),
-			patch.object(service_request, "_get_locked_service_request", return_value=doc),
-			patch.object(service_request.frappe, "session", frappe._dict(user="manager@example.com")),
-			patch.object(service_request.frappe.db, "set_value") as set_value,
-			self.assertRaises(frappe.ValidationError),
-		):
-			service_request.complete_item_replacement("SR-1", replacement_serial_no="FORGED-1")
+		with ExitStack() as stack:
+			set_value = self._granted(stack, doc)
+			with self.assertRaises(frappe.ValidationError) as raised:
+				service_request.complete_item_replacement("SR-1", replacement_serial_no="FORGED-1")
+		self.assertIn("cannot be changed", str(raised.exception))
 		set_value.assert_not_called()
 
 	def test_sensitive_replacement_mutations_are_post_only(self):

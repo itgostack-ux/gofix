@@ -21,17 +21,27 @@ class TestReleaseScaleAndScaffoldGuards(TestCase):
 		self.assertNotIn('frappe.db.get_value("Employee"', costing)
 		self.assertIn("employee_rates", costing)
 
-	def test_ops_and_token_user_enrichment_is_batched_and_bounded(self):
+	def test_ops_hub_user_enrichment_is_batched_and_bounded(self):
+		"""The Ops Hub half of this guard. The token half moved out.
+
+		This used to read ``gofix/api/token_api.py`` too. That file was deleted
+		in 4627dfc, when GoFix Token was folded into POS Kiosk Token and the
+		API moved to ch_pos -- so the guard has raised FileNotFoundError ever
+		since, which nobody saw because gofix is not in the CI app list.
+
+		The two invariants it guarded there both survived the move under new
+		names (``missing_users`` for the batched lookup, ``limit_page_length``
+		with a +1 for truncation detection). They are ch_pos's to guard now;
+		asserting on another app's source from here is what let this rot
+		unnoticed in the first place.
+		"""
 		ops = (
 			PACKAGE_ROOT
 			/ "gofix_services/page/gofix_ops_hub/gofix_ops_hub.py"
 		).read_text()
-		tokens = (PACKAGE_ROOT / "../gofix/api/token_api.py").resolve().read_text()
 		self.assertIn("ops_hub_ticket_queue_limit", ops)
 		self.assertIn("ops_hub_related_row_limit", ops)
 		self.assertNotIn("frappe.utils.get_fullname(row.changed_by)", ops)
-		self.assertIn("missing_names", tokens)
-		self.assertIn("is_truncated = len(raw_rows) > analytics_limit", tokens)
 
 	def test_authoritative_scope_failures_do_not_fall_back(self):
 		source = (PACKAGE_ROOT / "security.py").read_text()

@@ -272,15 +272,20 @@ def _send_otp(sr, otp: str) -> None:
     email = sr.get("email")
     if email:
         try:
-            frappe.sendmail(
-                recipients=[email],
-                subject=_("Device Collection OTP | {0}").format(sr.name),
-                message=_(
-                    "<p>Dear {0},</p><p>Your OTP for device collection is: "
-                    "<b style='font-size:20px;letter-spacing:3px'>{1}</b></p>"
-                    "<p>Please share it with the store when you collect your device.</p>"
-                ).format(frappe.utils.escape_html(sr.get("customer_name") or "Customer"), otp),
-                now=True,
-            )
+            # Essential mail — the customer cannot collect the device without
+            # this code, so the outbound gate must let it through.
+            from ch_erp15.email_gate import essential_mail
+
+            with essential_mail():
+                frappe.sendmail(
+                    recipients=[email],
+                    subject=_("Device Collection OTP | {0}").format(sr.name),
+                    message=_(
+                        "<p>Dear {0},</p><p>Your OTP for device collection is: "
+                        "<b style='font-size:20px;letter-spacing:3px'>{1}</b></p>"
+                        "<p>Please share it with the store when you collect your device.</p>"
+                    ).format(frappe.utils.escape_html(sr.get("customer_name") or "Customer"), otp),
+                    now=True,
+                )
         except Exception:
             frappe.log_error(frappe.get_traceback(), "Handover OTP email failed")

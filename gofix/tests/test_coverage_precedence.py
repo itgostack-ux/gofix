@@ -365,6 +365,98 @@ class TestAClaimTicketKeepsItsAuthority(unittest.TestCase):
         self.assertEqual(sr.coverage_category, "In-Warranty")
 
 
+class TestAClaimCannotBeBorrowed(unittest.TestCase):
+    """The link that now grants cover has to be the claim's own.
+
+    Before this step ``warranty_claim`` was decorative — nothing wrote it and
+    nothing much read it. It now decides whether the warranty lookup runs at
+    all and which bucket the repair is filed in, which is precisely the power
+    that made a hand-typed "Under Warranty" worth guarding. So it gets the same
+    treatment: the claim has to agree that this is its ticket and its device.
+    """
+
+    def tearDown(self):
+        frappe.db.rollback()
+
+    def _claim_for(self, serial, service_request=None):
+        company = frappe.db.get_value("Company", {}, "name")
+        customer = frappe.db.get_value("Customer", {}, "name")
+        item = frappe.db.get_value("Item", {"disabled": 0, "has_variants": 0}, "name")
+        if not (company and customer and item):
+            return None
+        claim = frappe.new_doc("CH Warranty Claim")
+        claim.claim_date = nowdate()
+        claim.claim_channel = "Store"
+        claim.company = company
+        claim.reported_at_company = company
+        claim.customer = customer
+        claim.item_code = item
+        claim.serial_no = serial
+        claim.issue_description = "Borrowed-claim fixture"
+        claim.coverage_type = "vas_plan"
+        if service_request:
+            claim.service_request = service_request
+        claim.flags.ignore_permissions = True
+        claim.flags.ignore_mandatory = True
+        claim.flags.ignore_validate = True
+        claim.flags.ignore_links = True
+        claim.insert(ignore_permissions=True)
+        return claim
+
+    def test_a_claim_raised_for_another_ticket_is_refused(self):
+        serial = _registered_serial()
+        if not serial:
+            raise unittest.SkipTest("no serialised item on this site")
+        other = _minimal_service_request()
+        if not other:
+            raise unittest.SkipTest("no ticket could be built")
+        claim = self._claim_for(serial, service_request=other.name)
+        if not claim:
+            raise unittest.SkipTest("no company / customer / item to raise a claim on")
+
+        sr = _minimal_service_request()
+        sr.serial_no = serial
+        sr.warranty_claim = claim.name
+        sr.flags.ignore_permissions = True
+        with self.assertRaises(frappe.ValidationError):
+            sr.save(ignore_permissions=True)
+
+    def test_a_claim_raised_for_another_device_is_refused(self):
+        serial = _registered_serial()
+        if not serial:
+            raise unittest.SkipTest("no serialised item on this site")
+        claim = self._claim_for("_CHTEST-SOME-OTHER-IMEI")
+        if not claim:
+            raise unittest.SkipTest("no company / customer / item to raise a claim on")
+
+        sr = _minimal_service_request()
+        sr.serial_no = serial
+        sr.warranty_claim = claim.name
+        sr.flags.ignore_permissions = True
+        with self.assertRaises(frappe.ValidationError):
+            sr.save(ignore_permissions=True)
+
+    def test_the_claim_that_created_this_ticket_is_accepted(self):
+        """The claim stamps its own `service_request` right after insert."""
+        serial = _registered_serial()
+        if not serial:
+            raise unittest.SkipTest("no serialised item on this site")
+        sr = _minimal_service_request()
+        if not sr:
+            raise unittest.SkipTest("no ticket could be built")
+        claim = self._claim_for(serial, service_request=sr.name)
+        if not claim:
+            raise unittest.SkipTest("no company / customer / item to raise a claim on")
+
+        sr.serial_no = serial
+        sr.warranty_status = UNDER_WARRANTY
+        sr.warranty_claim = claim.name
+        sr.flags.ignore_permissions = True
+        sr.save(ignore_permissions=True)
+        sr.reload()
+        self.assertEqual(sr.coverage_category, "VAS Claim")
+
+
 class TestTheClaimStampsTheTicketItCreates(unittest.TestCase):
     """The link back to the claim has to be a field, not a comment.
 

@@ -447,6 +447,7 @@ class ServiceRequest(Document):
 		# from the lookup) is what reads it -- with the detector last in the
 		# list the system's own finding could never reach its own decision.
 		self._detect_repeat_complaint()
+		self._refuse_borrowed_claim()
 		self.fetch_warranty_from_serial()
 		self.validate_withdrawal()
 		self.validate_contact_details()
@@ -960,6 +961,46 @@ class ServiceRequest(Document):
 		link covers every save after it.
 		"""
 		return bool(self.flags.get("skip_warranty_fetch") or self.get("warranty_claim"))
+
+	def _refuse_borrowed_claim(self):
+		"""A claim's authority belongs to the ticket that claim raised.
+
+		``warranty_claim`` now decides whether the warranty lookup runs at all
+		and which bucket the ticket is filed in, which makes it worth exactly
+		what a hand-typed "Under Warranty" used to be worth if anyone can point
+		it at somebody else's approved claim. The claim knows which ticket it
+		created and which device it was raised for; both have to agree.
+
+		Fails closed on a claim that cannot be read: an authority we cannot
+		verify is not an authority.
+		"""
+		claim = (self.get("warranty_claim") or "").strip()
+		if not claim:
+			return
+		row = frappe.db.get_value(
+			"CH Warranty Claim", claim, ["service_request", "serial_no"], as_dict=True
+		)
+		if not row:
+			frappe.throw(
+				_("Warranty claim {0} does not exist, so the cover on this ticket "
+				  "cannot be verified.").format(claim),
+				title=_("Claim Not Found"),
+			)
+		# Blank while the claim is still inserting the ticket -- it stamps its
+		# own `service_request` immediately afterwards.
+		if row.service_request and self.name and row.service_request != self.name:
+			frappe.throw(
+				_("Warranty claim {0} was raised for service request {1}, not this "
+				  "one. Remove the claim link, or work the repair on {1}.").format(
+					claim, row.service_request),
+				title=_("Claim Belongs to Another Ticket"),
+			)
+		if row.serial_no and self.serial_no and row.serial_no != self.serial_no:
+			frappe.throw(
+				_("Warranty claim {0} was raised for IMEI/serial {1}, but this "
+				  "ticket is for {2}.").format(claim, row.serial_no, self.serial_no),
+				title=_("Claim Is for a Different Device"),
+			)
 
 	def _claim_settlement(self) -> str:
 		"""What the linked claim decided about who pays.

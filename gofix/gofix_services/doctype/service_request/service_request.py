@@ -16,6 +16,21 @@ from frappe.utils import (
 from gofix.config import get_int_setting, get_setting, is_privileged_user, require_role_setting
 from gofix.security import assert_service_request_access
 
+# How a CH Warranty Claim's verdict maps onto the three buckets this ticket is
+# reported in. The claim's own priority order is repair_warranty >
+# anniversary_warranty > vas_plan > manufacturer_warranty > paid_repair >
+# goodwill; what matters here is only which pocket pays, and a VAS plan is the
+# one that pays through the separate claims flow rather than off our own books.
+# Anything the claim can decide that is not in this map is the customer paying.
+_CLAIM_COVERAGE_BUCKET = {
+	"vas_plan": "VAS Claim",
+	"repair_warranty": "In-Warranty",
+	"anniversary_warranty": "In-Warranty",
+	"manufacturer_warranty": "In-Warranty",
+	"goodwill": "In-Warranty",
+	"paid_repair": "Non-Warranty",
+}
+
 
 class ServiceRequest(Document):
 	_APPROVAL_EVIDENCE_FIELDS = (
@@ -427,6 +442,11 @@ class ServiceRequest(Document):
 		# Fetch warehouse details - especially state for GST
 		if self.source_warehouse:
 			self.fetch_warehouse_details()
+		# Before the warranty lookup, not after it. _detect_repeat_complaint is
+		# what sets previous_service_request, and _classify_coverage (called
+		# from the lookup) is what reads it -- with the detector last in the
+		# list the system's own finding could never reach its own decision.
+		self._detect_repeat_complaint()
 		self.fetch_warranty_from_serial()
 		self.validate_withdrawal()
 		self.validate_contact_details()
@@ -439,7 +459,6 @@ class ServiceRequest(Document):
 		self._validate_serial_substitution()
 		self._validate_service_discount()
 		self._validate_warranty_claim_cap()
-		self._detect_repeat_complaint()
 
 	def _validate_customer_estimate_decision(self):
 		if self.is_new() or self.flags.get("customer_estimate_authorized") or self.flags.get("estimate_decision_override"):
@@ -773,8 +792,20 @@ class ServiceRequest(Document):
 	def fetch_warranty_from_serial(self):
 		"""Fetch warranty status from CH Sold Plan via ch_item_master warranty API.
 		Falls back to Serial No warranty_expiry_date if no sold plans exist."""
-		# Skip if warranty was already set by a warranty claim
-		if self.flags.get("skip_warranty_fetch"):
+		# Skip if warranty was already set by a warranty claim.
+		#
+		# The flag alone was not enough. CH Warranty Claim sets it on the doc it
+		# is inserting, and a flag lives for exactly that one insert -- so the
+		# first time a GoFix staffer opened an approved claim ticket and saved
+		# it, this lookup ran, found no live device warranty behind the IMEI and
+		# downgraded the ticket to No Warranty, with a popup telling them no
+		# cover was found. The claim's decision has to survive on a field.
+		if self._claim_owns_the_warranty():
+			# ...and it still has to be filed in a bucket. Returning here without
+			# classifying left the tickets that are the clearest VAS claims on
+			# the site -- the ones an approved claim created -- with no coverage
+			# category at all.
+			self._classify_coverage()
 			return
 		if not self.serial_no:
 			self._refuse_unevidenced_warranty_claim(
@@ -921,18 +952,79 @@ class ServiceRequest(Document):
 					return plan
 		return result.get("covering_plan") or {}
 
+	def _claim_owns_the_warranty(self) -> bool:
+		"""Has an approved CH Warranty Claim already decided this ticket's cover?
+
+		Two ways of saying the same thing: the flag the claim sets on the doc it
+		inserts, and the link it leaves behind. The flag covers the insert, the
+		link covers every save after it.
+		"""
+		return bool(self.flags.get("skip_warranty_fetch") or self.get("warranty_claim"))
+
+	def _claim_settlement(self) -> str:
+		"""What the linked claim decided about who pays.
+
+		CH Warranty Claim runs its own coverage engine and records the verdict
+		as ``coverage_type``. That verdict is the settlement -- this ticket does
+		not get to re-decide it from the IMEI.
+		"""
+		claim = (self.get("warranty_claim") or "").strip()
+		if not claim:
+			return ""
+		return frappe.db.get_value("CH Warranty Claim", claim, "coverage_type") or ""
+
+	def _own_repair_warranty_is_live(self) -> bool:
+		"""Is this visit a return inside a repair warranty we granted?
+
+		Deliberately the *same* rule the estimate uses to zero the bill rather
+		than a second one that reads the same fields. A label that can disagree
+		with the money is worse than no label: it is the number a report would
+		be built on.
+		"""
+		try:
+			from gofix.estimate_policy import warranty_rework_context
+		except ImportError:
+			return False
+		try:
+			return bool(warranty_rework_context(self).get("covered"))
+		except Exception:
+			# A fault here is a code defect, not an expected condition -- but it
+			# must not stop a device being booked in.
+			frappe.log_error(
+				frappe.get_traceback(),
+				f"Rework cover check failed for {self.name or 'new Service Request'}",
+			)
+			return False
+
 	def _classify_coverage(self):
 		"""Bifurcate the ticket for routing and reporting.
 
 		Three mutually-exclusive buckets, strongest first:
-		  In-Warranty  — the repair is on our tab: a live device warranty, or
-		                 our own rework (rework is confirmed later, at estimate
-		                 time, and upgrades the label there).
+		  In-Warranty  — the repair is on our tab: a live device warranty, or a
+		                 return visit inside a repair warranty we granted.
 		  VAS Claim    — a live VAS / protection plan exists; the repair is quoted
 		                 normally and recovered through the separate claims flow.
 		  Non-Warranty — nothing covers it; the customer pays.
-		The estimate engine only zeroes a repair for In-Warranty, never VAS."""
-		if (self.warranty_status or "") == UNDER_WARRANTY:
+		The estimate engine only zeroes a repair for In-Warranty, never VAS.
+
+		The order is the business rule, not a preference: *within* the repair
+		warranty a return visit is ours to carry; *after* it, and only then, a
+		protection plan takes over. Ranking the plan first -- which is what
+		reading only ``warranty_status`` and ``active_warranty_plan`` did --
+		billed a customer's own policy for work we already owed them free, and
+		then reported it as covered.
+
+		An approved claim outranks all of it. Its coverage engine has already
+		decided who pays, and it publishes that decision as ``coverage_type``;
+		re-deriving a different answer here from the IMEI is how an approved
+		claim ends up filed as a paid repair.
+		"""
+		settlement = self._claim_settlement()
+		if settlement:
+			cat = _CLAIM_COVERAGE_BUCKET.get(settlement, "Non-Warranty")
+		elif (self.warranty_status or "") == UNDER_WARRANTY:
+			cat = "In-Warranty"
+		elif self._own_repair_warranty_is_live():
 			cat = "In-Warranty"
 		elif self.get("active_warranty_plan"):
 			cat = "VAS Claim"

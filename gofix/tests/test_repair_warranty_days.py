@@ -142,9 +142,15 @@ class TestRepairWarrantyDays(unittest.TestCase):
         blank as zero would take every repair on the estate to no cover.
         """
         sr = self._ticket(SCREEN)
-        spare = frappe.db.get_value(
-            "Item", {"disabled": 0, "is_stock_item": 1,
-                     "gofix_part_warranty_days": ("in", (0, None))}, "name")
+        spare = frappe.db.sql(
+            """SELECT name FROM `tabItem`
+               WHERE IFNULL(disabled, 0) = 0 AND is_stock_item = 1
+                 AND IFNULL(has_variants, 0) = 0
+                 AND IFNULL(gofix_part_warranty_days, 0) = 0
+               ORDER BY name LIMIT 1""",
+            pluck=True,
+        )
+        spare = spare[0] if spare else None
         if not spare:
             self.skipTest("no spare without a part warranty on this site")
         sr.append("spare_lines", {"spare_item": spare, "qty": 1, "status": "Issued"})

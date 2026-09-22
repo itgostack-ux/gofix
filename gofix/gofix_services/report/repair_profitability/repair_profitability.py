@@ -28,6 +28,11 @@ def get_columns():
 		{"label": _("Total Cost (₹)"), "fieldname": "total_repair_cost", "fieldtype": "Currency", "width": 110},
 		{"label": _("Margin (₹)"), "fieldname": "repair_margin", "fieldtype": "Currency", "width": 100},
 		{"label": _("Margin %"), "fieldname": "repair_margin_pct", "fieldtype": "Percent", "width": 100},
+		# Who pays, as the system derived it. cost_bearer sits beside it and is
+		# a hand-keyed Select that nothing in the codebase ever writes, so it is
+		# blank on effectively every repair -- this column is the one that can
+		# be trusted, and it is the one to group by.
+		{"label": _("Who Pays"), "fieldname": "coverage_category", "fieldtype": "Data", "width": 120},
 		{"label": _("Cost Bearer"), "fieldname": "cost_bearer", "fieldtype": "Data", "width": 130},
 		{"label": _("Warranty"), "fieldname": "warranty_status", "fieldtype": "Data", "width": 110},
 	]
@@ -84,6 +89,7 @@ def get_data(filters):
 			COALESCE(NULLIF(sr.repair_margin, 0), so.repair_margin, 0) as repair_margin,
 			COALESCE(NULLIF(sr.repair_margin_pct, 0), so.repair_margin_pct, 0)
 				as repair_margin_pct,
+			COALESCE(NULLIF(sr.coverage_category, ''), 'Unclassified') as coverage_category,
 			COALESCE(NULLIF(sr.cost_bearer, ''), so.cost_bearer, '') as cost_bearer,
 			COALESCE(NULLIF(sr.warranty_status, ''), so.warranty_status, '')
 				as warranty_status

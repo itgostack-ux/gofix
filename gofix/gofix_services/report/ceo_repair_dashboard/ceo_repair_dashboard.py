@@ -43,6 +43,9 @@ def get_columns():
 		 "fieldtype": "Currency", "width": 110},
 		{"label": _("Rework Count"), "fieldname": "rework_count",
 		 "fieldtype": "Int", "width": 80},
+		# Derived coverage, next to the hand-keyed cost_bearer that nothing
+		# writes. A CEO view that reports only the blank field reports nothing.
+		{"label": _("Who Pays"), "fieldname": "coverage_category", "width": 115},
 		{"label": _("Cost Bearer"), "fieldname": "cost_bearer", "width": 110},
 		{"label": _("Warranty"), "fieldname": "warranty_status", "width": 100},
 		{"label": _("Repair Outcome"), "fieldname": "repair_outcome", "width": 110},
@@ -111,6 +114,7 @@ def get_data(filters):
 			COALESCE(NULLIF(sr.technician_damage_cost, 0), so.technician_damage_cost, 0)
 				as technician_damage_cost,
 			COALESCE(NULLIF(sr.rework_count, 0), so.rework_count, 0) as rework_count,
+			COALESCE(NULLIF(sr.coverage_category, ''), 'Unclassified') as coverage_category,
 			COALESCE(NULLIF(sr.cost_bearer, ''), so.cost_bearer, '') as cost_bearer,
 			COALESCE(NULLIF(sr.warranty_status, ''), so.warranty_status, '')
 				as warranty_status,

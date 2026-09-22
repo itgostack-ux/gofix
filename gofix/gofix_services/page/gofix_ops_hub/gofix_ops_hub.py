@@ -439,8 +439,16 @@ def get_device_label(sr_name, copies=1) -> dict:
 # ── Ticket Queue ──────────────────────────────────────────────────────────────
 
 @frappe.whitelist()
-def get_ticket_queue(warehouse=None, search=None, date_from=None, date_to=None, stage_filter="active", company=None) -> list:
-	"""Return annotated SR list for the sidebar ticket queue."""
+def get_ticket_queue(warehouse=None, search=None, date_from=None, date_to=None, stage_filter="active", company=None, coverage=None) -> list:
+	"""Return annotated SR list for the sidebar ticket queue.
+
+	``coverage`` narrows to one coverage_category -- In-Warranty, VAS Claim or
+	Non-Warranty. Who pays decides how a ticket is handled long before the
+	invoice: an In-Warranty job must not be quoted, a VAS Claim has to be
+	recovered from the plan, and only Non-Warranty gets a customer estimate.
+	The classification was already derived on every ticket and shown nowhere,
+	so the board that dispatches the work could not sort by it.
+	"""
 	frappe.has_permission("Service Request", "read", throw=True)
 	company = _active_company(company)
 	queue_limit = min(get_int_setting("ops_hub_ticket_queue_limit", 150), 2000)
@@ -481,10 +489,16 @@ def get_ticket_queue(warehouse=None, search=None, date_from=None, date_to=None, 
 		if warehouse:
 			filters.append(["source_warehouse", "=", warehouse])
 
+		if coverage and frappe.db.has_column("Service Request", "coverage_category"):
+			filters.append(["coverage_category", "=", coverage])
+
 	extra_fields = []
-	# analysis_confirmed and customer_confirmed are custom fields
+	# analysis_confirmed and customer_confirmed are custom fields.
+	# coverage_category is written through _set_optional_field, so it is guarded
+	# the same way rather than assumed present.
 	for cf in ("analysis_confirmed", "customer_confirmed",
-			"promised_completion_datetime", "actual_completion_date"):
+			"promised_completion_datetime", "actual_completion_date",
+			"coverage_category"):
 		if frappe.db.has_column("Service Request", cf):
 			extra_fields.append(cf)
 

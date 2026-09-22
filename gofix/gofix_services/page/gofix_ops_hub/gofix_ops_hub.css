@@ -976,3 +976,28 @@
 	flex: 0 0 auto;
 	white-space: nowrap;
 }
+
+/* ── Coverage badge — who pays for this repair ──────────────────────────────
+   Three states, and the colour has to say which pocket without being read:
+   green we carry it, amber recover it from a plan, grey the customer pays.
+   Deliberately not the stage-badge palette — a dispatcher scanning the board
+   must not confuse "In-Warranty" with a workflow stage. */
+.goh-cov-badge {
+	display: inline-block;
+	margin-left: 6px;
+	padding: 1px 6px;
+	border-radius: 9px;
+	font-size: 10px;
+	font-weight: 600;
+	line-height: 15px;
+	white-space: nowrap;
+	border: 1px solid transparent;
+}
+.goh-cov-warranty { background: #dcfce7; color: #166534; border-color: #86efac; }
+.goh-cov-claim    { background: #fef3c7; color: #92400e; border-color: #fcd34d; }
+.goh-cov-paid     { background: #f1f5f9; color: #475569; border-color: #cbd5e1; }
+/* Same three meanings on a dark board — the light fills go to translucent
+   tints so the badge reads as a tag, not a block of colour. */
+[data-theme="dark"] .goh-cov-warranty { background: rgba(34,197,94,0.16);  color: #86efac; border-color: rgba(134,239,172,0.35); }
+[data-theme="dark"] .goh-cov-claim    { background: rgba(245,158,11,0.16); color: #fcd34d; border-color: rgba(252,211,77,0.35); }
+[data-theme="dark"] .goh-cov-paid     { background: rgba(148,163,184,0.16); color: #cbd5e1; border-color: rgba(203,213,225,0.30); }

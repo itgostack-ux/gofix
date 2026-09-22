@@ -49,6 +49,15 @@ const STAGE_BADGE = {
 	draft:     { label: "Draft",     cls: "badge-muted" },
 };
 
+// Who pays for this repair. Derived on the ticket by _classify_coverage and,
+// until now, shown nowhere the dispatcher looks — so a job we already owed the
+// customer free looked exactly like one they were about to be quoted for.
+const COVERAGE_BADGE = {
+	"In-Warranty":  { label: "In-Warranty",  cls: "goh-cov-warranty", title: "We carry this one" },
+	"VAS Claim":    { label: "VAS Claim",    cls: "goh-cov-claim",    title: "Recover from the protection plan" },
+	"Non-Warranty": { label: "Non-Warranty", cls: "goh-cov-paid",     title: "Customer pays" },
+};
+
 const PRIORITY_COLOR = { Urgent: "#dc2626", High: "#f59e0b", Medium: "#3b82f6", Low: "#94a3b8" };
 const API = "gofix.gofix_services.page.gofix_ops_hub.gofix_ops_hub";
 
@@ -191,13 +200,19 @@ class GoFixOpsHub {
 					<option value="Medium">${__("Medium")}</option>
 					<option value="Low">${__("Low")}</option>
 				</select>
+				<select class="form-control input-xs goh-tb-coverage" title="${__("Who pays")}">
+					<option value="">${__("All Coverage")}</option>
+					<option value="In-Warranty">${__("In-Warranty")}</option>
+					<option value="VAS Claim">${__("VAS Claim")}</option>
+					<option value="Non-Warranty">${__("Non-Warranty")}</option>
+				</select>
 				<input type="date" class="form-control input-xs goh-tb-date-from" value="${d60ago}" title="${__("From Date")}">
 				<input type="date" class="form-control input-xs goh-tb-date-to" value="${today}" title="${__("To Date")}">
 			</div>
 		`);
 
 		// Bind toolbar events
-		this.page.wrapper.find(".goh-tb-warehouse, .goh-tb-stage, .goh-tb-priority").on("change", () => this._load_queue());
+		this.page.wrapper.find(".goh-tb-warehouse, .goh-tb-stage, .goh-tb-priority, .goh-tb-coverage").on("change", () => this._load_queue());
 		this.page.wrapper.find(".goh-tb-date-from, .goh-tb-date-to").on("change", () => this._load_queue());
 	}
 
@@ -236,6 +251,7 @@ class GoFixOpsHub {
 		const warehouse = toolbar.find(".goh-tb-warehouse").val() || "";
 		const stage = toolbar.find(".goh-tb-stage").val() || "active";
 		const priority = toolbar.find(".goh-tb-priority").val() || "";
+		const coverage = toolbar.find(".goh-tb-coverage").val() || "";
 		const search = this.parent.find(".goh-search-input").val() || "";
 		const date_from = toolbar.find(".goh-tb-date-from").val() || "";
 		const date_to = toolbar.find(".goh-tb-date-to").val() || "";
@@ -244,7 +260,16 @@ class GoFixOpsHub {
 		try {
 			let data = await frappe.xcall(`${API}.get_ticket_queue`, {
 				warehouse, search, stage_filter: stage, date_from, date_to, company,
+				coverage,
 			});
+
+			// A search deliberately ignores the server-side narrowing so any
+			// ticket can be found by name — so the coverage choice has to be
+			// re-applied here, or picking one and then searching silently
+			// widens the board back out.
+			if (coverage && search) {
+				data = data.filter(r => (r.coverage_category || "") === coverage);
+			}
 
 			// Client-side priority filter
 			if (priority) {
@@ -321,6 +346,7 @@ class GoFixOpsHub {
 		const pcolor = PRIORITY_COLOR[sr.priority] || "#94a3b8";
 		const active = sr.name === this.selectedSR ? "goh-q-active" : "";
 		const device = sr.device_item_name || sr.device_item || "";
+		const cov = COVERAGE_BADGE[sr.coverage_category];
 		const sla = this._sla_indicator(sr);
 
 		return `
@@ -337,6 +363,7 @@ class GoFixOpsHub {
 				</div>
 				<div class="goh-q-row3">
 					<span class="goh-q-device">${esc(device)}</span>
+					${cov ? `<span class="goh-cov-badge ${cov.cls}" title="${esc(__(cov.title))}">${esc(__(cov.label))}</span>` : ""}
 					${sla}
 				</div>
 				<div class="goh-q-row3">

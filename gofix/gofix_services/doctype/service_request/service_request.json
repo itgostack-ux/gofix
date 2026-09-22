@@ -519,14 +519,14 @@
    "read_only": 1
   },
   {
+   "description": "How this ticket is settled: Non-Warranty (customer pays), In-Warranty (our tab \u2014 device warranty or our rework, estimate zeroed), or VAS Claim (settled via the separate claims flow, repair quoted normally).",
    "fieldname": "coverage_category",
    "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
    "label": "Coverage Category",
    "options": "Non-Warranty\nIn-Warranty\nVAS Claim",
-   "read_only": 1,
-   "in_standard_filter": 1,
-   "in_list_view": 1,
-   "description": "How this ticket is settled: Non-Warranty (customer pays), In-Warranty (our tab \u2014 device warranty or our rework, estimate zeroed), or VAS Claim (settled via the separate claims flow, repair quoted normally)."
+   "read_only": 1
   },
   {
    "fieldname": "warranty_expiry_date",
@@ -1101,80 +1101,80 @@
    "read_only": 1
   },
   {
+   "description": "A repair is frozen once it has been billed. Reopening it is a recorded, reversible act rather than an edit.",
    "fieldname": "billing_lock_section",
    "fieldtype": "Section Break",
-   "label": "Billing & Reopen",
-   "description": "A repair is frozen once it has been billed. Reopening it is a recorded, reversible act rather than an edit."
+   "label": "Billing & Reopen"
   },
   {
+   "allow_on_submit": 1,
+   "description": "Every invoice raised against this repair. One repair may be billed more than once when work is added after a reopen.",
    "fieldname": "service_invoices",
    "fieldtype": "Table",
-   "options": "GoFix Service Invoice Line",
    "label": "Invoices",
-   "read_only": 1,
-   "description": "Every invoice raised against this repair. One repair may be billed more than once when work is added after a reopen.",
-   "allow_on_submit": 1
+   "options": "GoFix Service Invoice Line",
+   "read_only": 1
   },
   {
+   "allow_on_submit": 1,
+   "default": "0",
+   "description": "Set the moment a submitted invoice exists. While set, this request and its Service Order cannot be edited.",
    "fieldname": "is_billing_locked",
    "fieldtype": "Check",
-   "default": "0",
    "label": "Billing Locked",
-   "read_only": 1,
-   "description": "Set the moment a submitted invoice exists. While set, this request and its Service Order cannot be edited.",
-   "allow_on_submit": 1
+   "read_only": 1
   },
   {
+   "allow_on_submit": 1,
+   "default": "0",
    "fieldname": "reopen_count",
    "fieldtype": "Int",
-   "default": "0",
    "label": "Times Reopened",
-   "read_only": 1,
-   "allow_on_submit": 1
+   "read_only": 1
   },
   {
    "fieldname": "column_break_reopen",
    "fieldtype": "Column Break"
   },
   {
+   "allow_on_submit": 1,
+   "default": "0",
+   "description": "Lifts the billing lock so the repair can be worked again. Cleared when it is billed.",
    "fieldname": "reopen_active",
    "fieldtype": "Check",
-   "default": "0",
    "label": "Reopen In Progress",
-   "read_only": 1,
-   "description": "Lifts the billing lock so the repair can be worked again. Cleared when it is billed.",
-   "allow_on_submit": 1
-  },
-  {
-   "fieldname": "reopen_reason",
-   "fieldtype": "Small Text",
-   "label": "Current Reopen Reason",
-   "read_only": 1,
-   "allow_on_submit": 1
-  },
-  {
-   "fieldname": "last_reopened_by",
-   "fieldtype": "Link",
-   "options": "User",
-   "label": "Last Reopened By",
-   "read_only": 1,
-   "allow_on_submit": 1
-  },
-  {
-   "fieldname": "last_reopened_at",
-   "fieldtype": "Datetime",
-   "label": "Last Reopened At",
-   "read_only": 1,
-   "allow_on_submit": 1
+   "read_only": 1
   },
   {
    "allow_on_submit": 1,
+   "fieldname": "reopen_reason",
+   "fieldtype": "Small Text",
+   "label": "Current Reopen Reason",
+   "read_only": 1
+  },
+  {
+   "allow_on_submit": 1,
+   "fieldname": "last_reopened_by",
+   "fieldtype": "Link",
+   "label": "Last Reopened By",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "allow_on_submit": 1,
+   "fieldname": "last_reopened_at",
+   "fieldtype": "Datetime",
+   "label": "Last Reopened At",
+   "read_only": 1
+  },
+  {
+   "allow_on_submit": 1,
+   "bold": 1,
    "default": "0",
    "fieldname": "data_backup_disclaimer",
    "fieldtype": "Check",
    "label": "Customer Acknowledges Data May Be Lost",
-   "reqd": 0,
-   "bold": 1
+   "reqd": 0
   },
   {
    "allow_on_submit": 1,
@@ -1197,7 +1197,7 @@
   },
   {
    "allow_on_submit": 1,
-   "default": "30",
+   "description": "Leave blank to take the warranty from the work done \u2014 the shorter of the repair solution's labour warranty and the fitted part's warranty. Fill it only to override that for this ticket.",
    "fieldname": "repair_warranty_days",
    "fieldtype": "Int",
    "label": "Repair Warranty (Days)"
@@ -1450,35 +1450,35 @@
    "read_only": 1
   },
   {
+   "bold": 1,
    "fieldname": "device_category",
    "fieldtype": "Link",
-   "options": "CH Category",
    "label": "Category",
-   "reqd": 0,
-   "bold": 1
+   "options": "CH Category",
+   "reqd": 0
   },
   {
+   "bold": 1,
    "fieldname": "device_brand",
    "fieldtype": "Link",
-   "options": "Brand",
    "label": "Brand",
-   "reqd": 0,
-   "bold": 1
+   "options": "Brand",
+   "reqd": 0
   },
   {
+   "bold": 1,
    "fieldname": "device_model",
    "fieldtype": "Link",
-   "options": "CH Model",
    "label": "Model",
-   "reqd": 0,
-   "bold": 1
+   "options": "CH Model",
+   "reqd": 0
   },
   {
+   "allow_on_submit": 1,
    "fieldname": "accessories_list",
    "fieldtype": "Table MultiSelect",
-   "options": "GoFix Accessory Line",
    "label": "Accessories Received",
-   "allow_on_submit": 1
+   "options": "GoFix Accessory Line"
   },
   {
    "fieldname": "section_service_outcome",
@@ -1486,115 +1486,115 @@
    "label": "Service Outcome"
   },
   {
+   "allow_on_submit": 1,
    "fieldname": "service_outcome",
    "fieldtype": "Select",
-   "label": "Service Outcome",
-   "options": "\nSuccessful\nPartially Successful\nNot Repairable\nReturned Unrepaired",
    "in_standard_filter": 1,
-   "allow_on_submit": 1
+   "label": "Service Outcome",
+   "options": "\nSuccessful\nPartially Successful\nNot Repairable\nReturned Unrepaired"
   },
   {
+   "allow_on_submit": 1,
+   "depends_on": "eval:doc.service_outcome",
    "fieldname": "service_outcome_notes",
    "fieldtype": "Small Text",
-   "label": "Technician Remarks",
-   "depends_on": "eval:doc.service_outcome",
-   "allow_on_submit": 1
+   "label": "Technician Remarks"
   },
   {
    "fieldname": "column_break_service_outcome",
    "fieldtype": "Column Break"
   },
   {
+   "allow_on_submit": 1,
    "fieldname": "service_outcome_by",
    "fieldtype": "Link",
-   "options": "User",
    "label": "Confirmed By",
-   "read_only": 1,
-   "allow_on_submit": 1
+   "options": "User",
+   "read_only": 1
   },
   {
+   "allow_on_submit": 1,
    "fieldname": "service_outcome_on",
    "fieldtype": "Datetime",
    "label": "Confirmed On",
-   "read_only": 1,
-   "allow_on_submit": 1
+   "read_only": 1
   },
   {
+   "allow_on_submit": 1,
    "fieldname": "estimate_exception_request",
    "fieldtype": "Link",
-   "options": "CH Exception Request",
    "label": "Estimate Override Exception",
-   "read_only": 1,
-   "allow_on_submit": 1
+   "options": "CH Exception Request",
+   "read_only": 1
   },
   {
+   "allow_on_submit": 1,
    "fieldname": "approved_estimate_override",
    "fieldtype": "Currency",
    "label": "Approved Estimate Override",
-   "read_only": 1,
-   "allow_on_submit": 1
+   "read_only": 1
   },
   {
+   "allow_on_submit": 1,
+   "description": "Rate-card total the override was approved against. If the chosen repairs change, the approval no longer covers the new scope.",
    "fieldname": "estimate_override_baseline",
    "fieldtype": "Currency",
    "label": "Override Approved Against",
-   "read_only": 1,
-   "allow_on_submit": 1,
-   "description": "Rate-card total the override was approved against. If the chosen repairs change, the approval no longer covers the new scope."
+   "read_only": 1
   },
   {
+   "allow_on_submit": 1,
+   "description": "Captured when the device is received. Validity is judged on the intake date, so a later invoice still honours it.",
    "fieldname": "coupon_code",
    "fieldtype": "Link",
-   "options": "Coupon Code",
    "label": "Coupon / Voucher Presented",
-   "allow_on_submit": 1,
-   "description": "Captured when the device is received. Validity is judged on the intake date, so a later invoice still honours it."
+   "options": "Coupon Code"
   },
   {
+   "allow_on_submit": 1,
    "fieldname": "coupon_captured_on",
    "fieldtype": "Datetime",
    "label": "Coupon Captured On",
-   "read_only": 1,
-   "allow_on_submit": 1
+   "read_only": 1
   },
   {
+   "allow_on_submit": 1,
    "fieldname": "device_unlock_type",
    "fieldtype": "Select",
    "label": "Screen Lock",
-   "options": "\nNone\nPIN\nPattern\nPassword\nBiometric Only",
-   "allow_on_submit": 1
+   "options": "\nNone\nPIN\nPattern\nPassword\nBiometric Only"
   },
   {
-   "fieldname": "device_unlock_code",
-   "fieldtype": "Data",
-   "label": "Unlock PIN / Pattern / Password",
    "allow_on_submit": 1,
    "depends_on": "eval:doc.device_unlock_type && doc.device_unlock_type!='None'",
-   "description": "Needed to test the repair. For a pattern, record the dot sequence (e.g. 1-2-3-6-9)."
+   "description": "Needed to test the repair. For a pattern, record the dot sequence (e.g. 1-2-3-6-9).",
+   "fieldname": "device_unlock_code",
+   "fieldtype": "Data",
+   "label": "Unlock PIN / Pattern / Password"
   },
   {
+   "allow_on_submit": 1,
+   "depends_on": "coupon_code",
    "fieldname": "coupon_scope",
    "fieldtype": "Select",
    "label": "Coupon Applies To",
-   "options": "\nEntire Invoice\nSpecific Repair",
-   "allow_on_submit": 1,
-   "depends_on": "coupon_code"
+   "options": "\nEntire Invoice\nSpecific Repair"
   },
   {
+   "allow_on_submit": 1,
+   "depends_on": "eval:doc.coupon_scope=='Specific Repair'",
    "fieldname": "coupon_solution",
    "fieldtype": "Link",
-   "options": "Repair Solution",
    "label": "Discounted Repair",
-   "allow_on_submit": 1,
-   "depends_on": "eval:doc.coupon_scope=='Specific Repair'"
+   "options": "Repair Solution"
   },
   {
+   "allow_on_submit": 1,
+   "depends_on": "coupon_code",
    "fieldname": "coupon_discount_amount",
    "fieldtype": "Currency",
    "label": "Coupon Discount",
-   "read_only": 1,
-   "allow_on_submit": 1,
-   "depends_on": "coupon_code"
+   "read_only": 1
   }
  ],
  "index_web_pages_for_search": 1,

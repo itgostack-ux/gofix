@@ -1102,11 +1102,22 @@ class ServiceRequest(Document):
 		for longer. Falls back to the site default when nothing is configured.
 		"""
 		terms = []
+		# Whether any work was actually performed, as opposed to whether any of
+		# it carried a warranty. The two are not the same, and conflating them
+		# is what let a diagnosis-only ticket inherit the site default.
+		work_done = False
 
 		for row in self.get("solution_lines") or []:
 			if row.status in ("Cancelled", "Skipped") or not row.repair_solution:
 				continue
+			work_done = True
 			days = frappe.db.get_value("Repair Solution", row.repair_solution, "warranty_days")
+			# A solution always declares its own warranty, so zero means zero:
+			# nine of the catalogue's thirty-seven are diagnostics, data
+			# recovery and FRP unlock, and none of those is warrantable. It is
+			# left out of `terms` rather than pushed in as 0 because a ticket
+			# that both diagnoses and replaces a screen still warrants the
+			# screen -- taking min() across the two would cancel it.
 			if days:
 				terms.append(int(days))
 
@@ -1114,11 +1125,21 @@ class ServiceRequest(Document):
 			if row.status in ("Returned", "Damaged") or not row.spare_item:
 				continue
 			days = frappe.db.get_value("Item", row.spare_item, "gofix_part_warranty_days")
+			# Parts are the other way round: the field is populated only where a
+			# supplier actually gives a warranty, so a blank is "no part-specific
+			# term", not "no cover". A part never shortens cover by saying
+			# nothing -- only by saying a smaller number.
 			if days:
 				terms.append(int(days))
 
 		if terms:
 			return min(terms)
+		if work_done:
+			# Work was done and every line of it is unwarrantable. That is a real
+			# answer, not a missing one, and the site default must not overwrite
+			# it: a ticket that only diagnosed a fault was granting a month of
+			# free rework on a repair that never happened.
+			return 0
 		return get_int_setting("default_repair_warranty_days", 30)
 
 	def ensure_completion_artifacts(self):

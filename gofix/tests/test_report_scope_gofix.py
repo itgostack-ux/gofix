@@ -152,6 +152,14 @@ class TestReportScopeGofix(unittest.TestCase):
 
         cls.wh_in_scope = _get_or_create_warehouse("Tier4 Gofix A WH", cls.company)
         _get_or_create_ch_store(_TEST_STORE, cls.wh_in_scope, cls.company)
+        # Before _ensure_user, not after. This module commits its fixtures, so
+        # the test user survives between runs carrying role_profile_name; if the
+        # profile itself has since gone (another suite, a cleanup, a rewrite of
+        # the site's Role Profiles), saving that user throws LinkValidationError
+        # on a dangling link and setUpClass dies before _make_scope -- which is
+        # the only thing that would have recreated the profile. The module had
+        # been erroring at zero tests run for exactly that reason.
+        _ensure_role_profile()
         _ensure_user(_TEST_USER)
         _make_scope(_TEST_USER, _TEST_STORE, cls.company)
         clear_scope_cache(_TEST_USER)

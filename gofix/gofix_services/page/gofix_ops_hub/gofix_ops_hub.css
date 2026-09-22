@@ -952,3 +952,27 @@
 /* The assign row: label, hours and button share a baseline rather than each
    sitting at whatever height its own control happens to be. */
 .goh-est-hours-note { line-height: 1.3; }
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Customer tab — a row of controls that acts on the ticket
+
+   One input beside its button, wrapping to a stacked pair on a narrow
+   counter screen rather than squeezing the field down to nothing. The input
+   takes the slack so the button keeps its label at every width.
+   ───────────────────────────────────────────────────────────────────────── */
+.goh-inline-form {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px;
+}
+
+.goh-inline-form .form-control {
+	flex: 1 1 200px;
+	min-width: 0;
+}
+
+.goh-inline-form .btn {
+	flex: 0 0 auto;
+	white-space: nowrap;
+}

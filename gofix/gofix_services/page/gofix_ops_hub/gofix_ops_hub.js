@@ -443,17 +443,20 @@ class GoFixOpsHub {
 				<div class="goh-tabs-bar" id="goh-tabs">
 					<button class="goh-tab goh-tab-active" data-tab="work"><i class="fa fa-tasks"></i> ${__("Work")}</button>
 					<button class="goh-tab" data-tab="device"><i class="fa fa-mobile"></i> ${__("Device")}</button>
+					<button class="goh-tab" data-tab="customer"><i class="fa fa-user-o"></i> ${__("Customer")}</button>
 					<button class="goh-tab" data-tab="timeline"><i class="fa fa-clock-o"></i> ${__("Timeline")}</button>
 					<button class="goh-tab" data-tab="notes"><i class="fa fa-sticky-note-o"></i> ${__("Notes")}</button>
 				</div>
 				<div class="goh-tab-content" id="goh-tab-work">${contentHtml}</div>
 				<div class="goh-tab-content goh-hidden" id="goh-tab-device">${this._html_device_tab(d)}</div>
+				<div class="goh-tab-content goh-hidden" id="goh-tab-customer">${this._html_customer_tab(d)}</div>
 				<div class="goh-tab-content goh-hidden" id="goh-tab-timeline">${this._html_timeline_tab(d)}</div>
 				<div class="goh-tab-content goh-hidden" id="goh-tab-notes">${this._html_notes_tab(d)}</div>
 			</div>
 		`);
 
 		this._bind_tabs();
+		this._bind_customer_tab(d);
 		this._bind_stepper_nav(d);
 		this._bind_step_events(d);
 		this._bind_not_repairable(d);
@@ -797,6 +800,206 @@ class GoFixOpsHub {
 		$(btn).addClass("goh-tab-active");
 		this.parent.find(".goh-tab-content").addClass("goh-hidden");
 		this.parent.find(`#goh-tab-${tab}`).removeClass("goh-hidden");
+	}
+
+	/* ═══════════════════════════════════════════════════════════════════════ */
+	/*  Customer Tab — loaner, appointment, feedback                          */
+	/* ═══════════════════════════════════════════════════════════════════════ */
+	/**
+	 * The three things that happen to the customer rather than to the device.
+	 *
+	 * All three servers existed already — issue_loaner, book_appointment,
+	 * record_feedback are whitelisted, guarded and tested — and none of them
+	 * was called from anywhere. A courtesy device could go out with nothing on
+	 * the ticket to say so, and nobody was ever asked how the repair went.
+	 * This tab is the caller.
+	 *
+	 * They sit together because they share an audience: everything here is
+	 * about the person at the counter, not the handset on the bench.
+	 */
+	_html_customer_tab(d) {
+		const esc = frappe.utils.escape_html;
+		const c = d.care || {};
+		const dt = (v) => (v ? frappe.datetime.str_to_user(v) : "");
+
+		// ── Loaner ────────────────────────────────────────────────────────
+		let loaner;
+		if (c.loaner_status === "Issued") {
+			loaner = `
+				<div class="goh-kv-grid">
+					<div class="goh-kv"><span class="goh-kv-label">${__("Serial / IMEI")}</span>
+						<span class="goh-kv-value" style="font-family:monospace;font-weight:700">${esc(c.loaner_serial_no)}</span></div>
+					<div class="goh-kv"><span class="goh-kv-label">${__("Issued")}</span>
+						<span class="goh-kv-value">${esc(dt(c.loaner_issued_at))}</span></div>
+				</div>
+				<div class="text-muted" style="font-size:11px;margin:6px 0 10px">
+					${__("This ticket cannot be closed until the loaner is booked back in.")}
+				</div>
+				<div class="goh-inline-form">
+					<input type="text" class="form-control input-sm" id="goh-loaner-condition"
+						placeholder="${__("Condition on return (optional)")}" data-no-dirty>
+					<button class="btn btn-sm btn-primary" id="goh-loaner-return">
+						<i class="fa fa-undo"></i> ${__("Book Back In")}</button>
+				</div>`;
+		} else {
+			const history = c.loaner_status === "Returned"
+				? `<div class="goh-kv-grid">
+						<div class="goh-kv"><span class="goh-kv-label">${__("Last Loaner")}</span>
+							<span class="goh-kv-value" style="font-family:monospace">${esc(c.loaner_serial_no)}</span></div>
+						<div class="goh-kv"><span class="goh-kv-label">${__("Returned")}</span>
+							<span class="goh-kv-value">${esc(dt(c.loaner_returned_at))}</span></div>
+					</div>`
+				: `<div class="text-muted" style="font-size:12px;margin-bottom:8px">${__("No courtesy device is out on this ticket.")}</div>`;
+			loaner = `${history}
+				<div class="goh-inline-form">
+					<input type="text" class="form-control input-sm" id="goh-loaner-serial"
+						placeholder="${__("Loaner serial or IMEI")}" data-no-dirty>
+					<button class="btn btn-sm btn-default" id="goh-loaner-issue">
+						<i class="fa fa-mobile"></i> ${__("Issue Loaner")}</button>
+				</div>`;
+		}
+
+		// ── Appointment ───────────────────────────────────────────────────
+		const appointment = `
+			${c.appointment_datetime ? `
+				<div class="goh-kv-grid">
+					<div class="goh-kv"><span class="goh-kv-label">${__("Booked For")}</span>
+						<span class="goh-kv-value">${esc(dt(c.appointment_datetime))}</span></div>
+					${c.appointment_source ? `<div class="goh-kv"><span class="goh-kv-label">${__("Source")}</span>
+						<span class="goh-kv-value">${esc(c.appointment_source)}</span></div>` : ""}
+				</div>` : `<div class="text-muted" style="font-size:12px;margin-bottom:8px">${__("Nothing booked.")}</div>`}
+			<div class="goh-inline-form">
+				<input type="datetime-local" class="form-control input-sm" id="goh-appt-slot" data-no-dirty>
+				<button class="btn btn-sm btn-default" id="goh-appt-book">
+					<i class="fa fa-calendar"></i> ${c.appointment_datetime ? __("Rebook") : __("Book Slot")}</button>
+			</div>
+			<div id="goh-appt-capacity" class="text-muted" style="font-size:11px;margin-top:6px"></div>`;
+
+		// ── Feedback ──────────────────────────────────────────────────────
+		let feedback;
+		if (c.feedback_received_at) {
+			feedback = `
+				<div class="goh-kv-grid">
+					${c.csat_score ? `<div class="goh-kv"><span class="goh-kv-label">${__("Satisfaction")}</span>
+						<span class="goh-kv-value">${esc(c.csat_score)} / 5</span></div>` : ""}
+					${c.nps_score !== null && c.nps_score !== undefined ? `<div class="goh-kv"><span class="goh-kv-label">${__("Would Recommend")}</span>
+						<span class="goh-kv-value">${esc(c.nps_score)} / 10</span></div>` : ""}
+					<div class="goh-kv"><span class="goh-kv-label">${__("Received")}</span>
+						<span class="goh-kv-value">${esc(dt(c.feedback_received_at))}</span></div>
+				</div>
+				${c.feedback_comment ? `<div class="goh-text-block">${esc(c.feedback_comment)}</div>` : ""}`;
+		} else {
+			// Offered from the point the device is ready to go back. Asking
+			// before that is asking about a repair that has not happened.
+			const ready = ["Completed", "Invoiced", "Delivered"].includes(d.decision);
+			feedback = ready ? `
+				<div class="goh-inline-form" style="flex-wrap:wrap;gap:8px">
+					<select class="form-control input-sm" id="goh-csat" style="width:auto" data-no-dirty>
+						<option value="">${__("Satisfaction (1-5)")}</option>
+						${[1, 2, 3, 4, 5].map(n => `<option value="${n}">${n}</option>`).join("")}
+					</select>
+					<select class="form-control input-sm" id="goh-nps" style="width:auto" data-no-dirty>
+						<option value="">${__("Recommend (0-10)")}</option>
+						${Array.from({ length: 11 }, (_, n) => `<option value="${n}">${n}</option>`).join("")}
+					</select>
+					<input type="text" class="form-control input-sm" id="goh-feedback-comment"
+						placeholder="${__("Anything they said")}" data-no-dirty>
+					<button class="btn btn-sm btn-default" id="goh-feedback-save">
+						<i class="fa fa-star-o"></i> ${__("Record")}</button>
+				</div>`
+				: `<div class="text-muted" style="font-size:12px">${__("Ask once the repair is complete.")}</div>`;
+		}
+
+		return `
+			<div class="goh-section">
+				<div class="goh-section-title"><i class="fa fa-mobile"></i> ${__("Courtesy Device")}</div>
+				${loaner}
+			</div>
+			<div class="goh-section">
+				<div class="goh-section-title"><i class="fa fa-calendar"></i> ${__("Appointment")}</div>
+				${appointment}
+			</div>
+			<div class="goh-section">
+				<div class="goh-section-title"><i class="fa fa-star-o"></i> ${__("Customer Feedback")}</div>
+				${feedback}
+			</div>`;
+	}
+
+	/**
+	 * Every button here reloads the ticket on success.
+	 *
+	 * The server owns these rules — a loaner already out, a device lent to
+	 * someone else, a score outside its scale — so the screen does not
+	 * second-guess them. It sends the call, shows what came back, and re-reads
+	 * the ticket rather than patching its own copy, which is how the two ever
+	 * drift apart.
+	 */
+	_bind_customer_tab(d) {
+		const SM = "gofix.service_maturity";
+		const el = (id) => this.parent.find(`#${id}`);
+		const run = async (method, args, done) => {
+			try {
+				const out = await frappe.xcall(`${SM}.${method}`, args);
+				if (done) done(out);
+				this._load_detail(d.name);
+			} catch (e) {
+				// The server already popped its own message; nothing to add.
+				console.error("GoFix Ops Hub: customer tab", method, e);
+			}
+		};
+
+		el("goh-loaner-issue").on("click", () => {
+			const serial = (el("goh-loaner-serial").val() || "").trim();
+			if (!serial) {
+				frappe.show_alert({ message: __("Enter the loaner's serial or IMEI."), indicator: "orange" });
+				return;
+			}
+			run("issue_loaner", { service_request: d.name, serial_no: serial });
+		});
+
+		el("goh-loaner-return").on("click", () => {
+			run("return_loaner", {
+				service_request: d.name,
+				condition: (el("goh-loaner-condition").val() || "").trim() || undefined,
+			});
+		});
+
+		el("goh-appt-book").on("click", () => {
+			const slot = el("goh-appt-slot").val();
+			if (!slot) {
+				frappe.show_alert({ message: __("Pick a date and time."), indicator: "orange" });
+				return;
+			}
+			// datetime-local gives "YYYY-MM-DDTHH:MM"; the server wants a space.
+			run("book_appointment", { service_request: d.name, slot: slot.replace("T", " ") + ":00" },
+				(out) => {
+					const cap = out && out.capacity;
+					if (!cap || cap.utilisation === null || cap.utilisation === undefined) return;
+					// Said plainly rather than hidden behind a colour: an
+					// unknown bench is not an empty one.
+					frappe.show_alert({
+						message: __("Bench that day: {0}h booked of {1}h.",
+							[cap.booked_hours, cap.available_hours]),
+						indicator: cap.over_capacity ? "orange" : "green",
+					});
+				});
+		});
+
+		el("goh-feedback-save").on("click", () => {
+			const csat = el("goh-csat").val();
+			const nps = el("goh-nps").val();
+			const comment = (el("goh-feedback-comment").val() || "").trim();
+			if (!csat && !nps && !comment) {
+				frappe.show_alert({ message: __("Nothing to record yet."), indicator: "orange" });
+				return;
+			}
+			run("record_feedback", {
+				service_request: d.name,
+				csat: csat || undefined,
+				nps: nps || undefined,
+				comment: comment || undefined,
+			});
+		});
 	}
 
 	/* ═══════════════════════════════════════════════════════════════════════ */

@@ -1240,10 +1240,32 @@ def get_ticket_detail(sr_name) -> dict:
 		"rework_count": rework_count,
 	}
 
+	# Loaner, appointment and feedback. All three were implemented, whitelisted
+	# and tested, and none was reachable from a screen -- the Ops Hub asked for
+	# none of it, so a courtesy device could go out with nothing on the ticket
+	# to say so. Read with sr.get() because they are custom fields and an older
+	# site may not carry them yet.
+	care = {
+		"loaner_status": sr.get("loaner_status") or "",
+		"loaner_serial_no": sr.get("loaner_serial_no") or "",
+		"loaner_issued_at": str(sr.get("loaner_issued_at") or ""),
+		"loaner_returned_at": str(sr.get("loaner_returned_at") or ""),
+		"appointment_datetime": str(sr.get("appointment_datetime") or ""),
+		"appointment_source": sr.get("appointment_source") or "",
+		# Stored as Frappe's 0-1 Rating fraction; shown as the 1-5 the customer
+		# actually gave. Printing the column raw reports every rating as a
+		# fraction of one star.
+		"csat_score": round(flt(sr.get("csat_score")) * 5, 1) if sr.get("csat_score") else None,
+		"nps_score": sr.get("nps_score"),
+		"feedback_comment": sr.get("feedback_comment") or "",
+		"feedback_received_at": str(sr.get("feedback_received_at") or ""),
+	}
+
 	return {
 		"name": sr.name,
 		"decision": sr.decision,
 		"status": sr.decision,
+		"care": care,
 		# What this ticket permits right now. Every screen reads this rather
 		# than keeping its own list of statuses, so a button that is hidden and
 		# a click that is refused come from the same rule.

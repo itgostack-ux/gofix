@@ -826,7 +826,7 @@ class ServiceRequest(Document):
 				# warranty_status="Under Warranty" (which would make the pricing
 				# engine quote the repair at zero). The device's own cover, if
 				# any, still decides warranty_status via the fallback below.
-				covering = result.get("covering_plan") or {}
+				covering = self._choose_covering_plan(result)
 				self.warranty_plan = covering.get("warranty_plan")
 				self.warranty_plan_name = covering.get("plan_title")
 				self.warranty_deductible = covering.get("deductible_amount")
@@ -893,12 +893,33 @@ class ServiceRequest(Document):
 		if not result.get("warranty_covered"):
 			return False
 
-		covering = result.get("covering_plan") or {}
+		covering = self._choose_covering_plan(result)
 		self.warranty_plan = covering.get("warranty_plan")
 		self.warranty_plan_name = covering.get("plan_title")
 		self.warranty_deductible = covering.get("deductible_amount")
 		self.active_warranty_plan = covering.get("name")
 		return True
+
+	def _choose_covering_plan(self, result) -> dict:
+		"""Which policy this repair is claimed against.
+
+		The lookup ranks the device's live plans and returns its pick, which is
+		right when nobody has said otherwise. But a device can carry more than
+		one — an extended warranty and a damage plan — and which to claim
+		against is a decision made at the counter with the customer standing
+		there, not a ranking. So a choice that arrived on the ticket wins.
+
+		It only wins if it is real: the plan has to be one of the live plans on
+		this serial. Otherwise the field is a way to attach someone else's
+		policy to your repair, and the counter's own screen can only ever offer
+		plans that came from this lookup anyway.
+		"""
+		chosen = (self.get("active_warranty_plan") or "").strip()
+		if chosen:
+			for plan in result.get("all_plans") or []:
+				if plan.get("name") == chosen and plan.get("is_valid"):
+					return plan
+		return result.get("covering_plan") or {}
 
 	def _classify_coverage(self):
 		"""Bifurcate the ticket for routing and reporting.

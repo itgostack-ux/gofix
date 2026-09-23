@@ -26,7 +26,8 @@
 		{ key: "store-manager-dashboard",    label: "Store Mgr",       icon: "fa-building",       group: "dashboards", color: "#0891b2" },
 		{ key: "category-manager-dashboard", label: "Category Mgr",    icon: "fa-tags",           group: "dashboards", color: "#7c3aed" },
 		// group: tools
-		{ key: "ch-customer-dashboard",      label: "Customer 360",    icon: "fa-user-circle",    group: "tools",      color: "#0d9488" },
+		{ key: "ch-customer-dashboard",      label: "Customer Intelligence", icon: "fa-user-circle", group: "tools",  color: "#0d9488" },
+		{ key: "ch-customer-360",            label: "Customer 360",    icon: "fa-id-card",        group: "tools",      color: "#0d9488" },
 	];
 
 	// Pages where the switcher should appear (all custom GoGizmo pages)

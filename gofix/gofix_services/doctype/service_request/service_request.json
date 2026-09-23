@@ -260,6 +260,7 @@
    "fieldname": "customer_type",
    "fieldtype": "Select",
    "label": "Customer Type",
+   "length": 64,
    "options": "B2B\nB2C",
    "read_only": 1
   },
@@ -268,6 +269,7 @@
    "fieldname": "visit_type",
    "fieldtype": "Select",
    "label": "Visit Type",
+   "length": 64,
    "options": "New\nRegular\nVIP",
    "read_only": 1
   },
@@ -434,6 +436,7 @@
    "fieldtype": "Select",
    "in_standard_filter": 1,
    "label": "Walk-in Status",
+   "length": 64,
    "options": "Accepted\nWithdrawn",
    "search_index": 1
   },
@@ -461,7 +464,7 @@
    "label": "Device Information"
   },
   {
-   "description": "Optional at intake \u2014 a counter often cannot identify the catalogue item from what the customer says. Required before solutions are assigned, because spare compatibility is matched against it.",
+   "description": "Optional at intake — a counter often cannot identify the catalogue item from what the customer says. Required before solutions are assigned, because spare compatibility is matched against it.",
    "fieldname": "device_item",
    "fieldtype": "Link",
    "in_list_view": 1,
@@ -498,6 +501,7 @@
    "fieldname": "device_condition",
    "fieldtype": "Select",
    "label": "Device Condition",
+   "length": 64,
    "options": "Good\nMinor Scratches\nCracked Screen\nDamaged\nWater Damaged\nBroken"
   },
   {
@@ -515,16 +519,18 @@
    "fieldname": "warranty_status",
    "fieldtype": "Select",
    "label": "Warranty Status",
+   "length": 64,
    "options": "\nUnder Warranty\nOut of Warranty\nNo Warranty",
    "read_only": 1
   },
   {
-   "description": "How this ticket is settled: Non-Warranty (customer pays), In-Warranty (our tab \u2014 device warranty or our rework, estimate zeroed), or VAS Claim (settled via the separate claims flow, repair quoted normally).",
+   "description": "How this ticket is settled: Non-Warranty (customer pays), In-Warranty (our tab — device warranty or our rework, estimate zeroed), or VAS Claim (settled via the separate claims flow, repair quoted normally).",
    "fieldname": "coverage_category",
    "fieldtype": "Select",
    "in_list_view": 1,
    "in_standard_filter": 1,
    "label": "Coverage Category",
+   "length": 64,
    "options": "Non-Warranty\nIn-Warranty\nVAS Claim",
    "read_only": 1
   },
@@ -551,7 +557,7 @@
    "read_only": 1
   },
   {
-   "description": "When present, claim consumption on the Active VAS Plan is bumped by the CH Warranty Claim closure \u2014 not by this Service Request \u2014 to prevent double-counting.",
+   "description": "When present, claim consumption on the Active VAS Plan is bumped by the CH Warranty Claim closure — not by this Service Request — to prevent double-counting.",
    "fieldname": "warranty_claim",
    "fieldtype": "Link",
    "label": "CH Warranty Claim",
@@ -577,6 +583,7 @@
    "fieldname": "mode_of_service",
    "fieldtype": "Select",
    "label": "Mode of Service",
+   "length": 64,
    "options": "\nWalk-in\nPickup\nCourier\nOn-site"
   },
   {
@@ -592,7 +599,7 @@
    "label": "Device Password/PIN"
   },
   {
-   "description": "Encrypted at rest. Pattern lock unlock sequence \u2014 revealable by technicians; do not retain beyond the service lifecycle.",
+   "description": "Encrypted at rest. Pattern lock unlock sequence — revealable by technicians; do not retain beyond the service lifecycle.",
    "fieldname": "pattern",
    "fieldtype": "Password",
    "label": "Device Pattern"
@@ -686,6 +693,7 @@
    "in_list_view": 1,
    "in_standard_filter": 1,
    "label": "Decision",
+   "length": 64,
    "options": "Draft\nAccepted\nIn Service\nCompleted\nInvoiced\nDelivered\nWithdrawn\nRejected\nExpired\nCancelled",
    "reqd": 1,
    "search_index": 1
@@ -757,6 +765,7 @@
    "fieldname": "priority",
    "fieldtype": "Select",
    "label": "Priority",
+   "length": 64,
    "options": "Low\nMedium\nHigh\nUrgent",
    "reqd": 1
   },
@@ -886,6 +895,7 @@
    "fieldname": "advance_received_via",
    "fieldtype": "Select",
    "label": "Advance Received Via",
+   "length": 64,
    "options": "\nCash\nUPI\nCard\nBank Transfer"
   },
   {
@@ -1014,6 +1024,7 @@
    "fieldname": "transfer_status",
    "fieldtype": "Select",
    "label": "Transfer Status",
+   "length": 64,
    "options": "\nNot Transferred\nIn Transit\nReceived at Service Center\nRepair Complete\nReturn In Transit\nReturned to Store"
   },
   {
@@ -1197,7 +1208,7 @@
   },
   {
    "allow_on_submit": 1,
-   "description": "Leave blank to take the warranty from the work done \u2014 the shorter of the repair solution's labour warranty and the fitted part's warranty. Fill it only to override that for this ticket.",
+   "description": "Leave blank to take the warranty from the work done — the shorter of the repair solution's labour warranty and the fitted part's warranty. Fill it only to override that for this ticket.",
    "fieldname": "repair_warranty_days",
    "fieldtype": "Int",
    "label": "Repair Warranty (Days)"
@@ -1491,6 +1502,7 @@
    "fieldtype": "Select",
    "in_standard_filter": 1,
    "label": "Service Outcome",
+   "length": 64,
    "options": "\nSuccessful\nPartially Successful\nNot Repairable\nReturned Unrepaired"
   },
   {
@@ -1562,6 +1574,7 @@
    "fieldname": "device_unlock_type",
    "fieldtype": "Select",
    "label": "Screen Lock",
+   "length": 64,
    "options": "\nNone\nPIN\nPattern\nPassword\nBiometric Only"
   },
   {
@@ -1578,6 +1591,7 @@
    "fieldname": "coupon_scope",
    "fieldtype": "Select",
    "label": "Coupon Applies To",
+   "length": 64,
    "options": "\nEntire Invoice\nSpecific Repair"
   },
   {
@@ -1600,7 +1614,7 @@
  "index_web_pages_for_search": 1,
  "is_submittable": 1,
  "links": [],
- "modified": "2026-09-08 17:30:00.000000",
+ "modified": "2026-09-23 10:43:36.854883",
  "modified_by": "Administrator",
  "module": "GoFix Services",
  "name": "Service Request",

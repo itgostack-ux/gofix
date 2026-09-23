@@ -4,7 +4,13 @@ frappe.pages["store-queue"].on_page_load = function (wrapper) {
 		title: __("Walk-in Queue"),
 		single_column: true,
 	});
-	page.main.html(`<div id="store-queue-app"></div>`);
+	// Frappe prepends the toolbar's own .page-form into page.main (page.js:164),
+	// so page.main.html() destroys every filter this page added. The controls
+	// survive in page.fields_dict and keep answering get_value(), so the page
+	// still works -- it just loses the inputs the user needs to change them.
+	// Render into an owned child of page.main instead.
+	page.main.find("#store-queue-app").remove();
+	$(`<div id="store-queue-app"></div>`).appendTo(page.main);
 	new StoreQueue(page);
 };
 

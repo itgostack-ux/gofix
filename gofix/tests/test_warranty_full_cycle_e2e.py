@@ -102,23 +102,10 @@ def _get_or_create_issue_category(name="Screen Damage"):
 
 
 def _apply_intake_mandatories(sr):
-    """What booking a device in now requires, and this suite predates.
+    """Delegates to gofix.tests.device_fixture -- see the note there."""
+    from gofix.tests.device_fixture import apply_intake_mandatories
 
-    Brand and model became mandatory (a repair cannot be routed to a technician
-    without knowing what the device is), and the data-loss acknowledgement is a
-    consent the counter has to take. Copied off a real repair so the model is
-    one the item master recognises rather than a string invented here.
-    """
-    real = frappe.db.sql("""
-        SELECT device_item, device_item_name, brand, device_brand, device_model
-        FROM `tabService Request`
-        WHERE IFNULL(device_model, '') <> '' AND IFNULL(device_brand, '') <> ''
-        ORDER BY creation DESC LIMIT 1""", as_dict=True)
-    if real:
-        for field, value in real[0].items():
-            sr.set(field, value)
-    sr.data_backup_disclaimer = 1
-    return sr
+    return apply_intake_mandatories(sr)
 
 
 def _create_service_request(customer, warehouse, device_item, company, imei="IMEI123TEST001"):

@@ -410,6 +410,10 @@ def test_skill_matching():
             sr.status = "Draft"
             sr.priority = "Medium"
             sr.serial_no = "IMEI-TI-TEST"
+            # Category, brand and model are mandatory on a new ticket.
+            from gofix.tests.device_fixture import apply_intake_mandatories
+
+            apply_intake_mandatories(sr)
             sr.insert(ignore_permissions=True)
             frappe.db.commit()
             _FLOW["ti_sr"] = sr.name

@@ -290,21 +290,16 @@ def test_gofix_two_documents():
         sr.source_warehouse = warehouse
         sr.service_date = nowdate()
         sr.mode_of_service = "Walk-in"
-        # A device the bench actually carries: booking one in requires a real
-        # brand and model, so copy them off an existing repair rather than
-        # inventing a phone the item master has never heard of.
-        real = frappe.db.sql("""
-            SELECT device_item, device_item_name, brand, device_brand, device_model
-            FROM `tabService Request`
-            WHERE IFNULL(device_model, '') <> '' AND IFNULL(device_brand, '') <> ''
-            ORDER BY creation DESC LIMIT 1""", as_dict=True)
-        if real:
-            for field, value in real[0].items():
-                sr.set(field, value)
-        else:
-            sr.device_item = item
-            sr.device_item_name = "Print Format Test Device"
-            sr.brand = "Samsung"
+        # A device the bench actually carries. This used to copy one off an
+        # existing repair, but no Service Request here has a device_brand or
+        # device_model at all, so nothing was set and intake refused the
+        # ticket. device_fixture resolves it from the item master instead.
+        from gofix.tests.device_fixture import apply_intake_mandatories
+
+        sr.device_item = item
+        sr.device_item_name = "Print Format Test Device"
+        sr.brand = "Samsung"
+        apply_intake_mandatories(sr)
         sr.issue_description = "Print format test"
         sr.product_condition_desc = "Good condition"
         sr.backup_info = "No backup needed"

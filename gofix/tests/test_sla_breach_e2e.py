@@ -219,6 +219,10 @@ def test_sla_breach_service_request():
         sr.decision = "In Service"
         sr.serial_no = "IMEI-SLABREACH-TEST"
         sr.received_datetime = six_hours_ago
+        # Category, brand and model are mandatory on a new ticket.
+        from gofix.tests.device_fixture import apply_intake_mandatories
+
+        apply_intake_mandatories(sr)
         sr.insert(ignore_permissions=True)
         frappe.db.commit()
         _ok(flow, "SR created with received_datetime 6h ago", sr.name)

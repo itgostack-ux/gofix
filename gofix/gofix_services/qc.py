@@ -280,3 +280,24 @@ def _stamp(sr, updates) -> None:
     sr = _as_doc(sr)
     sr.flags.ignore_billing_lock = True
     sr.db_set(updates, update_modified=True)
+
+
+def _warn_on_repeated_rework(sr, count) -> None:
+    """Tell the floor when a device keeps coming back.
+
+    8a0c1f9 deleted this along with the Service Order path it read the limit
+    from, but left the call in record_qc_result -- so every QC fail raised
+    NameError. The comment at that call says the count has to survive the
+    single-document model, so the alert is restored with its original default
+    of 3 and its limit read from GoFix Settings instead of the Sales Order.
+    get_single_value returns None for a field that is not there, so this works
+    whether or not the setting is ever added, and Service Request cannot take
+    a new field anyway -- its table is at the MySQL row limit.
+    """
+    limit = cint(frappe.db.get_single_value("GoFix Settings", "max_rework_limit")) or 3
+    if count < limit:
+        return
+    frappe.msgprint(
+        _("{0} has now failed QC {1} times (limit {2}). Escalate before "
+          "sending it back again.").format(sr.name, count, limit),
+        indicator="red", alert=True)

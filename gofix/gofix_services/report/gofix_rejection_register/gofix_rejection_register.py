@@ -76,6 +76,20 @@ def _conditions(filters, alias="sr"):
 	if _geo:
 		where.append(_geo[len(" AND "):])
 
+	# The user's scope is not one of the filters above -- those only narrow
+	# what a user already may see, and every one of them is optional, so with
+	# none supplied this report returned every rejection in the estate. Both
+	# the register and its summary build their WHERE here, so the gate belongs
+	# here: a leak in either is the same leak. scope_where_clause fails closed
+	# (1=0) for a scoped user who resolves to nothing, and returns None for a
+	# bypass role.
+	from ch_erp15.ch_erp15.report_scope import scope_where_clause
+
+	_scope = scope_where_clause(company_field=f"{alias}.company",
+	                            warehouse_field=f"{alias}.source_warehouse")
+	if _scope:
+		where.append(_scope)
+
 	return where, values
 
 

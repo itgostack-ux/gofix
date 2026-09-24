@@ -1673,10 +1673,21 @@ class GoFixOpsHub {
 				<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
 					<b><i class="fa fa-camera"></i> ${__("Device Photos")}</b>
 					<button class="btn btn-xs btn-default goh-photo-add" data-stage="${stage}"
-						style="margin-left:auto">
-						<i class="fa fa-plus"></i> ${__("Add {0} Photo", [__(stage)])}
+						data-source="camera" style="margin-left:auto" title="${__("Use the camera")}">
+						<i class="fa fa-camera"></i> ${__("Take {0} Photo", [__(stage)])}
 					</button>
-					<input type="file" class="goh-photo-input" accept="image/*" capture="environment"
+					<button class="btn btn-xs btn-default goh-photo-add" data-stage="${stage}"
+						data-source="library" title="${__("Choose an existing image")}">
+						<i class="fa fa-picture-o"></i> ${__("Choose Image")}
+					</button>
+					<!-- Two inputs, because capture="environment" is not a hint: it sends the
+					     phone straight to the rear camera and removes the gallery entirely, so
+					     a photo already taken -- the one the customer sent on WhatsApp, the
+					     shot from before the device was opened -- could not be attached at all.
+					     The camera input keeps capture; the library input must NOT have it. -->
+					<input type="file" class="goh-photo-input goh-photo-camera" accept="image/*"
+						capture="environment" multiple style="display:none">
+					<input type="file" class="goh-photo-input goh-photo-library" accept="image/*"
 						multiple style="display:none">
 				</div>
 				${group(__("In"), p.intake || [])}
@@ -2795,8 +2806,10 @@ class GoFixOpsHub {
 		/* ── Device photos: bound before the read-only return, because the
 		   evidence strip stays viewable on a closed ticket. ───────────── */
 		content.off("click.gohphoto").on("click.gohphoto", ".goh-photo-add", (e) => {
-			const stage = $(e.currentTarget).data("stage");
-			const input = content.find(".goh-photo-input");
+			const $btn = $(e.currentTarget);
+			const stage = $btn.data("stage");
+			const source = $btn.data("source") === "library" ? "library" : "camera";
+			const input = content.find(`.goh-photo-${source}`);
 			input.data("stage", stage).trigger("click");
 		});
 		content.on("change.gohphoto", ".goh-photo-input", (e) => {

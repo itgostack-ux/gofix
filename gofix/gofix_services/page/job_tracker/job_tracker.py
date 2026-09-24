@@ -68,6 +68,11 @@ def get_board_data(warehouse=None, date_from=None, date_to=None, search=None,
 			"decision", "priority", "service_date", "expected_completion_date",
 			"warranty_status", "device_condition",
 			"source_warehouse",
+			# What the customer was actually promised, and when the job really
+			# finished. The board used to show only the age of a ticket ("0d"),
+			# which says how long it has been open but nothing about whether it
+			# is late -- the one thing a manager scanning this board needs.
+			"promised_completion_datetime", "actual_completion_date",
 		],
 		order_by="service_date asc, priority desc",
 		limit_page_length=min(get_int_setting("token_queue_limit", 200), 500),
@@ -75,6 +80,17 @@ def get_board_data(warehouse=None, date_from=None, date_to=None, search=None,
 
 	if not sr_list:
 		return {"columns": _default_columns(), "cards_by_status": {}, "summary": {}}
+
+	# The same countdown the Ops Hub shows, from the same function, so the two
+	# boards can never disagree about whether a ticket is late. It reads from
+	# the server clock and returns it, so a workstation with a wrong clock
+	# cannot make a late job look on time.
+	from gofix.gofix_services.page.gofix_ops_hub.gofix_ops_hub import (
+		get_completion_countdown,
+	)
+
+	for row in sr_list:
+		row["countdown"] = get_completion_countdown(frappe._dict(row))
 
 	sr_names = [r["name"] for r in sr_list]
 

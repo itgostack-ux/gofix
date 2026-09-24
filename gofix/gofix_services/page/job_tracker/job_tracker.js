@@ -252,6 +252,8 @@ ${cardHTML}
 });
 
 this.parent.find('#jt-board').html(boardHTML);
+// Cards were just replaced, so the old interval is pointing at dead nodes.
+this._start_countdown_timer();
 this.parent.find('.jt-card').on('click', e => {
 const name = $(e.currentTarget).closest('.jt-card').data('name');
 if (name) this._open_drawer(name);
@@ -300,6 +302,7 @@ ${sr.issue_category ? `<div class="jt-card-issue"><i class="fa fa-tag text-muted
 <span class="jt-card-meta"><i class="fa fa-calendar text-muted"></i> ${frappe.datetime.str_to_user(sr.service_date)}</span>
 <span class="jt-card-age ${daysOpen > 7 ? 'jt-age-warn' : ''}">${daysOpen}d</span>
 </div>
+${this._countdown_html(sr)}
 ${sr.engineer_name
 ? `<div class="jt-card-engineer">
 <i class="fa fa-wrench text-muted"></i>
@@ -309,6 +312,69 @@ ${sr.assignment_status ? `<span class="jt-eng-badge">${esc(sr.assignment_status)
 : `<div class="jt-card-unassigned"><i class="fa fa-user-times"></i> ${__('Unassigned')}</div>`
 }
 </div>`;
+}
+
+/**
+ * Time left against the promise made to the customer.
+ *
+ * The board showed only how long a ticket had been open ("0d"), which is not
+ * the same question: a job raised this morning and due in an hour looks
+ * identical to one raised this morning and due next week. The countdown is the
+ * Ops Hub's, from the same server function, so the two boards can never
+ * disagree about whether a ticket is late.
+ */
+_countdown_html(sr) {
+const esc = frappe.utils.escape_html;
+const c = sr.countdown || {};
+if (c.state === 'unset') {
+// Said plainly rather than shown as a comfortable zero: a ticket with no
+// promise is not a ticket that is on time.
+return `<div class="jt-card-sla"><span class="jt-sla jt-sla-muted"
+title="${esc(c.message || '')}"><i class="fa fa-hourglass-o"></i> ${__('No promise set')}</span></div>`;
+}
+const cls = { overdue: 'jt-sla-red', missed: 'jt-sla-red', due_soon: 'jt-sla-orange',
+on_track: 'jt-sla-green', met: 'jt-sla-green' }[c.state] || 'jt-sla-muted';
+const label = { met: __('Delivered on time'), missed: __('Promise missed') }[c.state];
+return `<div class="jt-card-sla"><span class="jt-sla ${cls} jt-countdown"
+data-promised="${esc(c.promised || '')}"
+data-server-now="${esc(c.server_now || '')}"
+data-stopped="${c.stopped ? 1 : 0}"
+title="${__('Promised {0}', [esc(c.promised || '')])}">
+<i class="fa fa-clock-o"></i> <span class="jt-countdown-text">${label || __('calculating…')}</span></span></div>`;
+}
+
+/** Ticks locally against the server offset measured once — no request per second. */
+_start_countdown_timer() {
+clearInterval(this._countdown_timer);
+const $els = this.parent.find('.jt-countdown');
+if (!$els.length) return;
+const serverNow = frappe.datetime.str_to_obj($els.first().data('server-now'));
+if (!serverNow) return;
+const skew = serverNow.getTime() - Date.now();
+
+const tick = () => {
+$els.each(function () {
+const $el = $(this);
+if (String($el.data('stopped')) === '1') return;   // frozen: the job is over
+const target = frappe.datetime.str_to_obj($el.data('promised'));
+if (!target) return;
+let secs = Math.round((target.getTime() - (Date.now() + skew)) / 1000);
+const overdue = secs < 0;
+secs = Math.abs(secs);
+const d = Math.floor(secs / 86400);
+const h = Math.floor((secs % 86400) / 3600);
+const m = Math.floor((secs % 3600) / 60);
+const sec = secs % 60;
+const pad = (n) => String(n).padStart(2, '0');
+const clock = (d ? `${d}d ` : '') + `${pad(h)}:${pad(m)}:${pad(sec)}`;
+// The text carries the meaning, not the colour alone.
+$el.find('.jt-countdown-text').text(
+overdue ? __('{0} OVERDUE', [clock]) : __('{0} left', [clock]));
+$el.toggleClass('jt-sla-red', overdue).toggleClass('jt-sla-green', !overdue);
+});
+};
+tick();
+this._countdown_timer = setInterval(tick, 1000);
 }
 
 // ─────────── Detail Drawer ───────────────────────────────────────────────

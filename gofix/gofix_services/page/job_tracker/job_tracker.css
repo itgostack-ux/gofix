@@ -415,3 +415,19 @@
 	overflow: hidden;
 	text-overflow: ellipsis;
 }
+
+/* ── Time left against the customer's promise ──────────────────────────────
+   Colour is never the only carrier: the badge text says "left" or "OVERDUE",
+   so the board reads correctly in greyscale and to anyone who cannot
+   distinguish red from green. */
+.jt-card-sla { margin-top: 6px; }
+.jt-sla {
+	display: inline-flex; align-items: center; gap: 5px;
+	font-size: 11px; font-weight: 600; line-height: 1;
+	padding: 3px 8px; border-radius: 10px;
+	font-variant-numeric: tabular-nums;   /* the clock must not jitter per tick */
+}
+.jt-sla-green  { background: #dcfce7; color: #166534; }
+.jt-sla-orange { background: #ffedd5; color: #9a3412; }
+.jt-sla-red    { background: #fee2e2; color: #991b1b; }
+.jt-sla-muted  { background: var(--control-bg, #f1f5f9); color: var(--text-muted, #64748b); }

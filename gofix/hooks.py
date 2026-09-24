@@ -96,6 +96,9 @@ app_include_js = [
     # The two documents a repair produces — job sheet and invoice —
     # offered identically from the POS, the Ops Hub and the Job Tracker.
     "/assets/gofix/js/print_documents.js",
+    # A camera that works on a laptop. capture="environment" is honoured only
+    # on phones, so every desk screen that takes a photo needs this instead.
+    "/assets/gofix/js/camera_capture.js",
 ]
 
 doctype_list_js = {

@@ -1696,6 +1696,47 @@ class GoFixOpsHub {
 			</div>`;
 	}
 
+	/**
+	 * Attach photos to a ticket, whatever produced them.
+	 *
+	 * The file picker and the camera both hand back File objects, so this is
+	 * the one upload path rather than two that drift. Each photo is uploaded
+	 * and linked separately: one that fails must not take the others with it,
+	 * which is why the result is counted rather than awaited as a whole.
+	 */
+	_upload_device_photos(d, stage, files) {
+		const self = this;
+		const uploads = files.map((file) => {
+			const fd = new FormData();
+			fd.append("file", file, file.name);
+			fd.append("is_private", 1);
+			fd.append("doctype", "Service Request");
+			fd.append("docname", d.name);
+			return fetch("/api/method/upload_file", {
+				method: "POST",
+				headers: { "X-Frappe-CSRF-Token": frappe.csrf_token },
+				body: fd,
+			}).then((r) => r.json()).then((r) => {
+				const url = r && r.message && r.message.file_url;
+				if (!url) throw new Error("upload failed");
+				return frappe.xcall(`${API}.add_device_photo`, {
+					sr_name: d.name, file_url: url, stage: stage,
+				});
+			});
+		});
+		return Promise.allSettled(uploads).then((rs) => {
+			const bad = rs.filter((r) => r.status === "rejected").length;
+			if (bad) {
+				frappe.msgprint({
+					title: __("Photos Not Attached"),
+					message: __("{0} of {1} photo(s) could not be attached.", [bad, rs.length]),
+					indicator: "orange",
+				});
+			}
+			self._refresh_all();
+		});
+	}
+
 	_html_time_on_ticket(d) {
 		const esc = frappe.utils.escape_html;
 		const t = d.time_summary || {};
@@ -2809,43 +2850,45 @@ class GoFixOpsHub {
 			const $btn = $(e.currentTarget);
 			const stage = $btn.data("stage");
 			const source = $btn.data("source") === "library" ? "library" : "camera";
-			const input = content.find(`.goh-photo-${source}`);
-			input.data("stage", stage).trigger("click");
+
+			// "Choose Image" is always the file picker.
+			if (source === "library") {
+				content.find(".goh-photo-library").data("stage", stage).trigger("click");
+				return;
+			}
+
+			// "Take Photo" opens the camera itself. capture="environment" is
+			// honoured only on phones -- on the counter laptop it just opens a
+			// file dialog and never reaches the webcam, which is exactly what
+			// it was reported doing. The hidden capture input stays as the
+			// fallback for a machine with no camera, no permission, or a site
+			// served over plain http.
+			const fallback = () =>
+				content.find(".goh-photo-camera").data("stage", stage).trigger("click");
+
+			if (!gofix.camera || !gofix.camera.is_supported()) return fallback();
+
+			gofix.camera
+				.capture({ title: __("Take {0} Photo", [__(stage)]) })
+				.then((files) => {
+					if (files && files.length) self._upload_device_photos(d, stage, files);
+				})
+				.catch((err) => {
+					if (err && err.reason === "denied") {
+						frappe.show_alert({
+							message: __("Camera permission was refused — choose an image instead."),
+							indicator: "orange",
+						});
+					}
+					fallback();
+				});
 		});
 		content.on("change.gohphoto", ".goh-photo-input", (e) => {
 			const stage = $(e.currentTarget).data("stage") || "Intake";
 			const files = Array.from(e.currentTarget.files || []);
 			e.currentTarget.value = "";
 			if (!files.length) return;
-			const uploads = files.map((file) => {
-				const fd = new FormData();
-				fd.append("file", file, file.name);
-				fd.append("is_private", 1);
-				fd.append("doctype", "Service Request");
-				fd.append("docname", d.name);
-				return fetch("/api/method/upload_file", {
-					method: "POST",
-					headers: { "X-Frappe-CSRF-Token": frappe.csrf_token },
-					body: fd,
-				}).then((r) => r.json()).then((r) => {
-					const url = r && r.message && r.message.file_url;
-					if (!url) throw new Error("upload failed");
-					return frappe.xcall(`${API}.add_device_photo`, {
-						sr_name: d.name, file_url: url, stage: stage,
-					});
-				});
-			});
-			Promise.allSettled(uploads).then((rs) => {
-				const bad = rs.filter((r) => r.status === "rejected").length;
-				if (bad) {
-					frappe.msgprint({
-						title: __("Photos Not Attached"),
-						message: __("{0} of {1} photo(s) could not be attached.", [bad, rs.length]),
-						indicator: "orange",
-					});
-				}
-				self._refresh_all();
-			});
+			self._upload_device_photos(d, stage, files);
 		});
 		content.on("click.gohphoto", ".goh-photo-drop", (e) => {
 			e.preventDefault();

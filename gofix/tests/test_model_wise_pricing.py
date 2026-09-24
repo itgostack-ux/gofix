@@ -173,3 +173,57 @@ class TestBenchFeeLadder(unittest.TestCase):
         doc.flags.ignore_permissions = True
         doc.insert(ignore_permissions=True)
         self.assertNotEqual(pr.resolve_service_charge(device_category=cat[0]).get("rate"), 4242)
+
+
+class TestFeeOnlyRulesNeverPriceLabour(unittest.TestCase):
+    """A bench-fee rule must not be able to answer "what does this repair cost?".
+
+    The ladder made this reachable: a bench fee is written as a device-scoped
+    rule with no labour rate, and the labour lookup would otherwise match it
+    for any repair that has no rule of its own -- quoting ZERO labour where the
+    per-minute fallback used to apply. That is a silent undercharge on exactly
+    the repairs nobody has rate-carded yet.
+    """
+
+    def setUp(self):
+        frappe.set_user("Administrator")
+        self.sp = "fee_only_test"
+        frappe.db.savepoint(self.sp)
+
+    def tearDown(self):
+        frappe.db.rollback(save_point=self.sp)
+
+    def test_a_bench_fee_rule_is_invisible_to_the_labour_lookup(self):
+        cat = frappe.get_all("CH Category", pluck="name", limit=1)
+        if not cat:
+            raise unittest.SkipTest("no CH Category on this site")
+        doc = frappe.new_doc("GoFix Pricing Rule")
+        doc.update({"rule_name": "ZZ fee only", "is_active": 1,
+                    "device_category": cat[0], "service_charge": 999,
+                    "labor_rate_type": "Fixed"})   # no labour rate at all
+        doc.flags.ignore_permissions = True
+        doc.insert(ignore_permissions=True)
+
+        rule = pr.get_pricing_rule(
+            issue_category="ZZ no such category",
+            repair_solution="ZZ no such solution",
+            device_category=cat[0],
+        )
+        self.assertNotEqual(
+            getattr(rule, "name", None), doc.name,
+            "a rule with no labour rate priced a repair",
+        )
+
+    def test_the_seeded_ladder_charges_apple_more_than_android(self):
+        """The whole point, asserted against what actually shipped."""
+        ios = frappe.db.exists("CH Sub Category", "Smart Phones-iOS Phones")
+        android = frappe.db.exists("CH Sub Category", "Smart Phones-Android Phones")
+        if not (ios and android):
+            raise unittest.SkipTest("phone sub categories absent on this site")
+        apple = pr.resolve_service_charge(
+            device_category="Smart Phones", device_sub_category="Smart Phones-iOS Phones")
+        droid = pr.resolve_service_charge(
+            device_category="Smart Phones", device_sub_category="Smart Phones-Android Phones")
+        if not apple.get("pricing_rule"):
+            raise unittest.SkipTest("bench fee ladder not seeded on this site")
+        self.assertGreater(apple["rate"], droid["rate"])

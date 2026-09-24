@@ -130,6 +130,13 @@ def get_pricing_rule(issue_category=None, repair_solution=None, brand=None,
 
 	best, best_score = None, -1
 	for rule in _active_rules(company):
+		# A rule that sets no labour rate is a bench-fee rule, not a labour
+		# rule -- resolve_service_charge is what reads those. Letting one win
+		# here would quote ZERO labour for any repair that has no rule of its
+		# own, replacing the per-minute fallback with nothing. Mirror image of
+		# the solution/issue guard in resolve_service_charge.
+		if not flt(rule.get("labor_rate")) and not flt(rule.get("warranty_labor_rate")):
+			continue
 		score = _score(rule, wanted)
 		if score is not None and score > best_score:
 			best, best_score = rule, score

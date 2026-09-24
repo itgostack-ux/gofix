@@ -54,3 +54,4 @@ gofix.patches.v18_shrink_service_request_select_columns #2026-09-23 - Service Re
 gofix.patches.v19_spare_incoming_qc #2026-09-24 - every spare on a job is inspected before it can be fitted; QC columns on SR Spare Line + GoFix Spare Event Log history
 gofix.patches.v20_model_wise_pricing #2026-09-24 - price by device: category / sub category / brand / model ladder on GoFix Pricing Rule, plus a per-scope bench fee
 gofix.patches.v21_seed_bench_fee_ladder #2026-09-24 - bench fees by device class: keypad 100 / phone 200 / iPhone 400 / tablet 350 / iPad 500 / laptop 500 / MacBook 800
+gofix.patches.v22_hold_track_on_timeline #2026-09-24 - held time gets its own timeline track, so a job waiting for a part stops reading as a slow repair

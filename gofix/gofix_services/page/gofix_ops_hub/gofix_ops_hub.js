@@ -1112,7 +1112,11 @@ class GoFixOpsHub {
 	/* ═══════════════════════════════════════════════════════════════════════ */
 	_html_timeline_tab(d) {
 		const esc = frappe.utils.escape_html;
-		const log = (d.status_log || []).filter(e => e.to_status);
+		// A row with no destination is normally malformed and dropped. The open
+		// stage is the one exception: it has not been left, so it has nowhere to
+		// point -- and it is precisely the row that carries the time the ticket
+		// is still spending.
+		const log = (d.status_log || []).filter(e => e.to_status || e.open);
 
 		if (!log.length) {
 			return `<div class="goh-section"><p class="text-muted">${__("No status changes recorded yet")}</p></div>`;
@@ -1141,23 +1145,38 @@ class GoFixOpsHub {
 		const trackPanel = (name, entries) => {
 			const perStage = {};
 			let total = 0;
+			let openStage = null;
 			entries.forEach(e => {
 				const h = parseFloat(e.hours_in_prev) || 0;
 				const stage = e.from_status || __("Intake");
-				if (!perStage[stage]) perStage[stage] = { hours: 0, visits: 0 };
+				if (!perStage[stage]) perStage[stage] = { hours: 0, visits: 0, open: false };
 				perStage[stage].hours += h;
-				perStage[stage].visits += 1;
+				// The open row is not a visit: the ticket has not left this
+				// stage, so counting it would say a stage was entered twice
+				// when it was entered once and never left.
+				if (e.open) {
+					perStage[stage].open = true;
+					openStage = { stage, since: e.changed_at, server_now: e.server_now };
+				} else {
+					perStage[stage].visits += 1;
+				}
 				total += h;
 			});
 			const rows = Object.entries(perStage)
 				.sort((a, b) => b[1].hours - a[1].hours)
 				.map(([stage, v]) => {
 					const share = total ? (v.hours / total) * 100 : 0;
+					const stillHere = v.open
+						? ` <span class="goh-badge badge-orange goh-open-stage"
+							 data-since="${esc((openStage && openStage.since) || "")}"
+							 data-server-now="${esc((openStage && openStage.server_now) || "")}"
+							 title="${__("Still in this stage")}">${__("still here")}</span>`
+						: "";
 					return `
-						<tr>
-							<td>${esc(stage)}</td>
+						<tr${v.open ? ' class="goh-tl-open"' : ""}>
+							<td>${esc(stage)}${stillHere}</td>
 							<td class="text-right goh-num">${fmtHours(v.hours)}</td>
-							<td class="text-right goh-num">${v.visits > 1 ? v.visits + "&times;" : "1&times;"}</td>
+							<td class="text-right goh-num">${v.visits ? (v.visits > 1 ? v.visits + "&times;" : "1&times;") : "&mdash;"}</td>
 							<td style="width:34%">
 								<div class="goh-bar"><span style="width:${share.toFixed(1)}%"></span></div>
 							</td>
@@ -1173,10 +1192,12 @@ class GoFixOpsHub {
 						${__("Where the time went")} — <span class="goh-track-name">${esc(name)}</span>
 					</div>
 					<div class="goh-tl-stats">
-						<div><span class="k">${__("Transitions")}</span><span class="v">${entries.length}</span></div>
+						<div><span class="k">${__("Transitions")}</span><span class="v">${
+							entries.filter(e => !e.open).length}</span></div>
 						<div><span class="k">${__("Stages touched")}</span><span class="v">${Object.keys(perStage).length}</span></div>
-						<div><span class="k">${__("Elapsed to last move")}</span><span class="v">${fmtHours(total)}</span></div>
-						<div><span class="k">${__("Currently in")}</span><span class="v">${esc(last.to_status || "—")}</span></div>
+						<div><span class="k">${__("Elapsed since intake")}</span><span class="v">${fmtHours(total)}</span></div>
+						<div><span class="k">${__("Currently in")}</span><span class="v">${
+							esc((openStage && openStage.stage) || last.to_status || "—")}</span></div>
 					</div>
 					<div class="goh-tl-scroll">
 						<table class="goh-tl-table">
@@ -1193,7 +1214,7 @@ class GoFixOpsHub {
 						</table>
 					</div>
 					<p class="text-muted" style="font-size:11px;margin:6px 2px 0">
-						${__("Measured from intake. Hours are charged to the stage being left, which is where they were spent.")}
+						${__("Measured from intake. Hours are charged to the stage they were spent in, including the one the ticket is still sitting in.")}
 					</p>
 				</div>`;
 		};

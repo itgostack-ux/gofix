@@ -141,6 +141,11 @@ TIMELINE_TRACKS = {
 	"Lifecycle": "Lifecycle",
 	"Operations Stage": "Operations",
 	"Assignment": "Assignment",
+	# Held time is not repair time. Without this track a job waiting three days
+	# for a part reads as three days of Repair, so the board cannot tell "we are
+	# slow" from "the part has not arrived" -- and the second is the one anybody
+	# can act on.
+	"Hold": "Hold",
 }
 
 # Job Assignment statuses that mean "handed to a technician who has not taken
@@ -233,7 +238,15 @@ def _build_status_timeline(sr) -> list:
 			(r for r in rows if (r.get("event_type") or "Lifecycle") == event_type),
 			key=lambda r: (get_datetime(r.changed_at) if r.changed_at else opened, cint(r.idx)),
 		)
-		prev = opened
+		# Every track is anchored at intake so the wait before its first move is
+		# not lost -- except Hold, which is not a stage the ticket occupies from
+		# intake but an interruption with a start of its own. Anchoring it at
+		# creation would report the FIRST hold as having lasted since the device
+		# arrived: on a ticket already On Hold before this track existed, a hold
+		# of ten minutes read as 4.56 hours. Its first row therefore carries no
+		# dwell, and every row after it measures from the previous hold event,
+		# which is the real held time.
+		prev = None if event_type == "Hold" else opened
 		last_landed = None
 		for r in track_rows:
 			at = get_datetime(r.changed_at) if r.changed_at else None
@@ -274,6 +287,28 @@ def _build_status_timeline(sr) -> list:
 			last_landed = to
 			if at:
 				prev = at
+
+		# The stage the ticket is sitting in RIGHT NOW. Dwell is recorded when a
+		# stage is left, so the open one has no row and its hours are charged to
+		# nothing -- a ticket parked in Repair for three days showed Repair
+		# nowhere, and "stages touched" was always one short. It is marked open
+		# and carries the server clock so the client can tick it without
+		# trusting the workstation's own.
+		if track_rows and last_landed:
+			out.append({
+				"track": track,
+				"event_type": event_type,
+				"from_status": last_landed,
+				"to_status": None,
+				"changed_by": None,
+				"changed_by_name": "",
+				"changed_at": str(prev) if prev else "",
+				"hours_in_prev": round(time_diff_in_hours(now_datetime(), prev), 2)
+				if prev else 0.0,
+				"inferred": False,
+				"open": True,
+				"server_now": str(now_datetime()),
+			})
 
 	out.sort(key=lambda e: (e["changed_at"] or "", e["track"]))
 	return out
@@ -2914,6 +2949,58 @@ def get_pause_reasons() -> list:
 	)
 
 
+def _log_hold_event(sr_name, line, previous_status, status,
+					pause_reason=None, remarks=None) -> None:
+	"""Append a Hold-track row when work stops or restarts.
+
+	Only the two transitions that change whether the bench is working matter:
+	going On Hold, and coming off it. Every other status move is already on the
+	Operations track and would only add noise here.
+
+	Never raises into its caller. Losing the note is bad; losing the status
+	change it describes -- and with it the technician's custody release -- is
+	worse.
+	"""
+	was = previous_status or ""
+	going_on_hold = status == "On Hold" and was != "On Hold"
+	coming_off_hold = was == "On Hold" and status != "On Hold"
+	if not (going_on_hold or coming_off_hold):
+		return
+
+	try:
+		solution = line.get("repair_solution") or _("this repair")
+		if going_on_hold:
+			frm, to = _("Working"), _("On Hold — {0}").format(pause_reason or _("no reason given"))
+		else:
+			frm, to = _("On Hold"), _("Working") if status == "In Progress" else status
+
+		latest = frappe.get_all(
+			"GoFix Status Log",
+			filters={"parent": sr_name, "parenttype": "Service Request",
+					 "parentfield": "status_log", "event_type": "Hold"},
+			fields=["changed_at", "idx"], order_by="idx desc", limit_page_length=1,
+		)
+		row = frappe.new_doc("GoFix Status Log")
+		row.parent = sr_name
+		row.parenttype = "Service Request"
+		row.parentfield = "status_log"
+		# Continue the ticket's own numbering rather than the Hold track's, so
+		# the child rows keep one ordering and nothing collides.
+		row.idx = cint(frappe.db.sql(
+			"""SELECT MAX(idx) FROM `tabGoFix Status Log`
+			   WHERE parent=%s AND parenttype='Service Request'""", sr_name)[0][0] or 0) + 1
+		row.event_type = "Hold"
+		row.from_status = f"{frm} · {solution}"
+		row.to_status = f"{to} · {solution}"
+		row.changed_by = frappe.session.user
+		row.changed_at = now_datetime()
+		row.time_in_previous_status_hours = 0
+		row.db_insert()
+	except Exception:
+		frappe.log_error(title="GoFix hold event not logged",
+						 message=frappe.get_traceback())
+
+
 @frappe.whitelist(methods=["POST"])
 def update_solution_status(sr_name, solution_row_name, status, remarks="",
 		pause_reason=None) -> dict:
@@ -2937,6 +3024,12 @@ def update_solution_status(sr_name, solution_row_name, status, remarks="",
 		"solution_lines",
 		["technician", "repair_solution", "status"],
 	)
+
+	# Captured before anything below can rebind `line`. _assert_can_work_solution
+	# returns a row WITHOUT status, so reading it afterwards would report no
+	# previous status at all -- a resume would go unlogged and the hold that
+	# opened would never close.
+	previous_status = line.get("status") or ""
 
 	if status in ("In Progress", "Completed"):
 		line = _assert_can_work_solution(sr_name, solution_row_name)
@@ -2966,6 +3059,15 @@ def update_solution_status(sr_name, solution_row_name, status, remarks="",
 		update_fields,
 		update_modified=True,
 	)
+
+	# Held time is written to its own track. The ops stage does not change when
+	# a repair is paused -- the ticket stays in Repair -- so without this the
+	# hours a job spent waiting for a part are charged to the bench, and a
+	# floor manager reading the timeline cannot tell a slow repair from a
+	# stalled one. The reason travels with the event, because "On Hold" on its
+	# own is the thing nobody can chase.
+	_log_hold_event(sr_name, line, previous_status, status,
+					update_fields.get("pause_reason"), remarks)
 
 	# Device custody follows the work: starting takes the device (Job
 	# Assignment → In Progress, single-holder rule enforced there); holding

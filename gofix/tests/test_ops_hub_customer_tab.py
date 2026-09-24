@@ -22,7 +22,11 @@ from frappe.utils import add_days, nowdate
 
 from gofix import service_maturity as sm
 from gofix.gofix_services.page.gofix_ops_hub.gofix_ops_hub import get_ticket_detail
-from gofix.tests.test_service_maturity import LOANER_SERIAL, _minimal_service_request
+from gofix.tests.test_service_maturity import (
+    LOANER_SERIAL,
+    _minimal_service_request,
+    stock_the_loaner_shelf,
+)
 
 
 class TestCustomerTabPayload(unittest.TestCase):
@@ -30,6 +34,8 @@ class TestCustomerTabPayload(unittest.TestCase):
         self.sr = _minimal_service_request()
         if not self.sr:
             raise unittest.SkipTest("no company / warehouse / customer to build a ticket on")
+        # A loaner must now be a real device on this store's Demo shelf.
+        self._lendable = stock_the_loaner_shelf(self.sr)
 
     def tearDown(self):
         frappe.db.rollback()
@@ -44,6 +50,8 @@ class TestCustomerTabPayload(unittest.TestCase):
             self.assertIn(key, care, f"the Customer tab reads care.{key}")
 
     def test_a_loaner_shows_up_on_the_ticket(self):
+        if not self._lendable:
+            raise unittest.SkipTest("this store has no Demo bin to lend from")
         """The whole point: issuing one must be visible to whoever opens it."""
         sm.issue_loaner(self.sr.name, LOANER_SERIAL)
         care = self._care()
@@ -52,6 +60,8 @@ class TestCustomerTabPayload(unittest.TestCase):
         self.assertTrue(care["loaner_issued_at"])
 
     def test_returning_it_shows_up_too(self):
+        if not self._lendable:
+            raise unittest.SkipTest("this store has no Demo bin to lend from")
         sm.issue_loaner(self.sr.name, LOANER_SERIAL)
         sm.return_loaner(self.sr.name, condition="Good")
         care = self._care()

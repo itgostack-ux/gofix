@@ -76,11 +76,75 @@ def _minimal_service_request():
     return sr
 
 
+def stock_the_loaner_shelf(sr, serial=LOANER_SERIAL):
+    """Put a real, lendable device on this ticket's store shelf.
+
+    issue_loaner used to accept any non-empty string, so these tests lent a
+    serial that did not exist and passed. It now refuses a device that is not
+    on file and in this store's Demo bin -- which was the whole point of the
+    fix -- so the fixture has to put a real one there.
+
+    Returns None when the store has no Demo bin, so the caller can skip rather
+    than fail on a site that has never set one up.
+    """
+    pool = sm.loaner_pool_warehouse(sr)
+    if not pool:
+        # _minimal_service_request takes the company's first leaf warehouse,
+        # which is usually not a store bin and so has no Demo sibling. Point
+        # the ticket at a store that actually has one rather than skipping:
+        # a skipped loaner test looks green and proves nothing.
+        row = frappe.db.sql(
+            """SELECT w.name FROM `tabWarehouse` w
+               WHERE w.is_group = 0 AND w.disabled = 0
+                 AND EXISTS (SELECT 1 FROM `tabWarehouse` d
+                             WHERE d.parent_warehouse = w.parent_warehouse
+                               AND d.ch_bin_type = 'Demo' AND d.is_group = 0
+                               AND d.disabled = 0)
+               LIMIT 1""",
+            pluck=True,
+        )
+        if not row:
+            return None
+        # current_location wins over source_warehouse in the resolver, so
+        # moving only one of them leaves the ticket pointing at its old store.
+        sr.db_set({"source_warehouse": row[0], "current_location": row[0]},
+                  update_modified=False)
+        sr.reload()
+        pool = sm.loaner_pool_warehouse(sr)
+    if not pool:
+        return None
+    item = frappe.db.get_value(
+        "Item", {"is_stock_item": 1, "disabled": 0, "has_serial_no": 1}, "name"
+    ) or frappe.db.get_value("Item", {"is_stock_item": 1, "disabled": 0}, "name")
+    if not item:
+        return None
+    if frappe.db.exists("Serial No", serial):
+        frappe.db.set_value("Serial No", serial,
+                            {"warehouse": pool, "status": "Active"})
+        return serial
+    doc = frappe.new_doc("Serial No")
+    doc.serial_no = serial
+    doc.item_code = item
+    doc.flags.ignore_permissions = True
+    doc.flags.ignore_mandatory = True
+    doc.insert(ignore_permissions=True)
+    # ERPNext refuses a NEW Serial No that already names a warehouse -- a real
+    # one is placed by a Stock Entry or a Purchase Receipt. This fixture is
+    # proving the loaner rules, not stock movement, so the bin is set straight
+    # afterwards rather than posting a receipt the test does not care about.
+    frappe.db.set_value("Serial No", serial,
+                        {"warehouse": pool, "status": "Active"},
+                        update_modified=False)
+    return serial
+
+
 class TestLoanerCustody(unittest.TestCase):
     def setUp(self):
         self.sr = _minimal_service_request()
         if not self.sr:
             raise unittest.SkipTest("no company / warehouse / customer to build a ticket on")
+        if not stock_the_loaner_shelf(self.sr):
+            raise unittest.SkipTest("this store has no Demo bin to lend from")
 
     def tearDown(self):
         frappe.db.rollback()
@@ -94,8 +158,9 @@ class TestLoanerCustody(unittest.TestCase):
 
     def test_a_second_loaner_on_the_same_ticket_is_refused(self):
         sm.issue_loaner(self.sr.name, LOANER_SERIAL)
+        second = stock_the_loaner_shelf(self.sr, "_CHTEST-LOANER-0002")
         with self.assertRaises(frappe.ValidationError):
-            sm.issue_loaner(self.sr.name, "_CHTEST-LOANER-0002")
+            sm.issue_loaner(self.sr.name, second or "_CHTEST-LOANER-0002")
 
     def test_the_same_device_cannot_be_out_twice(self):
         """The rule that stops one handset being lent to two customers."""

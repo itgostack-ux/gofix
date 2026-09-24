@@ -26,7 +26,16 @@
   "material_request",
   "purchase_order",
   "expected_date",
-  "spare_usage"
+  "spare_usage",
+  "section_break_qc",
+  "qc_status",
+  "qc_by",
+  "qc_on",
+  "column_break_qc",
+  "qc_defect_type",
+  "qc_remarks",
+  "replaces_line",
+  "replaced_by_line"
  ],
  "fields": [
   {
@@ -181,6 +190,65 @@
    "label": "Held At",
    "read_only": 1,
    "description": "Where this spare physically is. Set when the receipt books it in, so a technician told the part arrived also knows which counter to collect it from."
+  },
+  {
+   "fieldname": "section_break_qc",
+   "fieldtype": "Section Break",
+   "label": "Quality Check"
+  },
+  {
+   "fieldname": "qc_status",
+   "fieldtype": "Select",
+   "label": "QC Status",
+   "options": "Pending QC\nPassed\nFailed",
+   "default": "Pending QC",
+   "in_list_view": 0,
+   "read_only": 1,
+   "description": "A spare cannot be fitted until it has passed QC."
+  },
+  {
+   "fieldname": "qc_by",
+   "fieldtype": "Link",
+   "label": "QC By",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "qc_on",
+   "fieldtype": "Datetime",
+   "label": "QC On",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_qc",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "qc_defect_type",
+   "fieldtype": "Select",
+   "label": "QC Defect Type",
+   "options": "\nDOA (Dead on Arrival)\nManufacture Defect\nTransit Damage\nWrong Spare\nOther",
+   "read_only": 1,
+   "description": "Why the part failed incoming inspection. Damage caused while fitting is not a QC defect -- that is recorded against the Spare Parts Usage."
+  },
+  {
+   "fieldname": "qc_remarks",
+   "fieldtype": "Small Text",
+   "label": "QC Remarks",
+   "read_only": 1
+  },
+  {
+   "fieldname": "replaces_line",
+   "fieldtype": "Data",
+   "label": "Replaces Spare Line",
+   "read_only": 1,
+   "description": "Set when this line was raised to replace one that failed QC."
+  },
+  {
+   "fieldname": "replaced_by_line",
+   "fieldtype": "Data",
+   "label": "Replaced By Spare Line",
+   "read_only": 1
   }
  ],
  "index_web_pages_for_search": 0,

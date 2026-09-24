@@ -159,8 +159,43 @@ class SparePartsUsage(Document):
 		self.check_approval_requirement()
 		self.validate_approval_gate()
 		self.validate_part_status_transition()
+		self.validate_spare_cleared_by_qc()
 		if self.is_defective:
 			self.part_status = "Defective"
+
+	def validate_spare_cleared_by_qc(self):
+		"""A spare has to pass incoming inspection before it goes into a device.
+
+		This is the same rule the Ops Hub asks before it draws the Fit button, so
+		a hidden button and a refused save cannot disagree. It is checked here
+		rather than only on the screen because a usage can also be created from
+		the API and from the POS repair surface.
+
+		It fires only while the part is being fitted (Issued / Consumed). A
+		reservation is written the moment a spare is requested, before anyone has
+		seen it, and a return or a defective recovery is the part coming back out
+		-- neither is a moment to ask whether it passed inspection.
+		"""
+		from gofix.gofix_services import spare_qc
+
+		if not self.service_request_spare_line:
+			return
+		# Only when the part is going into the device. "Reserved" is the commitment
+		# record add_spare_to_ticket writes the moment a spare is requested -- long
+		# before anyone has looked at it -- so gating that would refuse every
+		# request. Returned and Defective are the part coming back out, which is a
+		# settled question this must not re-ask.
+		if (self.part_status or "") not in ("Issued", "Consumed"):
+			return
+		row = frappe.db.get_value(
+			"SR Spare Line",
+			self.service_request_spare_line,
+			["name", "status", "qc_status", "spare_item"],
+			as_dict=True,
+		)
+		if not row:
+			return
+		spare_qc.assert_fit_allowed(row)
 
 	def validate_service_request(self):
 		"""Validate that service request exists and is open"""
@@ -922,6 +957,34 @@ class SparePartsUsage(Document):
 		self.update_spare_parts_count()
 		self._unsync_from_service_request()
 		self._log_parts_consumption()
+
+		# The other half of damage attribution. This part passed QC and was
+		# fitted, so anything wrong with it now happened on our bench -- that is
+		# what separates it from a part that failed incoming inspection and was
+		# never fitted at all. Recorded against the same history as the QC
+		# verdicts so the register can split the two without joining doctypes.
+		from gofix.gofix_services import spare_qc
+
+		_recovery_event = {
+			"Good - Back to Stock": "Recovered",
+			"Faulty - Supplier Return": "Returned",
+			"Damaged by Technician": "Damaged by Technician",
+		}.get(disposition, "Recovered")
+		spare_qc.log_event(
+			self.service_request,
+			_recovery_event,
+			spare_line=self.service_request_spare_line,
+			spare_item=self.spare_part_item,
+			item_name=self.item_name,
+			qty=self.qty_used,
+			serial_no=self.barcode_value or self.installed_part_serial or None,
+			defect_type=self.defect_type or None,
+			from_warehouse=source_wh,
+			stock_entry=self.get("recovery_stock_entry"),
+			spare_usage=self.name,
+			company=company,
+			remarks=remarks or self.narration,
+		)
 
 		# A part that failed in service is money owed back by whoever sold it.
 		# Moving it into the supplier-return warehouse tidied the stock and lost

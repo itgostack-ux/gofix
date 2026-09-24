@@ -3386,7 +3386,8 @@ def mark_spare_damaged(sr_name, spare_row_name, remarks="", qty=None) -> dict:
 
 @frappe.whitelist(methods=["POST"])
 def add_spare_to_ticket(sr_name, spare_item, qty, rate=0, repair_solution=None,
-		removed_part_serial=None, installed_part_serial=None, removed_part_condition=None) -> dict:
+		removed_part_serial=None, installed_part_serial=None, removed_part_condition=None,
+		replaces_line=None) -> dict:
 	"""Add a spare part to the SR.  Checks warehouse stock first.
 
 	Returns:
@@ -3475,6 +3476,36 @@ def add_spare_to_ticket(sr_name, spare_item, qty, rate=0, repair_solution=None,
 	})
 
 	sr.save()
+
+	# The line only ever shows where the part is now. Its history -- requested,
+	# inspected, failed, replaced -- lives in GoFix Spare Event Log.
+	from gofix.gofix_services import spare_qc
+
+	_new_line = sr.spare_lines[-1]
+	spare_qc.log_event(
+		sr.name,
+		"Requested" if in_stock else "Awaiting Procurement",
+		spare_line=_new_line.name, spare_item=spare_item,
+		item_name=item.item_name or spare_item, qty=qty,
+		serial_no=(installed_part_serial or "").strip() or None,
+		to_warehouse=warehouse if in_stock else None,
+		replaces_line=(replaces_line or "").strip() or None,
+		company=sr.company,
+		remarks=_("Raised against {0}").format(sr.name),
+	)
+	if replaces_line:
+		# Tie the two lines together in both directions so the register can show
+		# "this is the second screen we tried" without re-deriving it from dates.
+		frappe.db.set_value("SR Spare Line", _new_line.name,
+							{"replaces_line": replaces_line}, update_modified=False)
+		frappe.db.set_value("SR Spare Line", replaces_line,
+							{"replaced_by_line": _new_line.name}, update_modified=False)
+		spare_qc.log_event(
+			sr.name, "Replacement Raised", spare_line=_new_line.name,
+			spare_item=spare_item, item_name=item.item_name or spare_item, qty=qty,
+			replaces_line=replaces_line, company=sr.company,
+			remarks=_("Replaces spare line that failed QC."),
+		)
 
 	usage_name = None
 	stock_entry = None
@@ -6362,3 +6393,68 @@ def accept_job_assignment(ja_name, remarks=None) -> dict:
         "accept_wait_hours": waited,
         "service_request": sr_name,
     }
+
+
+# ── Spare QC ──────────────────────────────────────────────────────────────────
+
+@frappe.whitelist(methods=["POST"])
+def record_spare_qc(sr_name, spare_row_name, result, defect_type=None, remarks=None) -> dict:
+	"""Pass or fail a spare's incoming inspection.
+
+	Thin wrapper: the rule lives in gofix_services.spare_qc so the POS repair
+	surface and the Ops Hub cannot drift apart, the same way available_actions
+	decides repair buttons for both.
+	"""
+	_assert_sr_permission(sr_name, "write")
+	from gofix.gofix_services import spare_qc
+
+	# Bind the row to this ticket before touching it -- a caller must not be
+	# able to inspect another ticket's spare by guessing a child row name.
+	_bound_child_row("SR Spare Line", spare_row_name, sr_name, "spare_lines", ["name"])
+	sr = frappe.get_doc("Service Request", sr_name)
+	return spare_qc.record_qc(sr, spare_row_name, result, defect_type, remarks)
+
+
+@frappe.whitelist()
+def get_spare_qc_state(sr_name) -> dict:
+	"""Per spare line: its QC status and whether it may be fitted.
+
+	The screen renders what it is given rather than keeping its own copy of the
+	rule, so a button that is drawn is a button the server will honour.
+	"""
+	_assert_sr_permission(sr_name, "read")
+	from gofix.gofix_services import spare_qc
+
+	rows = frappe.get_all(
+		"SR Spare Line",
+		filters={"parent": sr_name, "parenttype": "Service Request",
+				 "parentfield": "spare_lines"},
+		fields=["name", "spare_item", "item_name", "qty", "status", "warehouse",
+				"qc_status", "qc_by", "qc_on", "qc_defect_type", "qc_remarks",
+				"replaces_line", "replaced_by_line"],
+		order_by="idx",
+	)
+	out = []
+	for row in rows:
+		verdict = spare_qc.fit_permission(row)
+		row["qc_status"] = spare_qc.qc_state(row)
+		row["can_fit"] = verdict["allowed"]
+		row["fit_blocked_reason"] = verdict["reason"]
+		row["awaiting_qc"] = row["qc_status"] == spare_qc.QC_PENDING and row["status"] not in (
+			"Awaiting Procurement", "Pending", "Consumed", "Returned", "Damaged")
+		row["can_raise_replacement"] = row["qc_status"] == spare_qc.QC_FAILED and not row.get("replaced_by_line")
+		out.append(row)
+	return {
+		"lines": out,
+		"defect_types": list(spare_qc.QC_DEFECT_TYPES),
+		"awaiting_qc": sum(1 for r in out if r["awaiting_qc"]),
+	}
+
+
+@frappe.whitelist()
+def get_spare_history(sr_name, spare_row_name=None, limit=200) -> list:
+	"""Everything that has happened to this job's spares, newest first."""
+	_assert_sr_permission(sr_name, "read")
+	from gofix.gofix_services import spare_qc
+
+	return spare_qc.history(sr_name, spare_row_name, cint(limit) or 200)

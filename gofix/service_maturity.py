@@ -19,6 +19,108 @@ LOANER_OUT = ("Issued",)
 
 # ── loaner devices ───────────────────────────────────────────────────────────
 
+def loaner_pool_warehouse(sr) -> str | None:
+    """The store's Demo bin, which is where courtesy devices live.
+
+    A loaner is not a new idea needing a new master: every store already has a
+    Demo bin (Warehouse.ch_bin_type = "Demo", one per store), which is exactly
+    a shelf of devices the store owns and lends rather than sells. Resolving the
+    pool from the ticket's own warehouse also scopes it for free -- a counter
+    can only lend what its own store holds.
+    """
+    source = sr.get("current_location") or sr.get("source_warehouse")
+    if not source:
+        return None
+    group = frappe.db.get_value("Warehouse", source, "parent_warehouse")
+    if not group:
+        return None
+    return frappe.db.get_value(
+        "Warehouse",
+        {"parent_warehouse": group, "is_group": 0, "disabled": 0, "ch_bin_type": "Demo"},
+        "name",
+    )
+
+
+@frappe.whitelist()
+def search_loaner_devices(service_request, query=None, limit=20) -> list:
+    """Courtesy devices this store can lend right now.
+
+    The field used to be free text with no lookup of any kind, and issue_loaner
+    checked only that the string was non-empty -- so "1" was accepted as a
+    loaner IMEI and the ticket recorded a device that does not exist. This is
+    the list it should have been offering.
+
+    Excludes devices already out on another ticket, because a pool that offers
+    a phone somebody is already carrying is worse than no pool.
+    """
+    sr = frappe.get_doc("Service Request", service_request)
+    sr.check_permission("read")
+
+    warehouse = loaner_pool_warehouse(sr)
+    if not warehouse:
+        return []
+
+    filters = {"warehouse": warehouse, "status": "Active"}
+    if query:
+        filters["name"] = ("like", f"%{(query or '').strip()}%")
+
+    rows = frappe.get_all(
+        "Serial No", filters=filters,
+        fields=["name", "item_code", "item_name"],
+        order_by="name", limit_page_length=cint(limit) or 20,
+    )
+    if not rows:
+        return []
+
+    out_now = set(frappe.get_all(
+        "Service Request",
+        filters={"loaner_status": "Issued", "loaner_serial_no": ("in", [r.name for r in rows])},
+        pluck="loaner_serial_no",
+    ))
+    return [
+        {"serial_no": r.name, "item_code": r.item_code, "item_name": r.item_name,
+         "warehouse": warehouse}
+        for r in rows if r.name not in out_now
+    ]
+
+
+def assert_lendable(sr, serial_no: str) -> None:
+    """Refuse a loaner that is not a real device on this store's shelf.
+
+    Three separate ways the old free-text field went wrong, each with its own
+    answer: a serial that does not exist at all, one that exists but belongs to
+    another store's pool (or to sellable stock, which is not ours to lend), and
+    one already out with somebody else.
+    """
+    if not frappe.db.exists("Serial No", serial_no):
+        frappe.throw(
+            _("{0} is not a device on file. Pick a courtesy device from the list.").format(serial_no),
+            title=_("Unknown Device"),
+        )
+
+    warehouse = loaner_pool_warehouse(sr)
+    if not warehouse:
+        frappe.throw(
+            _("This store has no Demo bin, so it has no courtesy devices to lend. "
+              "Add one and move the loaner stock into it."),
+            title=_("No Loaner Pool"),
+        )
+
+    at = frappe.db.get_value("Serial No", serial_no, ["warehouse", "status"], as_dict=True)
+    if at.warehouse != warehouse:
+        frappe.throw(
+            _("{0} is not in this store's courtesy pool ({1}). Lending stock from "
+              "anywhere else would take it off the shelf it is counted on.").format(
+                serial_no, warehouse),
+            title=_("Not a Courtesy Device"),
+        )
+    if at.status != "Active":
+        frappe.throw(
+            _("{0} is {1}, so it cannot be lent.").format(serial_no, at.status or _("inactive")),
+            title=_("Device Unavailable"),
+        )
+
+
 @frappe.whitelist(methods=["POST"])
 def issue_loaner(service_request, serial_no, remarks=None) -> dict:
 	"""Hand a courtesy device to the customer, against this ticket.
@@ -33,6 +135,11 @@ def issue_loaner(service_request, serial_no, remarks=None) -> dict:
 	serial_no = (serial_no or "").strip()
 	if not serial_no:
 		frappe.throw(_("Enter the loaner's serial or IMEI."), title=_("Validation Error"))
+
+	# The field was free text with no lookup, and this check was the only one:
+	# any non-empty string became a loaner, so "1" was accepted as an IMEI and
+	# the ticket recorded a device nobody could ever chase.
+	assert_lendable(sr, serial_no)
 
 	if sr.get("loaner_status") in LOANER_OUT:
 		frappe.throw(

@@ -880,10 +880,13 @@ class GoFixOpsHub {
 			loaner = `${history}
 				<div class="goh-inline-form">
 					<input type="text" class="form-control input-sm" id="goh-loaner-serial"
-						placeholder="${__("Loaner serial or IMEI")}" data-no-dirty>
+						placeholder="${__("Search this store's courtesy devices…")}"
+						list="goh-loaner-pool" autocomplete="off" data-no-dirty>
+					<datalist id="goh-loaner-pool"></datalist>
 					<button class="btn btn-sm btn-default" id="goh-loaner-issue">
 						<i class="fa fa-mobile"></i> ${__("Issue Loaner")}</button>
-				</div>`;
+				</div>
+				<div class="text-muted goh-loaner-hint" style="font-size:11px;margin-top:4px"></div>`;
 		}
 
 		// ── Appointment ───────────────────────────────────────────────────
@@ -2911,6 +2914,31 @@ class GoFixOpsHub {
 			if (!files.length) return;
 			self._upload_device_photos(d, stage, files);
 		});
+		/* The courtesy-device field was free text with no lookup, so any string
+		   became a loaner. It now offers what this store actually has on its
+		   Demo shelf, and the server refuses anything else. */
+		const $loaner = content.find("#goh-loaner-serial");
+		if ($loaner.length) {
+			const fill = (q) => frappe.xcall(`${API}.search_loaner_devices`, {
+				service_request: d.name, query: q || "",
+			}).then((rows) => {
+				content.find("#goh-loaner-pool").html(
+					(rows || []).map((r) =>
+						`<option value="${frappe.utils.escape_html(r.serial_no)}">${
+							frappe.utils.escape_html(r.item_name || r.item_code || "")}</option>`
+					).join("")
+				);
+				content.find(".goh-loaner-hint").text(
+					(rows || []).length
+						? __("{0} courtesy device(s) available at this store.", [rows.length])
+						: __("No courtesy devices on this store's Demo shelf.")
+				);
+			}).catch(() => {});
+			fill("");
+			$loaner.off("input.gohloaner").on("input.gohloaner",
+				frappe.utils.debounce((e) => fill($(e.currentTarget).val()), 300));
+		}
+
 		content.on("click.gohphoto", ".goh-photo-drop", (e) => {
 			e.preventDefault();
 			const row = $(e.currentTarget).data("row");

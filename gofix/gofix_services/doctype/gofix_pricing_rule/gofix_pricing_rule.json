@@ -31,7 +31,14 @@
   "col_break_warranty",
   "warranty_spare_covered",
   "section_break_priority",
-  "priority_order"
+  "priority_order",
+  "section_break_device",
+  "device_category",
+  "device_sub_category",
+  "column_break_device",
+  "device_model",
+  "section_break_bench",
+  "service_charge"
  ],
  "fields": [
   {
@@ -197,6 +204,48 @@
    "fieldtype": "Int",
    "label": "Priority Order",
    "description": "Lower = higher priority. Most specific rules should have lower numbers."
+  },
+  {
+   "fieldname": "section_break_device",
+   "fieldtype": "Section Break",
+   "label": "Device Scope",
+   "description": "Leave a level blank to mean 'any'. The most specific rule that matches wins: model beats brand beats sub category beats category."
+  },
+  {
+   "fieldname": "device_category",
+   "fieldtype": "Link",
+   "label": "Device Category",
+   "options": "CH Category",
+   "description": "Mobiles priced differently from laptops."
+  },
+  {
+   "fieldname": "device_sub_category",
+   "fieldtype": "Link",
+   "label": "Device Sub Category",
+   "options": "CH Sub Category",
+   "description": "iOS priced differently from Android."
+  },
+  {
+   "fieldname": "column_break_device",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "device_model",
+   "fieldtype": "Link",
+   "label": "Device Model",
+   "options": "CH Model",
+   "description": "The exact device. Beats every broader rule."
+  },
+  {
+   "fieldname": "section_break_bench",
+   "fieldtype": "Section Break",
+   "label": "Bench Fee"
+  },
+  {
+   "fieldname": "service_charge",
+   "fieldtype": "Currency",
+   "label": "Service Charge",
+   "description": "Bench fee for this device scope. Blank falls back to the broader rule, and finally to the GOFIX-SERVICE-CHARGE item price."
   }
  ],
  "index_web_pages_for_search": 0,

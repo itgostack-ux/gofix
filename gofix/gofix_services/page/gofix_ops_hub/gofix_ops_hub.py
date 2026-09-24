@@ -1801,6 +1801,12 @@ def get_estimate_breakdown(sr_name) -> dict:
 		company=sr.get("company"),
 		warranty_plan=sr.get("warranty_plan"),
 		device_item=sr.get("device_item"),
+		# The ticket already knows its device down to the model, so hand the
+		# whole ladder over rather than making the engine re-derive it. A
+		# free-text intake still prices: every level simply comes back blank
+		# and the broader rules apply, exactly as before.
+		device_model=sr.get("device_model"),
+		device_category=sr.get("device_category"),
 	)
 	# The pricing engine keys its lines by solution code; the estimate is shown
 	# to a customer, so it has to read as words rather than catalogue codes.

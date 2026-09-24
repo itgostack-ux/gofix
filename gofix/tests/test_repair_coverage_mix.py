@@ -47,10 +47,22 @@ class TestRepairCoverageMix(unittest.TestCase):
         cls.company = frappe.db.get_value("Company", {"name": ("not like", "ZZZ %")}, "name")
         if not cls.company:
             raise unittest.SkipTest("no company on this site")
-        cls.warehouse = frappe.db.get_value(
-            "Warehouse", {"company": cls.company, "is_group": 0}, "name")
-        if not cls.warehouse:
-            raise unittest.SkipTest("no leaf warehouse on this site")
+        # A warehouse of this test's own. Sharing the company's first leaf
+        # warehouse meant the report counted every real ticket filed there
+        # alongside the six seeded below, so the arithmetic only held while
+        # tabService Request happened to be empty -- and it stopped holding the
+        # day the bench got its first real tickets.
+        parent = frappe.db.get_value(
+            "Warehouse", {"company": cls.company, "is_group": 1}, "name")
+        wh = frappe.new_doc("Warehouse")
+        wh.warehouse_name = f"{_PREFIX} Coverage Mix"
+        wh.company = cls.company
+        if parent:
+            wh.parent_warehouse = parent
+        wh.flags.ignore_permissions = True
+        wh.flags.ignore_mandatory = True
+        wh.insert(ignore_permissions=True)
+        cls.warehouse = wh.name
 
         # (coverage, billed, parts, labour, total_cost, repeat)
         cls.seed = [
@@ -99,10 +111,12 @@ class TestRepairCoverageMix(unittest.TestCase):
         frappe.db.rollback(save_point=_PREFIX)
 
     def _run(self):
+        # Scoped to this test's own warehouse. The comment that used to sit
+        # here said the assertions were restricted to the rows this test put
+        # there; nothing actually restricted them, so a real ticket on the
+        # bench landed in the same buckets and the counts drifted.
         _cols, data, _msg, _chart, _summary = coverage_execute(
-            {"company": self.company})
-        # Other rows could exist on a site that has real tickets; restrict the
-        # assertions to the ones this test put there.
+            {"company": self.company, "source_warehouse": self.warehouse})
         return data
 
     # ── grouping ──────────────────────────────────────────────────────
@@ -155,7 +169,8 @@ class TestRepairCoverageMix(unittest.TestCase):
         self.assertAlmostEqual(sum(r["share_pct"] for r in data), 100.0, places=4)
 
     def test_summary_names_the_two_numbers_a_service_head_is_asked_for(self):
-        _c, data, _m, _ch, summary = coverage_execute({"company": self.company})
+        _c, data, _m, _ch, summary = coverage_execute(
+            {"company": self.company, "source_warehouse": self.warehouse})
         self.assertTrue(data)
         by_label = {s["label"]: s["value"] for s in summary}
         self.assertEqual(by_label["Cost We Carry"], 800)
